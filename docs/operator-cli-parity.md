@@ -7,6 +7,11 @@ the same core method and readback model.
 The CLI is intended for agents and automation, so command text is deliberately
 not projected into the non-technical WPF interface.
 
+The optional Rusty Fleet subprocess hook is intentionally CLI-only in v1. It
+does not correspond to a WPF action: `integration capabilities`, `observe`,
+and `invoke` are a strict machine contract, not a hidden GUI route. They remain
+disabled by default and cannot invoke push, delete, overwrite, or fan-out.
+
 The Windows release places these programs beside each other:
 
 ```text
@@ -48,6 +53,7 @@ exact tool selection is part of the test.
 | Refresh batteries/power/performance | `device status` |
 | Keep awake / restore normal | `device keep-awake` |
 | Set / clear CPU and GPU overrides | `device performance` |
+| Optional Fleet capability/observation/read-only invoke | CLI-only `integration ... --json`; no WPF action in v1 |
 
 Example shapes use placeholders rather than live device or local identities:
 
@@ -116,3 +122,12 @@ Direct-link acceptance uses shared Kotlin/C# HMAC vectors, rejects response-ID,
 digest, and signature mismatches, and keeps Android install receipts pending
 until the matching session reports installed or failed. It does not initialize
 ADB and has no fleet or fan-out route.
+
+Fleet interop acceptance is separate: it verifies exactly one final JSON
+document, explicit non-ready states, strict schemas, exact-serial rediscovery,
+read-only operation admission, remote canonical descriptor binding, a
+mid-stream byte ceiling, locked local ancestor/final-file identity, coherent
+digest evidence, and cancellation/timeout cleanup. Adding a WPF control later
+would require a separately reviewed
+operator workflow and a parity route; this CLI-only adapter does not silently
+appear in the current app.

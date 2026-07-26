@@ -51,6 +51,125 @@ public sealed class AdbClient
         return AdbOutputParser.ParseRemoteDirectory(remotePath, result.StandardOutput);
     }
 
+    public async Task<IReadOnlyList<RemoteEntry>> ListRemoteDirectoryBoundedAsync(
+        string serial,
+        string remotePath,
+        int maximumEntries,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        if (maximumEntries is < 1 or > FleetIntegrationContract.MaximumListEntries)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumEntries),
+                $"The integration list limit must be between 1 and {FleetIntegrationContract.MaximumListEntries}.");
+        }
+
+        var command = BuildCanonicalRemoteProof(remotePath) +
+            BuildOpenedRemoteHandleProof() +
+            "if [ ! -d /proc/self/fd/3 ]; then " +
+            "printf 'qfm-integration:path-not-directory\\n' >&2; exit 43; fi; " +
+            "count=0; " +
+            "for entry in /proc/self/fd/3/* /proc/self/fd/3/.[!.]* /proc/self/fd/3/..?*; do " +
+            "if [ ! -e \"$entry\" ] && [ ! -L \"$entry\" ]; then continue; fi; " +
+            "count=$((count + 1)); " +
+            $"if [ \"$count\" -gt {maximumEntries.ToString(System.Globalization.CultureInfo.InvariantCulture)} ]; then " +
+            "printf 'qfm-integration:maximum-entries\\n' >&2; exit 50; fi; " +
+            "if [ -L \"$entry\" ] || { [ ! -f \"$entry\" ] && [ ! -d \"$entry\" ]; }; then " +
+            "printf 'qfm-integration:unsupported-entry-type\\n' >&2; exit 51; fi; " +
+            "name=${entry##*/}; " +
+            "case \"$name\" in *[[:cntrl:]]*) " +
+            "printf 'qfm-integration:entry-name-unrepresentable\\n' >&2; exit 52;; esac; " +
+            "if [ -d \"$entry\" ]; then printf '%s/\\n' \"$name\"; " +
+            "else printf '%s\\n' \"$name\"; fi; " +
+            "done";
+        var result = await RunForDeviceAsync(
+            serial,
+            new[] { "shell", command },
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        ThrowFleetRemoteError(result, "List remote integration path");
+        if (!string.IsNullOrWhiteSpace(result.StandardError))
+        {
+            throw new AdbCommandException(
+                "List remote integration path",
+                result with { ExitCode = result.ExitCode == 0 ? 1 : result.ExitCode });
+        }
+        result.EnsureSuccess($"List {remotePath}");
+        return AdbOutputParser.ParseRemoteDirectory(remotePath, result.StandardOutput);
+    }
+
+    public async Task<StreamingCommandResult> StreamRemoteFileBoundedAsync(
+        string serial,
+        string remotePath,
+        Stream destination,
+        long maximumBytes,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        ArgumentNullException.ThrowIfNull(destination);
+        if (maximumBytes is < 1 or > FleetIntegrationContract.MaximumPullBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumBytes),
+                $"The integration pull limit must be between 1 and {FleetIntegrationContract.MaximumPullBytes}.");
+        }
+
+        var invariantMaximum = maximumBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var command = BuildCanonicalRemoteProof(remotePath) +
+            BuildOpenedRemoteHandleProof() +
+            "if [ ! -f /proc/self/fd/3 ]; then " +
+            "printf 'qfm-integration:path-not-file\\n' >&2; exit 44; fi; " +
+            "size=$(stat -c %s -- /proc/self/fd/3) || { " +
+            "printf 'qfm-integration:size-unavailable\\n' >&2; exit 45; }; " +
+            "case \"$size\" in ''|*[!0-9]*) " +
+            "printf 'qfm-integration:size-invalid\\n' >&2; exit 46;; esac; " +
+            $"if [ \"$size\" -gt {invariantMaximum} ]; then " +
+            "printf 'qfm-integration:maximum-bytes\\n' >&2; exit 47; fi; " +
+            "exec cat <&3";
+        if (_runner is not IStreamingCommandRunner streamingRunner)
+        {
+            throw new InvalidOperationException(
+                "The configured command runner does not support bounded binary streaming.");
+        }
+
+        var arguments = new[]
+        {
+            "-s",
+            serial,
+            "exec-out",
+            "sh",
+            "-c",
+            command
+        };
+        var result = await streamingRunner.RunToStreamAsync(
+            AdbPath,
+            arguments,
+            destination,
+            maximumBytes,
+            TransferTimeout,
+            cancellationToken).ConfigureAwait(false);
+        ThrowFleetRemoteError(
+            result.CommandResult,
+            "Stream remote integration file",
+            maximumBytes);
+        if (!string.IsNullOrWhiteSpace(result.CommandResult.StandardError))
+        {
+            throw new AdbCommandException(
+                "Stream remote integration file",
+                result.CommandResult with
+                {
+                    ExitCode = result.CommandResult.ExitCode == 0
+                        ? 1
+                        : result.CommandResult.ExitCode
+                });
+        }
+        result.CommandResult.EnsureSuccess($"Stream {remotePath}");
+        return result;
+    }
+
     public async Task<IReadOnlyList<string>> GetThirdPartyPackageNamesAsync(
         string serial,
         CancellationToken cancellationToken = default)
@@ -1204,6 +1323,106 @@ public sealed class AdbClient
         TimeSpan timeout,
         CancellationToken cancellationToken) =>
         _runner.RunAsync(AdbPath, arguments, timeout, cancellationToken);
+
+    private static string BuildCanonicalRemoteProof(string remotePath)
+    {
+        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        string relativePath;
+        if (string.Equals(remotePath, FleetIntegrationContract.RemoteRoot, StringComparison.Ordinal))
+        {
+            relativePath = string.Empty;
+        }
+        else
+        {
+            var prefix = FleetIntegrationContract.RemoteRoot + "/";
+            if (!remotePath.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"The integration path must be below {FleetIntegrationContract.RemoteRoot}.",
+                    nameof(remotePath));
+            }
+            relativePath = remotePath[prefix.Length..];
+            FleetPathPolicy.ValidateRelativePath(relativePath, allowEmpty: false);
+        }
+
+        var expected = relativePath.Length == 0
+            ? "expected=\"$root\"; "
+            : $"expected=\"$root\"/{AndroidInput.ShellQuote(relativePath)}; ";
+        return
+            $"root=$(realpath {AndroidInput.ShellQuote(FleetIntegrationContract.RemoteRoot)}) || {{ " +
+            "printf 'qfm-integration:root-unavailable\\n' >&2; exit 40; }; " +
+            $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || {{ " +
+            "printf 'qfm-integration:path-absent\\n' >&2; exit 41; }; " +
+            expected +
+            "if [ \"$candidate\" != \"$expected\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; ";
+    }
+
+    private static string BuildOpenedRemoteHandleProof() =>
+        "exec 3<\"$candidate\" || { " +
+        "printf 'qfm-integration:path-open-failed\\n' >&2; exit 48; }; " +
+        "opened=$(realpath /proc/self/fd/3) || { " +
+        "printf 'qfm-integration:path-open-proof-failed\\n' >&2; exit 49; }; " +
+        "if [ \"$opened\" != \"$expected\" ]; then " +
+        "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; ";
+
+    private static void ThrowFleetRemoteError(
+        CommandResult result,
+        string operation,
+        long? maximumBytes = null)
+    {
+        var code = result.StandardError
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static line =>
+                line.StartsWith("qfm-integration:", StringComparison.Ordinal));
+        if (code is null)
+        {
+            return;
+        }
+
+        throw code switch
+        {
+            "qfm-integration:path-indirection" => new FleetRemotePathException(
+                "remote_path_indirection",
+                "The remote path contains a symlink or canonical indirection and was rejected."),
+            "qfm-integration:path-absent" => new FleetRemotePathException(
+                "remote_path_absent",
+                "The remote path is absent."),
+            "qfm-integration:path-not-directory" => new FleetRemotePathException(
+                "remote_path_not_directory",
+                "The remote list target is not a directory."),
+            "qfm-integration:path-not-file" => new FleetRemotePathException(
+                "remote_path_not_file",
+                "The remote pull target is not a regular file."),
+            "qfm-integration:maximum-entries" => new FleetRemotePathException(
+                "entry_limit_exceeded",
+                "The remote directory contains more entries than the requested limit."),
+            "qfm-integration:unsupported-entry-type" => new FleetRemotePathException(
+                "remote_entry_type_unsupported",
+                "The remote directory contains a symbolic link or another unsupported entry type."),
+            "qfm-integration:entry-name-unrepresentable" => new FleetRemotePathException(
+                "remote_entry_name_rejected",
+                "The remote directory contains an entry name that cannot be represented safely."),
+            "qfm-integration:maximum-bytes" => new FleetTransferLimitException(
+                maximumBytes
+                ?? throw new InvalidOperationException(
+                    "A maximum-bytes proof failure did not retain its request bound.")),
+            "qfm-integration:root-unavailable" => new FleetRemotePathException(
+                "remote_root_unavailable",
+                $"The canonical {FleetIntegrationContract.RemoteRoot} root is unavailable."),
+            "qfm-integration:size-unavailable" or
+            "qfm-integration:size-invalid" => new FleetRemotePathException(
+                "remote_size_unavailable",
+                "The remote file size could not be proven."),
+            "qfm-integration:path-open-failed" or
+            "qfm-integration:path-open-proof-failed" => new FleetRemotePathException(
+                "remote_path_open_failed",
+                "The remote path could not be opened and rebound to the canonical proof."),
+            _ => new FleetRemotePathException(
+                "remote_proof_failed",
+                $"{operation} failed its remote containment proof.")
+        };
+    }
 
     private static async Task<string> ComputeSha256Async(
         string path,

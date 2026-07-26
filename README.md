@@ -49,6 +49,8 @@ action can be automated and tested.
   set or clear fixed Quest CPU/GPU levels;
 - track every PC mutation as sent, pending, then headset-confirmed (or failed/
   timed out) instead of treating process success as effective state;
+- optionally expose a disabled-by-default Rusty Fleet subprocess hook for one
+  exact-device, read-only `/sdcard` listing or operation-owned staged pull;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -128,6 +130,9 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --e
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device status --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- integration capabilities --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- integration observe --serial <quest-serial> --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --request <operation-request.v1.json> --json
 ```
 
 Pass `--json` to list commands for machine-readable output. Pass `--adb` to
@@ -141,6 +146,15 @@ Wi-Fi state changes require an explicit confirmation in the WPF app or the
 Kiosk setup/control and device settings use their own confirmation flags.
 Mutation JSON contains desired and observed state plus its transition history.
 A Meta permission prompt can legitimately remain pending until wearer response.
+The optional [Rusty Fleet integration](docs/fleet-integration.md) is disabled
+until the operator configures an approved staging root. Its v1 JSON routes are
+single-device and read-only: bounded list plus staged pull with size and
+SHA-256 evidence from one hard-capped stream. Remote canonical/descriptor
+proofs reject `/sdcard` indirection; locked Windows handles prevent local
+reparse, hardlink, delete, and parent-junction substitution. Ctrl+C and
+timeouts terminate ADB and clean only operation-owned handles. The routes
+never expose push, delete, overwrite, multi-target fan-out, ADB daemon
+lifecycle, or WPF automation.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through
@@ -162,17 +176,20 @@ A base APK and its split APKs are submitted together as one session.
 - [Two-headset Wi-Fi validation receipt](docs/wifi-adb-parallel-live-validation-2026-07-17.md)
 - [Progress reporting contract](docs/progress-reporting.md)
 - [Rusty Kiosk integration and synchronization](docs/rusty-kiosk-integration.md)
+- [Optional Rusty Fleet integration](docs/fleet-integration.md)
 - [Release workflow](docs/release-workflow.md)
 - [Branding and compatibility](docs/branding-and-compatibility.md)
 - [Reference intake](docs/reference-intake.md)
 
 ## Roadmap
 
-1. Add split-APK set export with a manifest and stronger package-set validation.
-2. Add transport encryption after a separate protocol-version and Horizon
+1. Add a Quest-owned Fleet-device identity proof before any unattended Fleet
+   file mutation.
+2. Add split-APK set export with a manifest and stronger package-set validation.
+3. Add transport encryption after a separate protocol-version and Horizon
    compatibility review.
-3. Add diagnostics bundles and no-device UI verification.
-4. Define portable contracts for future Android and Apple host clients.
+4. Add diagnostics bundles and no-device UI verification.
+5. Define portable contracts for future Android and Apple host clients.
 
 ## License
 

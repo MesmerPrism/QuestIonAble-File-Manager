@@ -11,6 +11,12 @@ internal static class CliApplication
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    private static readonly JsonSerializerOptions IntegrationJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
 
     public static async Task<int> RunAsync(string[] arguments)
     {
@@ -26,6 +32,10 @@ internal static class CliApplication
             if (command == "kiosk-direct")
             {
                 return await RunKioskDirectAsync(arguments);
+            }
+            if (command == "integration")
+            {
+                return await RunIntegrationAsync(arguments);
             }
 
             var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
@@ -56,6 +66,200 @@ internal static class CliApplication
             return 1;
         }
     }
+
+    private static async Task<int> RunIntegrationAsync(string[] arguments)
+    {
+        FleetIntegrationAdapter? adapter = null;
+        using var cancellationSource = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellationSource.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            if (!HasFlag(arguments, "--json"))
+            {
+                throw FleetIntegrationException.Input(
+                    "json_required",
+                    "Integration routes require --json and emit exactly one final JSON document.");
+            }
+
+            var settings = FleetIntegrationSettings.FromEnvironment(GetOption(arguments, "--adb"));
+            var client = settings.AdbPath is null ? null : new AdbClient(settings.AdbPath);
+            adapter = new FleetIntegrationAdapter(settings, client);
+            var action = RequireAction(arguments, "integration");
+            var requestedVersion = GetOption(arguments, "--contract-version");
+            if (requestedVersion is not null &&
+                !string.Equals(requestedVersion, FleetIntegrationContract.Version, StringComparison.Ordinal))
+            {
+                throw FleetIntegrationException.Unsupported(
+                    $"Unsupported integration contract version '{requestedVersion}'.");
+            }
+
+            switch (action)
+            {
+                case "capabilities":
+                    WriteIntegrationJson(FleetIntegrationResponse.ForCapability(adapter.GetCapabilities()));
+                    return 0;
+                case "observe":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var observation = await adapter.ObserveAsync(
+                            RequireOption(arguments, "--serial"),
+                            cancellationSource.Token);
+                        WriteIntegrationJson(FleetIntegrationResponse.ForObservation(capability, observation));
+                        return 0;
+                    }
+                case "invoke":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var requestBytes = await ReadBoundedRequestAsync(
+                            RequireOption(arguments, "--request"),
+                            cancellationSource.Token);
+                        var request = FleetIntegrationOperationRequest.Parse(requestBytes);
+                        var result = await adapter.InvokeAsync(request, cancellationSource.Token);
+                        WriteIntegrationJson(FleetIntegrationResponse.ForResult(capability, result));
+                        return 0;
+                    }
+                default:
+                    throw FleetIntegrationException.Input(
+                        "integration_action_unknown",
+                        $"Unknown integration action '{action}'.");
+            }
+        }
+        catch (FleetIntegrationException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                exception.Status,
+                exception.Code,
+                exception.Message,
+                exception.Retryable,
+                TryGetCapability(adapter)));
+            return IntegrationExitCode(exception.Status);
+        }
+        catch (OperationCanceledException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Cancelled,
+                "operation_cancelled",
+                exception.Message.Length == 0
+                    ? "The integration operation was cancelled."
+                    : exception.Message,
+                retryable: true,
+                TryGetCapability(adapter)));
+            return IntegrationExitCode(FleetIntegrationStatus.Cancelled);
+        }
+        catch (TimeoutException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Failed,
+                "operation_timeout",
+                exception.Message,
+                retryable: true,
+                TryGetCapability(adapter)));
+            return 1;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            FileNotFoundException or
+            DirectoryNotFoundException or
+            IOException or
+            UnauthorizedAccessException)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Rejected,
+                "integration_input_invalid",
+                exception.Message,
+                retryable: false,
+                TryGetCapability(adapter)));
+            return 2;
+        }
+        catch (Exception exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Failed,
+                "integration_internal_error",
+                exception.Message,
+                retryable: false,
+                TryGetCapability(adapter)));
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    private static async Task<byte[]> ReadBoundedRequestAsync(
+        string requestPath,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(requestPath);
+        await using var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length > FleetIntegrationContract.MaximumRequestBytes)
+        {
+            throw FleetIntegrationException.Input(
+                "request_too_large",
+                $"The integration request exceeds {FleetIntegrationContract.MaximumRequestBytes} bytes.");
+        }
+
+        using var buffer = new MemoryStream((int)stream.Length);
+        var chunk = new byte[16 * 1024];
+        while (true)
+        {
+            var count = await stream.ReadAsync(chunk, cancellationToken);
+            if (count == 0)
+            {
+                break;
+            }
+            if (buffer.Length + count > FleetIntegrationContract.MaximumRequestBytes)
+            {
+                throw FleetIntegrationException.Input(
+                    "request_too_large",
+                    $"The integration request exceeds {FleetIntegrationContract.MaximumRequestBytes} bytes.");
+            }
+            buffer.Write(chunk, 0, count);
+        }
+        return buffer.ToArray();
+    }
+
+    private static FleetIntegrationCapabilitySnapshot? TryGetCapability(
+        FleetIntegrationAdapter? adapter)
+    {
+        if (adapter is null)
+        {
+            return null;
+        }
+        try
+        {
+            return adapter.GetCapabilities();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int IntegrationExitCode(FleetIntegrationStatus status) =>
+        status switch
+        {
+            FleetIntegrationStatus.Rejected or
+            FleetIntegrationStatus.Unsupported => 2,
+            FleetIntegrationStatus.Disabled or
+            FleetIntegrationStatus.Absent or
+            FleetIntegrationStatus.Unavailable or
+            FleetIntegrationStatus.Unauthorized => 3,
+            FleetIntegrationStatus.Cancelled => 4,
+            _ => 1
+        };
 
     private static async Task<int> RunKioskDirectAsync(string[] arguments)
     {
@@ -897,6 +1101,9 @@ internal static class CliApplication
     private static void WriteJson<T>(T value) =>
         Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
 
+    private static void WriteIntegrationJson(FleetIntegrationResponse value) =>
+        Console.WriteLine(JsonSerializer.Serialize(value, IntegrationJsonOptions));
+
     private static void WriteMutationAware<T>(
         OperatorExecutionResult execution,
         T result,
@@ -993,6 +1200,9 @@ internal static class CliApplication
               questionable-file-manager device status --serial <serial> [--json]
               questionable-file-manager device keep-awake --serial <serial> <--on|--off> [--duration-ms <n>] --confirm-device-settings
               questionable-file-manager device performance --serial <serial> [--cpu <0-5>] [--gpu <0-5>] [--clear] --confirm-device-settings
+              questionable-file-manager integration capabilities --json [--contract-version 1.0]
+              questionable-file-manager integration observe --serial <serial> --json
+              questionable-file-manager integration invoke --request <operation-request.v1.json> --json
 
             Install options:
               --no-replace                 Do not reinstall over an existing package.
@@ -1019,6 +1229,9 @@ internal static class CliApplication
             Keep-awake, proximity, and CPU/GPU changes require explicit confirmation and
             report effective readback; --clear restores app-controlled performance levels.
             Split APK packages are refused by the single-APK export command.
+            Fleet integration is optional and disabled by default. It exposes only one
+            exact-device read-only list or staged pull under the adb-shared root; it has
+            no push, delete, overwrite, multi-target, daemon, or WPF automation route.
             """);
     }
 }

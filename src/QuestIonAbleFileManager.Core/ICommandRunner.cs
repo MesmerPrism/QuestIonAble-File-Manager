@@ -8,3 +8,14 @@ public interface ICommandRunner
         TimeSpan timeout,
         CancellationToken cancellationToken = default);
 }
+
+public interface IStreamingCommandRunner : ICommandRunner
+{
+    Task<StreamingCommandResult> RunToStreamAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        Stream destination,
+        long maximumBytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default);
+}

@@ -35,6 +35,11 @@ public sealed record CommandResult(
     }
 }
 
+public sealed record StreamingCommandResult(
+    CommandResult CommandResult,
+    long BytesWritten,
+    string Sha256);
+
 public sealed record QuestDevice(
     string Serial,
     string State,
@@ -165,4 +170,26 @@ public sealed class SplitPackageException : InvalidOperationException
     public string PackageName { get; }
 
     public IReadOnlyList<string> ApkPaths { get; }
+}
+
+public sealed class FleetTransferLimitException : InvalidOperationException
+{
+    public FleetTransferLimitException(long maximumBytes)
+        : base($"The remote file exceeded the hard transfer limit of {maximumBytes} bytes.")
+    {
+        MaximumBytes = maximumBytes;
+    }
+
+    public long MaximumBytes { get; }
+}
+
+public sealed class FleetRemotePathException : InvalidOperationException
+{
+    public FleetRemotePathException(string code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public string Code { get; }
 }

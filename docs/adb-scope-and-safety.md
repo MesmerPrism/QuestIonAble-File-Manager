@@ -112,3 +112,31 @@ Every state-changing operator route follows one state model:
 
 Timed-out wearer prompts remain reconcilable on a later refresh. Read-only
 status commands do not create mutation receipts.
+
+## Optional Fleet Read-Only Hook
+
+Rusty Fleet interop is disabled by default and remains separate from ordinary
+file operations. Its v1 CLI contract can observe one exact ready serial, list
+one bounded relative path below File Manager's fixed `/sdcard` mapping, or pull
+one confirmed file into an operation-owned directory below an operator-approved
+local root.
+
+The hook rediscovers the exact serial and USB/Wi-Fi transport before and after
+work. Its one remote owner command requires the requested canonical path to be
+exactly below the canonical `/sdcard` root, pins a file descriptor, and
+revalidates that descriptor before bounded output. It rejects stale observation
+digests, traversal, Windows-reserved names, remote symlink/intermediate
+indirection, reparse points, hardlinks, delete-pending output, local collisions,
+oversized streams, directories passed as files, and any operation other than
+`list` or `pull`. Windows staging and cleanup use retained handles rather than
+recursive path traversal. Ctrl+C and timeouts terminate the bounded process and
+clean the same owned handles. The hook has no push, delete, overwrite,
+multi-target, or ADB daemon route. ADB transport observation is not proof of
+Rusty Fleet device identity. See
+[Optional Rusty Fleet integration](fleet-integration.md).
+
+The operator-approved staging root must also be ACL-restricted to the
+operator/File Manager security context. Fleet treats its operation directories
+and replay tombstones as File Manager-owned state; a separate local principal
+with delete rights could otherwise erase durable replay evidence after the
+owning handles close.

@@ -10,7 +10,8 @@ Meta Quest headsets. It owns file-transfer UX, installed-package inspection,
 single-APK export, single-APK and complete split-set installation, diagnostics,
 explicit Wi-Fi ADB connection lifecycle, bounded multi-headset installation,
 optional Rusty Kiosk installation/operator UX, reviewed Quest power/performance
-controls, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
+controls, an optional disabled-by-default single-device read-only Rusty Fleet
+subprocess hook, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
 Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
@@ -70,6 +71,15 @@ documented.
   versioned provider. It admits fixed typed commands and bounded SHA-256 tag
   chunks. Never add arbitrary intents, components, shell commands, or host-
   supplied headset paths to that contract.
+- Rusty Fleet integration v1 is CLI-only, disabled by default, and restricted
+  to strict JSON capability discovery, exact-serial observation, bounded
+  `adb-shared` list, and operation-owned staged pull. It has no push, delete,
+  overwrite, WPF, multi-target, or ADB daemon route. An ADB observation is not
+  Fleet device identity. Resolve and descriptor-pin the remote path under the
+  canonical `/sdcard` root; hard-cap bytes during streaming. Keep every local
+  ancestor and final output handle-owned through validation and cleanup. Never
+  replace this with full `adb pull`, post-transfer size checking, recursive
+  cleanup, or path-only reparse checks.
 - Meta permission prompts remain wearer decisions. Showing a Wi-Fi ADB prompt
   is `pending`; it becomes `confirmed` only when Kiosk reports Wi-Fi ADB enabled.
 
@@ -111,6 +121,9 @@ questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <
 questionable-file-manager.exe device status --serial <quest-serial> --json
 questionable-file-manager.exe device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
+questionable-file-manager.exe integration capabilities --json
+questionable-file-manager.exe integration observe --serial <quest-serial> --json
+questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
 ```
 
 The WPF buttons map to those routes exactly. Both install actions accept
@@ -193,6 +206,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
   install/export, Wi-Fi endpoint lifecycle, bounded fan-out, progress units,
   hashes, typed Kiosk hosting, and mutation reconciliation.
 - `QuestIonAbleFileManager.Cli` is the automation-equivalent operator surface.
+- Fleet integration stays in the Core/CLI boundary described in
+  `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
+  one read-only target without a separate authority and UX review.
 - `QuestIonAbleFileManager.App` is the Windows WPF projection.
 - Keep external processes behind `ICommandRunner` and preserve cancellation
   and bounded timeouts.

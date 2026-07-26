@@ -20,6 +20,8 @@ general Quest runtime console or fleet manager.
 - Windows GUI and CLI projections.
 - Optional single-headset Rusty Kiosk direct transport for typed Kiosk control,
   fixed tags, app-owned staging, and attended PackageInstaller sessions.
+- Optional disabled-by-default Rusty Fleet subprocess interop for one exact
+  serial, bounded shared-storage listing, and operation-owned staged pull.
 - Public CI, Pages, release archives, and boundary validation.
 
 ## Non-scope
@@ -31,6 +33,8 @@ general Quest runtime console or fleet manager.
   area is supported.
 - TLS, network scanning, fleet discovery, online relays, or multi-device direct
   orchestration.
+- Fleet target scheduling, Fleet identity inference, multi-target file
+  operations, or Fleet-originated file mutation.
 - Bundled Android tools, APK catalogs, private packages, or live evidence.
 - Android and Apple host applications in the first release.
 
@@ -56,6 +60,12 @@ desktop/CLI projection. ADB host control crosses only Kiosk's exported
 `rusty.kiosk.direct_operator.v1`: expiring HMAC requests, persisted replay IDs,
 signed readbacks, fixed endpoints, bounded filenames, and no shell, component,
 intent, or arbitrary path input.
+
+For the optional Fleet adapter, File Manager owns the `adb-shared` mapping to
+`/sdcard`, exact ADB serial observation, adapter epoch, relative-path policy,
+operation staging, subprocess execution, and result evidence. Fleet owns
+device identity and every batch. A File Manager observation is transport
+evidence only and cannot be relabeled as Fleet identity proof.
 
 ## Interfaces
 
@@ -84,6 +94,19 @@ The CLI is the contract surface for agents and future GUI, Android-host, and
 Apple-host adapters. Any new GUI action must first have an equivalent typed
 command, CLI route, optional PowerShell rendering for tests/docs, and parity
 test. Automation details stay out of the non-technical WPF interface.
+
+Fleet interop uses strict `questionable.file_manager.integration.*.v1` JSON
+over the CLI subprocess. Capability discovery is side-effect free. Observe
+binds one ready serial and transport; invoke accepts only one short-lived
+observation-bound `list` or `pull`. The adapter rechecks the exact serial before
+and after work. The remote owner command resolves `/sdcard`, requires exact
+canonical-relative equality, opens one descriptor, rechecks its canonical
+identity, and lists or streams through that descriptor. Pull is hard-capped
+during host streaming. Its output is staged through locked Windows directory
+and file handles, refuses collisions/reparse/hardlink/delete-pending
+substitution, and returns the count and SHA-256 from that same stream. Cleanup
+deletes only owned handles and never follows a changed path. See
+[Optional Rusty Fleet integration](fleet-integration.md).
 
 ## Observability
 
@@ -120,6 +143,11 @@ evidence local.
 - Mutation tests prove sent/pending/confirmed ordering, wearer-prompt pending
   behavior, later status reconciliation, CPU/GPU property readback, and bounded
   SHA-256 tag transfer without raw Android-data paths.
+- Fleet interop tests prove disabled/absent/unsupported behavior, strict
+  request parsing, exact pre/post serial discovery, bounded list, staged
+  pull/hash, remote canonical escape rejection, transfer hard stops,
+  final-file/hardlink/parent-junction race defense, timeout/cancellation,
+  collision refusal, and handle-owned cleanup.
 - CI builds the WPF app, runs the core tests, exercises CLI help, and scans the
   tracked public boundary.
 - Live Quest validation is a separate serial-scoped manual gate.
@@ -155,6 +183,9 @@ packages, private behavior, generated binaries, or broad runtime features.
 | Misleading backup claim | State clearly that APK export excludes data and assets. |
 | Public evidence leak | Ignore artifacts and scan tracked files before publication. |
 | Toolchain drift | Discover ADB explicitly and report the selected executable. |
+| Fleet chooses the wrong headset | Bind a short-lived observation and rediscover the exact serial and transport before and after work. |
+| Fleet requests arbitrary paths | Expose only `adb-shared`, normalized relative paths, and operation-owned local staging. |
+| File hook becomes a mutation or scheduler | V1 contains list/pull only, one target per subprocess, and no WPF button. |
 
 ## Next Slice
 
