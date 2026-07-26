@@ -52,6 +52,10 @@ action can be automated and tested.
 - optionally expose a disabled-by-default Rusty Fleet hook for one exact-device
   `/sdcard` listing or staged pull, plus Core-only no-overwrite push when a host
   injects current Quest-identity and Manifold mutation-authority verification;
+- optionally expose a second, summary-only Fleet catalog provider that performs
+  Rusty Kiosk's encrypted direct-operator v2 exchange using a File Manager-owned
+  Windows credential profile, while remaining unavailable when no profile was
+  explicitly enrolled;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -107,6 +111,10 @@ reinstallation. See [Branding and compatibility](docs/branding-and-compatibility
 
 ## CLI
 
+These `dotnet run` commands are source-development examples. Production Fleet
+does not use this invocation or a build-output apphost for its Kiosk catalog
+provider.
+
 ```powershell
 dotnet run --project src/QuestIonAbleFileManager.Cli -- devices
 dotnet run --project src/QuestIonAbleFileManager.Cli -- files list --serial <quest-serial> --path /sdcard
@@ -135,6 +143,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- integration capabilities
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration observe --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --request <operation-request.v1.json> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
+dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
 ```
 
 Pass `--json` to list commands for machine-readable output. Pass `--adb` to
@@ -160,6 +169,32 @@ verified inode. Unsupported remote filesystems fail closed. Durable status disti
 ownership from recovery and reports final/partial uncertainty without
 automatic retry or cleanup. No route exposes delete, overwrite, multi-target
 fan-out, ADB daemon lifecycle, or WPF automation.
+The separate `kiosk-v2-catalog` route does not use those ADB settings. It reads
+one strict summary request from standard input and looks up only its opaque
+`profile_id` in the current Windows user's Credential Manager. The shipped
+default is `unavailable`; there is no CLI option or environment variable for
+an endpoint, pairing code, or key. Ordinary File Manager and Kiosk-direct
+features do not depend on this optional provider.
+Fleet uses only the release's dedicated
+`questionable-file-manager-kiosk-v2-provider.exe`. It pins that executable's
+lowercase SHA-256 and stages only that file into its private launch directory.
+The executable is published directly from the narrow
+`QuestIonAbleFileManager.FleetKioskV2Provider` project; it is never a renamed
+copy of the general operator CLI. Its only admitted argument vector is the
+exact case-sensitive `integration kiosk-v2-catalog --json`. A framework-
+dependent `bin/Release` apphost is not an acceptable provider artifact because
+it can load mutable sibling assemblies. The release gate proves the dedicated
+self-contained single-file executable rejects the general CLI's file, APK,
+Wi-Fi, Kiosk, kiosk-direct, device, and integration verbs before provider
+initialization, then returns the
+strict absent-profile response from a stage containing only the EXE and its
+empty private `bundle-extract` subdirectory without
+writing to standard error, while the ordinary apphost fails without its
+siblings. Fleet assigns a new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` to each
+pinned provider stage for any native bundle extraction.
+The provider's strict status/exit mapping is `verified=0`, `failed=1`,
+`rejected=2`, and `unavailable=3`; Fleet checks both values and requires empty
+standard error.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through

@@ -12,7 +12,9 @@ explicit Wi-Fi ADB connection lifecycle, bounded multi-headset installation,
 optional Rusty Kiosk installation/operator UX, reviewed Quest power/performance
 controls, an optional disabled-by-default single-device Rusty Fleet hook whose
 shipped CLI stays read-only and whose Core push requires injected current
-Quest/Manifold authority, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
+Quest/Manifold authority, an optional summary-only encrypted Kiosk v2 catalog
+provider whose endpoint and credential remain File Manager-owned, and Windows
+delivery. Rusty Kiosk remains a separate AGPL-licensed
 Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
@@ -85,6 +87,34 @@ documented.
   multi-target, or ADB daemon route is admitted. Never replace bounded streams
   with `adb pull`/`adb push`, post-transfer-only checks, recursive cleanup, or
   path-only reparse checks.
+- The separate Fleet/Kiosk v2 catalog subprocess is summary-only and reads one
+  strict request from standard input. It resolves an opaque File Manager profile
+  from the current user's secure store; Fleet never supplies or receives its
+  endpoint, pairing code, keys, session plaintext, launch scope, or Manifold
+  barrier. File Manager independently verifies the fresh public Kiosk contract,
+  session proof, directional HKDF/AES-GCM exchange, nonce/counter/AAD bindings,
+  and owner snapshot. Only the exact encrypted envelopes, deliberately
+  exportable owner catalog, and owner grant receipt cross back to Fleet as
+  bounded base64url evidence. Do not add v1 fallback, endpoint arguments,
+  inherited-environment credentials, launch, mutation, or free-form errors.
+- Fleet may launch this provider only from the reviewed, self-contained,
+  single-file Windows artifact named
+  `questionable-file-manager-kiosk-v2-provider.exe`, pinned by lowercase
+  SHA-256. Publish it directly from
+  `QuestIonAbleFileManager.FleetKioskV2Provider`; never rename or package the
+  general operator CLI as the provider. Never point Fleet at a `dotnet build`
+  apphost; it loads mutable sibling assemblies and is not a complete trust
+  unit. The dedicated entrypoint admits only the exact case-sensitive
+  `integration kiosk-v2-catalog --json` argument vector and cannot dispatch
+  ADB, file, APK, Wi-Fi, Kiosk, kiosk-direct, or device-control commands.
+  The artifact gate must smoke-run a stage containing only the dedicated EXE
+  and an empty private `bundle-extract` subdirectory, require the exact
+  absent-profile response and exit code, and require zero standard-error bytes.
+  It must also prove broad verbs reject before provider initialization and an
+  ordinary framework-dependent apphost fails when isolated. Fleet supplies a
+  new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` for each pinned provider stage so
+  any native single-file extraction remains inside that stage's trust boundary;
+  it never reuses a shared extraction directory.
 - Meta permission prompts remain wearer decisions. Showing a Wi-Fi ADB prompt
   is `pending`; it becomes `confirmed` only when Kiosk reports Wi-Fi ADB enabled.
 
@@ -158,6 +188,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- --help
 pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
+pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
 ```
 
 The canonical folder mark and multi-resolution Windows icon live under

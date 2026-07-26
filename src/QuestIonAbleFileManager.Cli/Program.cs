@@ -86,10 +86,19 @@ internal static class CliApplication
                     "Integration routes require --json and emit exactly one final JSON document.");
             }
 
+            var action = RequireAction(arguments, "integration");
+            if (string.Equals(action, "kiosk-v2-catalog", StringComparison.Ordinal))
+            {
+                await using var input = Console.OpenStandardInput();
+                await using var output = Console.OpenStandardOutput();
+                return await RustyKioskV2CatalogSubprocessHost
+                    .CreateWindows()
+                    .RunAsync(arguments, input, output, cancellationSource.Token);
+            }
+
             var settings = FleetIntegrationSettings.FromEnvironment(GetOption(arguments, "--adb"));
             var client = settings.AdbPath is null ? null : new AdbClient(settings.AdbPath);
             adapter = new FleetIntegrationAdapter(settings, client);
-            var action = RequireAction(arguments, "integration");
             var requestedVersion = GetOption(arguments, "--contract-version");
             if (requestedVersion is not null &&
                 !string.Equals(requestedVersion, FleetIntegrationContract.Version, StringComparison.Ordinal))
@@ -1212,6 +1221,7 @@ internal static class CliApplication
               questionable-file-manager integration observe --serial <serial> --json
               questionable-file-manager integration invoke --request <operation-request.v1.json> --json
               questionable-file-manager integration status --operation <operation-id> --json
+              questionable-file-manager-kiosk-v2-provider integration kiosk-v2-catalog --json < <strict-request.json>
 
             Install options:
               --no-replace                 Do not reinstall over an existing package.
@@ -1244,6 +1254,13 @@ internal static class CliApplication
             and Manifold mutation-authority verification. It never overwrites and has no
             delete, move, multi-target, daemon, or WPF automation route. Durable status
             distinguishes final-path and partial-path uncertainty after interruption.
+            The separate kiosk-v2-catalog subprocess route reads one strict request from
+            standard input and resolves one opaque File Manager-owned profile from the
+            current Windows user's Credential Manager. It is unavailable unless that
+            profile was explicitly enrolled. Fleet never supplies an endpoint, pairing
+            code, key, decrypted transport material, launch scope, or Manifold barrier.
+            Fleet uses only the hash-pinned self-contained release artifact named
+            questionable-file-manager-kiosk-v2-provider.exe, never a dotnet-build apphost.
             """);
     }
 }

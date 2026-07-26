@@ -15,6 +15,10 @@ Every Windows preview release contains:
 - `QuestIonAbleFileManager.cer`: public half of the package signing certificate;
 - `QuestIonAbleFileManager-win-x64.zip`: portable WPF app plus operator CLI;
 - `questionable-file-manager-cli-win-x64.zip`: CLI-only automation archive;
+- `questionable-file-manager-kiosk-v2-provider.exe`: dedicated self-contained
+  single-file provider for Fleet;
+- `questionable-file-manager-kiosk-v2-provider.receipt.json`: isolated-smoke
+  result, byte length, and lowercase SHA-256 for the provider;
 - `SHA256SUMS.txt`: checksums for every release asset;
 - `release-validation.json`: signature, timestamp, identity, and feed receipt.
 
@@ -26,6 +30,18 @@ similarly include the former CLI executable name as a deprecated alias.
 
 Android Platform Tools are not bundled. The app discovers an operator-supplied
 `adb.exe` through the documented search order.
+
+Both portable archives include
+`questionable-file-manager-kiosk-v2-provider.exe`, the dedicated
+self-contained single-file Fleet catalog provider published directly from
+`QuestIonAbleFileManager.FleetKioskV2Provider`, and its validation receipt. The
+release never renames or repackages the general operator CLI as this provider.
+Fleet pins the receipt's lowercase SHA-256, copies only that EXE to an empty
+private stage, creates only its private `bundle-extract` subdirectory, and
+rejects the ordinary framework-dependent build apphost as a provider trust
+unit. Every staged launch uses a new private
+`DOTNET_BUNDLE_EXTRACT_BASE_DIR`; native runtime extraction never shares a
+mutable cross-stage cache.
 
 The WPF app, automation CLI, guided setup helper, MSIX package, and GitHub Pages
 site use the same folder mark. Its canonical source and multi-resolution ICO
@@ -90,6 +106,10 @@ Kiosk tag to an exact commit and verifies the bundle version, source pointer,
 all declared byte counts and SHA-256 values, and both APK signer digests. The
 public validation receipt records that Kiosk provenance alongside the Windows
 signatures and public release filenames, never local or CI-runner build paths.
+It also isolation-tests the exact dedicated Fleet provider executable with no
+unexpected sibling files, requiring the strict absent-profile response, empty
+standard error, 15 rejected broad/general argument shapes, and an unreachable
+general CLI dispatcher before either portable archive is created.
 Existing release assets are not overwritten; any payload change requires a new
 semantic version. The consumer test stages a local HTTP feed with range
 support because the Windows deployment service does not consume workspace file

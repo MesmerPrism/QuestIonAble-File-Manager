@@ -13,6 +13,9 @@ $setupPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-Setup.exe'
 $packagePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-win-x64.msix'
 $appInstallerPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.appinstaller'
 $certificatePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.cer'
+$providerPath = Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.exe'
+$providerReceiptPath =
+    Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json'
 $receiptPath = Join-Path $ReleaseDirectory 'release-validation.json'
 $legacyAliases = [ordered]@{
     'MetaQuestFileManager-Setup.exe' = 'QuestIonAbleFileManager-Setup.exe'
@@ -23,10 +26,54 @@ $legacyAliases = [ordered]@{
     'meta-quest-file-manager-cli-win-x64.zip' = 'questionable-file-manager-cli-win-x64.zip'
 }
 
-foreach ($path in @($setupPath, $packagePath, $appInstallerPath, $certificatePath)) {
+foreach ($path in @(
+    $setupPath,
+    $packagePath,
+    $appInstallerPath,
+    $certificatePath,
+    $providerPath,
+    $providerReceiptPath
+)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required release asset was not found: $path"
     }
+}
+
+$providerReceipt = Get-Content -Raw -LiteralPath $providerReceiptPath | ConvertFrom-Json
+$providerHash =
+    (Get-FileHash -LiteralPath $providerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$providerLength = (Get-Item -LiteralPath $providerPath).Length
+if ($providerReceipt.schema -cne
+        'questionable.file_manager.fleet_kiosk_v2_provider_artifact_receipt.v1' -or
+    $providerReceipt.artifact_name -cne
+        'questionable-file-manager-kiosk-v2-provider.exe' -or
+    $providerReceipt.source_project -cne
+        'QuestIonAbleFileManager.FleetKioskV2Provider' -or
+    $providerReceipt.sha256 -cne $providerHash -or
+    [long]$providerReceipt.size_bytes -ne $providerLength -or
+    $providerReceipt.self_contained -ne $true -or
+    $providerReceipt.single_file -ne $true -or
+    [int]$providerReceipt.sibling_code_files -ne 0 -or
+    [int]$providerReceipt.isolated_file_count -ne 1 -or
+    $providerReceipt.bundle_extract_base -cne 'caller-private-per-launch' -or
+    [int]$providerReceipt.bundle_extract_file_count -lt 0 -or
+    [int]$providerReceipt.bundle_extract_file_count -gt 128 -or
+    [int]$providerReceipt.bundle_extract_directory_count -lt 0 -or
+    [int]$providerReceipt.bundle_extract_directory_count -gt 16 -or
+    [long]$providerReceipt.bundle_extract_bytes -lt 0 -or
+    [long]$providerReceipt.bundle_extract_bytes -gt 134217728 -or
+    [int]$providerReceipt.isolated_top_level_entries_after_run -ne 2 -or
+    $providerReceipt.ordinary_apphost_isolation_rejected -ne $true -or
+    $providerReceipt.general_cli_dispatch_unreachable -ne $true -or
+    [int]$providerReceipt.rejected_argument_shapes -lt 15 -or
+    [int]$providerReceipt.exit_codes.verified -ne 0 -or
+    [int]$providerReceipt.exit_codes.failed -ne 1 -or
+    [int]$providerReceipt.exit_codes.rejected -ne 2 -or
+    [int]$providerReceipt.exit_codes.unavailable -ne 3 -or
+    [int]$providerReceipt.smoke_exit_code -ne 3 -or
+    $providerReceipt.smoke_status -cne 'unavailable' -or
+    [int]$providerReceipt.stderr_bytes -ne 0) {
+    throw 'Fleet Kiosk v2 provider artifact receipt does not match the validated executable.'
 }
 foreach ($entry in $legacyAliases.GetEnumerator()) {
     $legacyPath = Join-Path $ReleaseDirectory $entry.Key
@@ -146,11 +193,37 @@ $receipt = [ordered]@{
     appinstaller_uri = $appInstaller.AppInstaller.Uri
     msix_uri = $mainPackage.Uri
     rusty_kiosk = $kioskReceipt
+    fleet_kiosk_v2_provider = [ordered]@{
+        artifact_name = 'questionable-file-manager-kiosk-v2-provider.exe'
+        source_project = 'QuestIonAbleFileManager.FleetKioskV2Provider'
+        sha256 = $providerHash
+        size_bytes = $providerLength
+        self_contained = $true
+        single_file = $true
+        bundle_extract_base = 'caller-private-per-launch'
+        bundle_extract_file_count = [int]$providerReceipt.bundle_extract_file_count
+        bundle_extract_directory_count = [int]$providerReceipt.bundle_extract_directory_count
+        bundle_extract_bytes = [long]$providerReceipt.bundle_extract_bytes
+        ordinary_apphost_isolation_rejected = $true
+        general_cli_dispatch_unreachable = $true
+        rejected_argument_shapes = [int]$providerReceipt.rejected_argument_shapes
+        exit_codes = [ordered]@{
+            verified = 0
+            failed = 1
+            rejected = 2
+            unavailable = 3
+        }
+        isolated_smoke_status = 'unavailable'
+        isolated_smoke_exit_code = 3
+        stderr_bytes = 0
+    }
     required_assets = @(
         'QuestIonAbleFileManager-Setup.exe',
         'QuestIonAbleFileManager-win-x64.msix',
         'QuestIonAbleFileManager.appinstaller',
-        'QuestIonAbleFileManager.cer'
+        'QuestIonAbleFileManager.cer',
+        'questionable-file-manager-kiosk-v2-provider.exe',
+        'questionable-file-manager-kiosk-v2-provider.receipt.json'
     )
     compatibility_aliases = $legacyAliases
 }
