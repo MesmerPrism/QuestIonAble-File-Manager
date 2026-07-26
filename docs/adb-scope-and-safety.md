@@ -113,7 +113,7 @@ Every state-changing operator route follows one state model:
 Timed-out wearer prompts remain reconcilable on a later refresh. Read-only
 status commands do not create mutation receipts.
 
-## Optional Fleet Read-Only Hook
+## Optional Fleet Hook
 
 Rusty Fleet interop is disabled by default and remains separate from ordinary
 file operations. Its v1 CLI contract can observe one exact ready serial, list
@@ -127,12 +127,20 @@ exactly below the canonical `/sdcard` root, pins a file descriptor, and
 revalidates that descriptor before bounded output. It rejects stale observation
 digests, traversal, Windows-reserved names, remote symlink/intermediate
 indirection, reparse points, hardlinks, delete-pending output, local collisions,
-oversized streams, directories passed as files, and any operation other than
-`list` or `pull`. Windows staging and cleanup use retained handles rather than
-recursive path traversal. Ctrl+C and timeouts terminate the bounded process and
-clean the same owned handles. The hook has no push, delete, overwrite,
-multi-target, or ADB daemon route. ADB transport observation is not proof of
-Rusty Fleet device identity. See
+oversized streams, directories passed as files, and ambient mutation. Windows
+staging and cleanup use retained handles rather than recursive path traversal.
+Ctrl+C and timeouts terminate the bounded process and clean the same owned
+handles.
+
+The shipped CLI remains `list`/`pull`/read-only-status only. A Core host may
+advertise no-overwrite push only after injecting a current Quest identity and
+Manifold authority verifier. That route locks an exact staged input, checks
+size/SHA-256 from the same stream, creates remote partial/final descriptors
+with no-clobber staging and atomic no-replace hard-link publication, and records
+durable live/recovery state. Filesystems without that primitive fail closed. It has no
+delete, overwrite, multi-target, or ADB daemon route, and recovery never
+retries or cleans remote paths automatically. ADB transport observation is not
+proof of Rusty Fleet device identity. See
 [Optional Rusty Fleet integration](fleet-integration.md).
 
 The operator-approved staging root must also be ACL-restricted to the

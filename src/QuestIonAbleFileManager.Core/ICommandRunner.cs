@@ -18,4 +18,14 @@ public interface IStreamingCommandRunner : ICommandRunner
         long maximumBytes,
         TimeSpan timeout,
         CancellationToken cancellationToken = default);
+
+    Task<StreamingCommandResult> RunFromStreamAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        Stream source,
+        long maximumBytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            "The configured command runner does not support input streaming.");
 }

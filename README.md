@@ -49,8 +49,9 @@ action can be automated and tested.
   set or clear fixed Quest CPU/GPU levels;
 - track every PC mutation as sent, pending, then headset-confirmed (or failed/
   timed out) instead of treating process success as effective state;
-- optionally expose a disabled-by-default Rusty Fleet subprocess hook for one
-  exact-device, read-only `/sdcard` listing or operation-owned staged pull;
+- optionally expose a disabled-by-default Rusty Fleet hook for one exact-device
+  `/sdcard` listing or staged pull, plus Core-only no-overwrite push when a host
+  injects current Quest-identity and Manifold mutation-authority verification;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -133,6 +134,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- device performance --ser
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration capabilities --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration observe --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --request <operation-request.v1.json> --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
 ```
 
 Pass `--json` to list commands for machine-readable output. Pass `--adb` to
@@ -147,14 +149,17 @@ Kiosk setup/control and device settings use their own confirmation flags.
 Mutation JSON contains desired and observed state plus its transition history.
 A Meta permission prompt can legitimately remain pending until wearer response.
 The optional [Rusty Fleet integration](docs/fleet-integration.md) is disabled
-until the operator configures an approved staging root. Its v1 JSON routes are
-single-device and read-only: bounded list plus staged pull with size and
-SHA-256 evidence from one hard-capped stream. Remote canonical/descriptor
-proofs reject `/sdcard` indirection; locked Windows handles prevent local
-reparse, hardlink, delete, and parent-junction substitution. Ctrl+C and
-timeouts terminate ADB and clean only operation-owned handles. The routes
-never expose push, delete, overwrite, multi-target fan-out, ADB daemon
-lifecycle, or WPF automation.
+until the operator configures an approved staging root. Its shipped v1 CLI
+routes are single-device and read-only: bounded list, staged pull, and durable
+status. The Core can advertise bounded no-overwrite push only through an
+injected current-authority verifier; environment settings and caller-supplied
+IDs cannot enable it. Push locks a staged input handle, binds size/SHA-256,
+preserves exact serial and authority digest across rechecks, and uses remote
+no-clobber partial staging followed by atomic no-replace publication of the
+verified inode. Unsupported remote filesystems fail closed. Durable status distinguishes live
+ownership from recovery and reports final/partial uncertainty without
+automatic retry or cleanup. No route exposes delete, overwrite, multi-target
+fan-out, ADB daemon lifecycle, or WPF automation.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through

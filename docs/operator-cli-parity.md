@@ -53,7 +53,8 @@ exact tool selection is part of the test.
 | Refresh batteries/power/performance | `device status` |
 | Keep awake / restore normal | `device keep-awake` |
 | Set / clear CPU and GPU overrides | `device performance` |
-| Optional Fleet capability/observation/read-only invoke | CLI-only `integration ... --json`; no WPF action in v1 |
+| Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
+| Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
 Example shapes use placeholders rather than live device or local identities:
 

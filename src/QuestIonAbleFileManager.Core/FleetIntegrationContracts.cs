@@ -11,13 +11,16 @@ public static class FleetIntegrationContract
     public const string CapabilitySchema = "questionable.file_manager.integration.capability_snapshot.v1";
     public const string ObservationSchema = "questionable.file_manager.integration.device_observation.v1";
     public const string BindingSchema = "questionable.file_manager.integration.device_binding.v1";
+    public const string MutationAuthoritySchema = "questionable.file_manager.integration.mutation_authority.v1";
     public const string RequestSchema = "questionable.file_manager.integration.operation_request.v1";
     public const string ResultSchema = "questionable.file_manager.integration.operation_result.v1";
+    public const string OperationStatusSchema = "questionable.file_manager.integration.operation_status.v1";
     public const string RootProfile = "adb-shared";
     public const string RemoteRoot = "/sdcard";
     public const int MaximumRequestBytes = 64 * 1024;
     public const int MaximumListEntries = 1_000;
     public const long MaximumPullBytes = 4L * 1024 * 1024 * 1024;
+    public const long MaximumPushBytes = 4L * 1024 * 1024 * 1024;
     public static readonly TimeSpan MaximumObservationAge = TimeSpan.FromMinutes(2);
     public static readonly TimeSpan MaximumRequestLifetime = TimeSpan.FromMinutes(5);
 }
@@ -80,7 +83,21 @@ public sealed record FleetIntegrationOperation(
     string RootProfile,
     string RelativePath,
     int? MaximumEntries,
-    long? MaximumBytes);
+    long? MaximumBytes,
+    string? LocalArtifactPath = null,
+    long? ExpectedSizeBytes = null,
+    string? ExpectedSha256 = null);
+
+public sealed record FleetIntegrationMutationAuthority(
+    string Schema,
+    string FleetDeviceId,
+    long FleetIdentityRevision,
+    string QuestIdentityProofId,
+    string ManifoldCommandId,
+    string ManifoldLeaseId,
+    string ManifoldProviderEpoch,
+    long RevocationBarrierRevision,
+    DateTimeOffset ExpiresAtUtc);
 
 public sealed record FleetIntegrationOperationRequest(
     string Schema,
@@ -90,7 +107,8 @@ public sealed record FleetIntegrationOperationRequest(
     string AdapterEpoch,
     DateTimeOffset ExpiresAtUtc,
     FleetIntegrationDeviceBinding DeviceBinding,
-    FleetIntegrationOperation Operation)
+    FleetIntegrationOperation Operation,
+    FleetIntegrationMutationAuthority? MutationAuthority = null)
 {
     public static FleetIntegrationOperationRequest Parse(ReadOnlySpan<byte> utf8Json)
     {
@@ -118,9 +136,20 @@ public sealed record FleetIntegrationOperationRequest(
                 });
             var root = document.RootElement;
             RequireObject(root, "request");
-            RequireExactProperties(
+            RequireAllowedProperties(
                 root,
                 "request",
+                [
+                    "schema",
+                    "contractVersion",
+                    "requestId",
+                    "operationId",
+                    "adapterEpoch",
+                    "expiresAtUtc",
+                    "deviceBinding",
+                    "operation",
+                    "mutationAuthority"
+                ],
                 [
                     "schema",
                     "contractVersion",
@@ -152,6 +181,10 @@ public sealed record FleetIntegrationOperationRequest(
             var expiresAtUtc = RequireTimestamp(root, "expiresAtUtc");
             var binding = ParseBinding(root.GetProperty("deviceBinding"));
             var operation = ParseOperation(root.GetProperty("operation"));
+            var mutationAuthority =
+                root.TryGetProperty("mutationAuthority", out var mutationAuthorityElement)
+                    ? ParseMutationAuthority(mutationAuthorityElement)
+                    : null;
 
             return new FleetIntegrationOperationRequest(
                 schema,
@@ -161,7 +194,8 @@ public sealed record FleetIntegrationOperationRequest(
                 adapterEpoch,
                 expiresAtUtc,
                 binding,
-                operation);
+                operation,
+                mutationAuthority);
         }
         catch (FleetIntegrationException)
         {
@@ -212,7 +246,16 @@ public sealed record FleetIntegrationOperationRequest(
         RequireAllowedProperties(
             element,
             "operation",
-            ["kind", "rootProfile", "relativePath", "maximumEntries", "maximumBytes"],
+            [
+                "kind",
+                "rootProfile",
+                "relativePath",
+                "maximumEntries",
+                "maximumBytes",
+                "localArtifactPath",
+                "expectedSizeBytes",
+                "expectedSha256"
+            ],
             ["kind", "rootProfile", "relativePath"]);
 
         var kind = RequireString(element, "kind", 16);
@@ -227,6 +270,12 @@ public sealed record FleetIntegrationOperationRequest(
         var relativePath = RequireString(element, "relativePath", FleetPathPolicy.MaximumRelativePathLength, allowEmpty: true);
         var maximumEntries = OptionalInt32(element, "maximumEntries");
         var maximumBytes = OptionalInt64(element, "maximumBytes");
+        var localArtifactPath = OptionalString(
+            element,
+            "localArtifactPath",
+            FleetPathPolicy.MaximumRelativePathLength);
+        var expectedSizeBytes = OptionalInt64(element, "expectedSizeBytes");
+        var expectedSha256 = OptionalLowerHexDigest(element, "expectedSha256");
 
         switch (kind)
         {
@@ -243,6 +292,7 @@ public sealed record FleetIntegrationOperationRequest(
                         "operation_field_invalid",
                         "List requests must not include maximumBytes.");
                 }
+                RequireAbsentPushFields(localArtifactPath, expectedSizeBytes, expectedSha256, "List");
                 break;
             case "pull":
                 if (string.IsNullOrEmpty(relativePath))
@@ -263,14 +313,107 @@ public sealed record FleetIntegrationOperationRequest(
                         "operation_field_invalid",
                         "Pull requests must not include maximumEntries.");
                 }
+                RequireAbsentPushFields(localArtifactPath, expectedSizeBytes, expectedSha256, "Pull");
+                break;
+            case "push":
+                if (string.IsNullOrEmpty(relativePath))
+                {
+                    throw FleetIntegrationException.Input(
+                        "push_path_empty",
+                        "Push requests require a non-empty relativePath.");
+                }
+                if (maximumBytes is null or < 1 or > FleetIntegrationContract.MaximumPushBytes)
+                {
+                    throw FleetIntegrationException.Input(
+                        "maximum_bytes_invalid",
+                        $"Push requests require maximumBytes between 1 and {FleetIntegrationContract.MaximumPushBytes}.");
+                }
+                if (maximumEntries is not null)
+                {
+                    throw FleetIntegrationException.Input(
+                        "operation_field_invalid",
+                        "Push requests must not include maximumEntries.");
+                }
+                if (localArtifactPath is null ||
+                    expectedSizeBytes is null or < 1 ||
+                    expectedSizeBytes > maximumBytes)
+                {
+                    throw FleetIntegrationException.Input(
+                        "push_source_invalid",
+                        "Push requires a staged localArtifactPath and expectedSizeBytes within maximumBytes.");
+                }
+                FleetPathPolicy.ValidatePushArtifactPath(localArtifactPath);
+                if (expectedSha256 is null)
+                {
+                    throw FleetIntegrationException.Input(
+                        "push_source_invalid",
+                        "Push requires a lowercase SHA-256 expectedSha256.");
+                }
                 break;
             default:
                 throw FleetIntegrationException.Input(
                     "operation_unsupported",
-                    "Only read-only 'list' and 'pull' integration operations are supported.");
+                    "Only 'list', 'pull', and explicitly authorized 'push' integration operations are supported.");
         }
 
-        return new FleetIntegrationOperation(kind, rootProfile, relativePath, maximumEntries, maximumBytes);
+        return new FleetIntegrationOperation(
+            kind,
+            rootProfile,
+            relativePath,
+            maximumEntries,
+            maximumBytes,
+            localArtifactPath,
+            expectedSizeBytes,
+            expectedSha256);
+    }
+
+    private static FleetIntegrationMutationAuthority ParseMutationAuthority(JsonElement element)
+    {
+        RequireObject(element, "mutationAuthority");
+        RequireExactProperties(
+            element,
+            "mutationAuthority",
+            [
+                "schema",
+                "fleetDeviceId",
+                "fleetIdentityRevision",
+                "questIdentityProofId",
+                "manifoldCommandId",
+                "manifoldLeaseId",
+                "manifoldProviderEpoch",
+                "revocationBarrierRevision",
+                "expiresAtUtc"
+            ]);
+        var schema = RequireString(element, "schema", 128);
+        if (!string.Equals(schema, FleetIntegrationContract.MutationAuthoritySchema, StringComparison.Ordinal))
+        {
+            throw FleetIntegrationException.Unsupported(
+                $"Unsupported mutation-authority schema '{schema}'.");
+        }
+        return new FleetIntegrationMutationAuthority(
+            schema,
+            RequireIdentifier(element, "fleetDeviceId"),
+            RequireNonNegativeInt64(element, "fleetIdentityRevision"),
+            RequireIdentifier(element, "questIdentityProofId"),
+            RequireIdentifier(element, "manifoldCommandId"),
+            RequireIdentifier(element, "manifoldLeaseId"),
+            RequireIdentifier(element, "manifoldProviderEpoch"),
+            RequireNonNegativeInt64(element, "revocationBarrierRevision"),
+            RequireTimestamp(element, "expiresAtUtc"));
+    }
+
+    private static void RequireAbsentPushFields(
+        string? localArtifactPath,
+        long? expectedSizeBytes,
+        string? expectedSha256,
+        string operation)
+    {
+        if (localArtifactPath is not null || expectedSizeBytes is not null || expectedSha256 is not null)
+        {
+            throw FleetIntegrationException.Input(
+                "operation_field_invalid",
+                $"{operation} requests must not include push source fields.");
+        }
     }
 
     private static void RequireObject(JsonElement element, string context)
@@ -420,6 +563,64 @@ public sealed record FleetIntegrationOperationRequest(
         }
         return value;
     }
+
+    private static long RequireNonNegativeInt64(JsonElement element, string name)
+    {
+        var property = element.GetProperty(name);
+        if (property.ValueKind != JsonValueKind.Number ||
+            !property.TryGetInt64(out var value) ||
+            value < 0)
+        {
+            throw FleetIntegrationException.Input(
+                "request_type_invalid",
+                $"{name} must be a non-negative JSON integer.");
+        }
+        return value;
+    }
+
+    private static string? OptionalString(
+        JsonElement element,
+        string name,
+        int maximumLength)
+    {
+        if (!element.TryGetProperty(name, out var property))
+        {
+            return null;
+        }
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            throw FleetIntegrationException.Input(
+                "request_type_invalid",
+                $"{name} must be a JSON string.");
+        }
+        var value = property.GetString() ?? string.Empty;
+        if (value.Length == 0 || value.Length > maximumLength)
+        {
+            throw FleetIntegrationException.Input(
+                "request_value_invalid",
+                $"{name} must contain between 1 and {maximumLength} characters.");
+        }
+        return value;
+    }
+
+    private static string? OptionalLowerHexDigest(JsonElement element, string name)
+    {
+        var value = OptionalString(element, name, 64);
+        if (value is null)
+        {
+            return null;
+        }
+        if (value.Length != 64 ||
+            value.Any(static character =>
+                !char.IsAsciiDigit(character) &&
+                (character < 'a' || character > 'f')))
+        {
+            throw FleetIntegrationException.Input(
+                "digest_invalid",
+                $"{name} must be a lowercase 64-character SHA-256 digest.");
+        }
+        return value;
+    }
 }
 
 public sealed record FleetIntegrationListEntry(
@@ -447,6 +648,49 @@ public sealed record FleetIntegrationOperationResult(
     long? SizeBytes,
     string? Sha256);
 
+[JsonConverter(typeof(JsonStringEnumConverter<FleetIntegrationOperationPhase>))]
+public enum FleetIntegrationOperationPhase
+{
+    Accepted,
+    Running,
+    Completed,
+    CancelRequested,
+    Cancelled,
+    Failed,
+    RecoveryRequired,
+    CleanupRequired
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<FleetIntegrationCleanupState>))]
+public enum FleetIntegrationCleanupState
+{
+    NotRequired,
+    Pending,
+    Completed,
+    Required,
+    Unknown
+}
+
+public sealed record FleetIntegrationOperationStatusSnapshot(
+    string Schema,
+    string ContractVersion,
+    string OperationId,
+    string RequestId,
+    string AdapterEpoch,
+    string Serial,
+    string Transport,
+    string RelativePath,
+    FleetIntegrationOperationPhase Phase,
+    FleetIntegrationCleanupState CleanupState,
+    long ExpectedSizeBytes,
+    string ExpectedSha256,
+    long? ObservedSizeBytes,
+    string? ObservedSha256,
+    bool DestinationMayExist,
+    bool PartialMayExist,
+    DateTimeOffset UpdatedAtUtc,
+    string? Reason);
+
 public sealed record FleetIntegrationError(
     string Code,
     string Message,
@@ -460,7 +704,9 @@ public sealed record FleetIntegrationResponse(
     FleetIntegrationCapabilitySnapshot? Capability,
     FleetIntegrationDeviceObservation? Observation,
     FleetIntegrationOperationResult? Result,
-    FleetIntegrationError? Error)
+    FleetIntegrationError? Error,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    FleetIntegrationOperationStatusSnapshot? OperationStatus = null)
 {
     public static FleetIntegrationResponse ForCapability(FleetIntegrationCapabilitySnapshot capability) =>
         new(
@@ -498,6 +744,22 @@ public sealed record FleetIntegrationResponse(
             null,
             result,
             null);
+
+    public static FleetIntegrationResponse ForOperationStatus(
+        FleetIntegrationCapabilitySnapshot capability,
+        FleetIntegrationOperationStatusSnapshot operationStatus) =>
+        new(
+            FleetIntegrationContract.ResponseSchema,
+            FleetIntegrationContract.Version,
+            true,
+            operationStatus.Phase == FleetIntegrationOperationPhase.Completed
+                ? FleetIntegrationStatus.Completed
+                : FleetIntegrationStatus.Ready,
+            capability,
+            null,
+            null,
+            null,
+            operationStatus);
 
     public static FleetIntegrationResponse Failure(
         FleetIntegrationStatus status,

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 
 namespace QuestIonAbleFileManager.Core;
@@ -47,6 +48,21 @@ public static class FleetPathPolicy
         return segments.Count == 0
             ? FleetIntegrationContract.RemoteRoot
             : FleetIntegrationContract.RemoteRoot + "/" + string.Join("/", segments);
+    }
+
+    public static IReadOnlyList<string> ValidatePushArtifactPath(string relativePath)
+    {
+        var segments = ValidateRelativePath(relativePath, allowEmpty: false);
+        if (segments.Count != 3 ||
+            segments[0] is not ("artifacts" or "operations") ||
+            !IsIdentifier(segments[1]) ||
+            !string.Equals(segments[2], "payload.bin", StringComparison.Ordinal))
+        {
+            throw Reject(
+                "push_source_path_invalid",
+                "Push input must be artifacts/<artifact-id>/payload.bin or operations/<operation-id>/payload.bin.");
+        }
+        return segments;
     }
 
     public static FleetPullDestination PreparePullDestination(
@@ -118,6 +134,12 @@ public static class FleetPathPolicy
         }
     }
 
+    private static bool IsIdentifier(string value) =>
+        value.Length is >= 1 and <= 64 &&
+        char.IsAsciiLetterOrDigit(value[0]) &&
+        value.All(static character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
+
     private static FleetIntegrationException Reject(string code, string message) =>
         new(FleetIntegrationStatus.Rejected, code, message);
 
@@ -134,6 +156,165 @@ public static class FleetPathPolicy
         }
         return values;
     }
+}
+
+public sealed class FleetPushSource : IDisposable
+{
+    private readonly IReadOnlyList<SafeFileHandle> _directoryHandles;
+    private readonly FileStream _stream;
+    private bool _disposed;
+
+    private FleetPushSource(
+        string configuredRoot,
+        string relativePath,
+        string fullPath,
+        long sizeBytes,
+        string sha256,
+        IReadOnlyList<SafeFileHandle> directoryHandles,
+        FileStream stream)
+    {
+        ConfiguredRoot = configuredRoot;
+        RelativePath = relativePath;
+        FullPath = fullPath;
+        SizeBytes = sizeBytes;
+        Sha256 = sha256;
+        _directoryHandles = directoryHandles;
+        _stream = stream;
+    }
+
+    public string ConfiguredRoot { get; }
+
+    public string RelativePath { get; }
+
+    public string FullPath { get; }
+
+    public long SizeBytes { get; }
+
+    public string Sha256 { get; }
+
+    public Stream InputStream
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _stream;
+        }
+    }
+
+    public static FleetPushSource Open(
+        string configuredRoot,
+        string relativePath,
+        long expectedSizeBytes,
+        string expectedSha256)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Secure Fleet push staging requires Windows.");
+        }
+        var segments = FleetPathPolicy.ValidatePushArtifactPath(relativePath);
+        var root = FleetPathPolicy.RequireSafeExistingRoot(configuredRoot);
+        var handles = new List<SafeFileHandle>();
+        FileStream? stream = null;
+        try
+        {
+            var current = root;
+            var rootHandle = FleetWindowsFileSafety.OpenDirectory(current, allowDelete: false);
+            FleetWindowsFileSafety.ValidateDirectory(rootHandle, current);
+            handles.Add(rootHandle);
+            for (var index = 0; index < segments.Count - 1; index++)
+            {
+                current = Path.Combine(current, segments[index]);
+                var handle = FleetWindowsFileSafety.OpenDirectory(current, allowDelete: false);
+                FleetWindowsFileSafety.ValidateDirectory(handle, current);
+                handles.Add(handle);
+            }
+
+            var fullPath = Path.Combine(root, Path.Combine(segments.ToArray()));
+            stream = FleetWindowsFileSafety.OpenReadOnlyFile(fullPath);
+            FleetWindowsFileSafety.ValidateFile(stream.SafeFileHandle, fullPath, requireSingleLink: true);
+            var size = stream.Length;
+            if (size != expectedSizeBytes || size is < 1 or > FleetIntegrationContract.MaximumPushBytes)
+            {
+                throw new FleetIntegrationException(
+                    FleetIntegrationStatus.Rejected,
+                    "push_source_size_mismatch",
+                    $"The staged push input is {size} bytes; the request binds {expectedSizeBytes} bytes.");
+            }
+            var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            stream.Position = 0;
+            if (!string.Equals(digest, expectedSha256, StringComparison.Ordinal))
+            {
+                throw new FleetIntegrationException(
+                    FleetIntegrationStatus.Rejected,
+                    "push_source_digest_mismatch",
+                    "The staged push input SHA-256 does not match the request.");
+            }
+
+            var source = new FleetPushSource(
+                root,
+                relativePath,
+                fullPath,
+                size,
+                digest,
+                handles.ToArray(),
+                stream);
+            stream = null;
+            source.Validate();
+            return source;
+        }
+        catch
+        {
+            stream?.Dispose();
+            foreach (var handle in handles)
+            {
+                handle.Dispose();
+            }
+            throw;
+        }
+    }
+
+    public void RewindAndValidate()
+    {
+        Validate();
+        _stream.Position = 0;
+    }
+
+    public void Validate()
+    {
+        ThrowIfDisposed();
+        var current = ConfiguredRoot;
+        FleetWindowsFileSafety.ValidateDirectory(_directoryHandles[0], current);
+        var segments = FleetPathPolicy.ValidatePushArtifactPath(RelativePath);
+        for (var index = 0; index < segments.Count - 1; index++)
+        {
+            current = Path.Combine(current, segments[index]);
+            FleetWindowsFileSafety.ValidateDirectory(_directoryHandles[index + 1], current);
+        }
+        FleetWindowsFileSafety.ValidateFile(_stream.SafeFileHandle, FullPath, requireSingleLink: true);
+        if (_stream.Length != SizeBytes)
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                "push_source_changed",
+                "The retained staged push input changed length.");
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _stream.Dispose();
+        foreach (var handle in _directoryHandles.Reverse())
+        {
+            handle.Dispose();
+        }
+        _disposed = true;
+    }
+
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }
 
 public sealed class FleetPullDestination : IDisposable
@@ -519,6 +700,20 @@ internal static class FleetWindowsFileSafety
     {
         var handle = CreateNewOwnedFileHandle(path);
         return new FileStream(handle, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
+    }
+
+    public static FileStream OpenReadOnlyFile(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead,
+            FileShareRead,
+            IntPtr.Zero,
+            OpenExisting,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"open staged push input '{path}'");
+        return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
     }
 
     public static SafeFileHandle CreateNewOwnedFileHandle(string path)

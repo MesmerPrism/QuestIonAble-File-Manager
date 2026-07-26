@@ -20,8 +20,9 @@ general Quest runtime console or fleet manager.
 - Windows GUI and CLI projections.
 - Optional single-headset Rusty Kiosk direct transport for typed Kiosk control,
   fixed tags, app-owned staging, and attended PackageInstaller sessions.
-- Optional disabled-by-default Rusty Fleet subprocess interop for one exact
-  serial, bounded shared-storage listing, and operation-owned staged pull.
+- Optional disabled-by-default Rusty Fleet interop for one exact serial,
+  bounded shared-storage list/pull, durable status, and Core-only no-overwrite
+  push when current Quest/Manifold authority is injected.
 - Public CI, Pages, release archives, and boundary validation.
 
 ## Non-scope
@@ -34,7 +35,7 @@ general Quest runtime console or fleet manager.
 - TLS, network scanning, fleet discovery, online relays, or multi-device direct
   orchestration.
 - Fleet target scheduling, Fleet identity inference, multi-target file
-  operations, or Fleet-originated file mutation.
+  operations, or mutation based only on caller-supplied Fleet fields.
 - Bundled Android tools, APK catalogs, private packages, or live evidence.
 - Android and Apple host applications in the first release.
 
@@ -66,6 +67,13 @@ For the optional Fleet adapter, File Manager owns the `adb-shared` mapping to
 operation staging, subprocess execution, and result evidence. Fleet owns
 device identity and every batch. A File Manager observation is transport
 evidence only and cannot be relabeled as Fleet identity proof.
+
+The shipped CLI has no push or cancellation authority. A Core host may
+advertise push only when it injects a verifier for the current Quest identity
+and Manifold command, lease, provider epoch, and revocation barrier. The same
+verified digest must survive admission, the immediate pre-stream recheck, and
+post-transfer exact-serial readback. Expiry and revocation are active
+cancellation sources, not post-hoc annotations.
 
 ## Interfaces
 
@@ -108,6 +116,16 @@ substitution, and returns the count and SHA-256 from that same stream. Cleanup
 deletes only owned handles and never follows a changed path. See
 [Optional Rusty Fleet integration](fleet-integration.md).
 
+Core push accepts only an exact staged payload handle with bound size/SHA-256.
+It streams that handle to an operation-specific remote partial, validates
+remote descriptor identity and content before the final name exists, then
+publishes the completed inode with an atomic no-replace hard link. It repeats
+descriptor-bound readback and removes the partial name; filesystems without
+that atomic primitive fail closed. Durable reservation and
+journal documents are exact-identity chained. A share-zero owner handle
+distinguishes live work from restart recovery; recovery reports uncertainty
+but never retries or performs remote cleanup automatically.
+
 ## Observability
 
 Every command returns exit code, standard output, standard error, and elapsed
@@ -148,6 +166,11 @@ evidence local.
   pull/hash, remote canonical escape rejection, transfer hard stops,
   final-file/hardlink/parent-junction race defense, timeout/cancellation,
   collision refusal, and handle-owned cleanup.
+- Fleet push tests prove unadvertised-without-verifier behavior, exact staged
+  input containment, same-stream hashing, authority digest continuity,
+  expiry/revocation cancellation, serial pre/post checks, no-overwrite races,
+  live/dead owner status, journal substitution rejection, and truthful
+  destination/partial uncertainty.
 - CI builds the WPF app, runs the core tests, exercises CLI help, and scans the
   tracked public boundary.
 - Live Quest validation is a separate serial-scoped manual gate.
@@ -185,7 +208,7 @@ packages, private behavior, generated binaries, or broad runtime features.
 | Toolchain drift | Discover ADB explicitly and report the selected executable. |
 | Fleet chooses the wrong headset | Bind a short-lived observation and rediscover the exact serial and transport before and after work. |
 | Fleet requests arbitrary paths | Expose only `adb-shared`, normalized relative paths, and operation-owned local staging. |
-| File hook becomes a mutation or scheduler | V1 contains list/pull only, one target per subprocess, and no WPF button. |
+| File hook becomes ambient mutation or a scheduler | The CLI remains list/pull/status only; Core push needs injected current authority, stays one target, and has no WPF or fan-out route. |
 
 ## Next Slice
 

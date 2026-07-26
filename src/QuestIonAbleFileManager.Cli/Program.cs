@@ -123,6 +123,14 @@ internal static class CliApplication
                         WriteIntegrationJson(FleetIntegrationResponse.ForResult(capability, result));
                         return 0;
                     }
+                case "status":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var status = adapter.GetOperationStatus(
+                            RequireOption(arguments, "--operation"));
+                        WriteIntegrationJson(FleetIntegrationResponse.ForOperationStatus(capability, status));
+                        return 0;
+                    }
                 default:
                     throw FleetIntegrationException.Input(
                         "integration_action_unknown",
@@ -1203,6 +1211,7 @@ internal static class CliApplication
               questionable-file-manager integration capabilities --json [--contract-version 1.0]
               questionable-file-manager integration observe --serial <serial> --json
               questionable-file-manager integration invoke --request <operation-request.v1.json> --json
+              questionable-file-manager integration status --operation <operation-id> --json
 
             Install options:
               --no-replace                 Do not reinstall over an existing package.
@@ -1229,9 +1238,12 @@ internal static class CliApplication
             Keep-awake, proximity, and CPU/GPU changes require explicit confirmation and
             report effective readback; --clear restores app-controlled performance levels.
             Split APK packages are refused by the single-APK export command.
-            Fleet integration is optional and disabled by default. It exposes only one
-            exact-device read-only list or staged pull under the adb-shared root; it has
-            no push, delete, overwrite, multi-target, daemon, or WPF automation route.
+            Fleet integration is optional and disabled by default. The normal executable
+            exposes one exact-device read-only list or staged pull under adb-shared.
+            Bounded push is advertised only by a host that injects current Quest identity
+            and Manifold mutation-authority verification. It never overwrites and has no
+            delete, move, multi-target, daemon, or WPF automation route. Durable status
+            distinguishes final-path and partial-path uncertainty after interruption.
             """);
     }
 }

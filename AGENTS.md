@@ -10,8 +10,9 @@ Meta Quest headsets. It owns file-transfer UX, installed-package inspection,
 single-APK export, single-APK and complete split-set installation, diagnostics,
 explicit Wi-Fi ADB connection lifecycle, bounded multi-headset installation,
 optional Rusty Kiosk installation/operator UX, reviewed Quest power/performance
-controls, an optional disabled-by-default single-device read-only Rusty Fleet
-subprocess hook, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
+controls, an optional disabled-by-default single-device Rusty Fleet hook whose
+shipped CLI stays read-only and whose Core push requires injected current
+Quest/Manifold authority, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
 Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
@@ -71,15 +72,19 @@ documented.
   versioned provider. It admits fixed typed commands and bounded SHA-256 tag
   chunks. Never add arbitrary intents, components, shell commands, or host-
   supplied headset paths to that contract.
-- Rusty Fleet integration v1 is CLI-only, disabled by default, and restricted
-  to strict JSON capability discovery, exact-serial observation, bounded
-  `adb-shared` list, and operation-owned staged pull. It has no push, delete,
-  overwrite, WPF, multi-target, or ADB daemon route. An ADB observation is not
-  Fleet device identity. Resolve and descriptor-pin the remote path under the
-  canonical `/sdcard` root; hard-cap bytes during streaming. Keep every local
-  ancestor and final output handle-owned through validation and cleanup. Never
-  replace this with full `adb pull`, post-transfer size checking, recursive
-  cleanup, or path-only reparse checks.
+- Rusty Fleet integration v1 is disabled by default. Its environment-created
+  CLI adapter is restricted to strict JSON capability discovery, exact-serial
+  observation, bounded `adb-shared` list/pull, and read-only durable status.
+  Core push must remain unadvertised without an injected current Quest identity
+  plus Manifold command/lease/revocation verifier. It is one target, staged
+  input only, size/SHA bound, no-overwrite, descriptor-validated, and one-use.
+  Recheck the identical verified authority digest before the stream and after
+  exact-serial readback; stop before the earlier request/authority expiry.
+  Durable recovery distinguishes destination/partial uncertainty and never
+  retries or deletes remotely by itself. No delete, overwrite, WPF,
+  multi-target, or ADB daemon route is admitted. Never replace bounded streams
+  with `adb pull`/`adb push`, post-transfer-only checks, recursive cleanup, or
+  path-only reparse checks.
 - Meta permission prompts remain wearer decisions. Showing a Wi-Fi ADB prompt
   is `pending`; it becomes `confirmed` only when Kiosk reports Wi-Fi ADB enabled.
 
@@ -124,6 +129,7 @@ questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3
 questionable-file-manager.exe integration capabilities --json
 questionable-file-manager.exe integration observe --serial <quest-serial> --json
 questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
+questionable-file-manager.exe integration status --operation <operation-id> --json
 ```
 
 The WPF buttons map to those routes exactly. Both install actions accept

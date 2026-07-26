@@ -182,15 +182,109 @@ public sealed class CommandRunner : IStreamingCommandRunner
             Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant());
     }
 
+    public async Task<StreamingCommandResult> RunFromStreamAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        Stream source,
+        long maximumBytes,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        if (!source.CanRead)
+        {
+            throw new ArgumentException("The streaming source must be readable.", nameof(source));
+        }
+
+        var startInfo = CreateStartInfo(fileName, arguments, redirectStandardInput: true);
+        using var process = new Process { StartInfo = startInfo };
+        var stopwatch = Stopwatch.StartNew();
+        StartProcess(process, fileName);
+
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+        var outputTask = ReadBoundedStandardErrorAsync(process.StandardOutput, linkedSource.Token);
+        var errorTask = ReadBoundedStandardErrorAsync(process.StandardError, linkedSource.Token);
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[StreamBufferBytes];
+        long bytesWritten = 0;
+
+        try
+        {
+            while (true)
+            {
+                var remainingWithSentinel = maximumBytes - bytesWritten + 1;
+                var readLength = (int)Math.Min(buffer.Length, remainingWithSentinel);
+                var count = await source.ReadAsync(
+                    buffer.AsMemory(0, readLength),
+                    linkedSource.Token).ConfigureAwait(false);
+                if (count == 0)
+                {
+                    break;
+                }
+                if (bytesWritten + count > maximumBytes)
+                {
+                    throw new FleetTransferLimitException(maximumBytes);
+                }
+                await process.StandardInput.BaseStream.WriteAsync(
+                    buffer.AsMemory(0, count),
+                    linkedSource.Token).ConfigureAwait(false);
+                hasher.AppendData(buffer, 0, count);
+                bytesWritten += count;
+            }
+            await process.StandardInput.BaseStream.FlushAsync(linkedSource.Token).ConfigureAwait(false);
+            process.StandardInput.Close();
+            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(outputTask).ConfigureAwait(false);
+            await IgnoreFailureAsync(errorTask).ConfigureAwait(false);
+            throw new TimeoutException($"{Path.GetFileName(fileName)} timed out after {timeout}.");
+        }
+        catch
+        {
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(outputTask).ConfigureAwait(false);
+            await IgnoreFailureAsync(errorTask).ConfigureAwait(false);
+            throw;
+        }
+
+        var standardOutput = await outputTask.ConfigureAwait(false);
+        var standardError = await errorTask.ConfigureAwait(false);
+        stopwatch.Stop();
+        return new StreamingCommandResult(
+            new CommandResult(
+                fileName,
+                arguments.ToArray(),
+                process.ExitCode,
+                standardOutput,
+                standardError,
+                stopwatch.Elapsed),
+            bytesWritten,
+            Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant());
+    }
+
     private static ProcessStartInfo CreateStartInfo(
         string fileName,
-        IReadOnlyList<string> arguments)
+        IReadOnlyList<string> arguments,
+        bool redirectStandardInput = false)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = redirectStandardInput,
             UseShellExecute = false,
             CreateNoWindow = true,
             StandardOutputEncoding = Encoding.UTF8,

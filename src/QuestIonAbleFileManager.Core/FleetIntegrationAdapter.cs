@@ -66,15 +66,18 @@ public sealed class FleetIntegrationAdapter
 {
     private readonly FleetIntegrationSettings _settings;
     private readonly AdbClient? _client;
+    private readonly IFleetMutationAuthorityVerifier? _mutationAuthorityVerifier;
     private readonly Func<DateTimeOffset> _utcNow;
 
     public FleetIntegrationAdapter(
         FleetIntegrationSettings settings,
         AdbClient? client = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IFleetMutationAuthorityVerifier? mutationAuthorityVerifier = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _client = client;
+        _mutationAuthorityVerifier = mutationAuthorityVerifier;
         _utcNow = utcNow ?? (static () => DateTimeOffset.UtcNow);
     }
 
@@ -123,8 +126,10 @@ public sealed class FleetIntegrationAdapter
         var epoch = ComputeAdapterEpoch(
             _settings.ConfiguredState,
             safeRoot ?? _settings.LocalStagingRoot,
-            _settings.AdbPath);
+            _settings.AdbPath,
+            _mutationAuthorityVerifier is not null);
         var ready = state == FleetIntegrationStatus.Ready;
+        var pushReady = ready && _mutationAuthorityVerifier is not null;
         return new FleetIntegrationCapabilitySnapshot(
             FleetIntegrationContract.CapabilitySchema,
             FleetIntegrationContract.Version,
@@ -132,13 +137,15 @@ public sealed class FleetIntegrationAdapter
             epoch,
             _utcNow().ToUniversalTime(),
             [FleetIntegrationContract.Version],
-            ready ? ["list", "pull"] : Array.Empty<string>(),
+            ready
+                ? pushReady ? ["list", "pull", "push"] : ["list", "pull"]
+                : Array.Empty<string>(),
             [
                 new FleetIntegrationRootProfile(
                     FleetIntegrationContract.RootProfile,
                     FleetIntegrationContract.RemoteRoot,
                     safeRoot,
-                    ReadOnly: true)
+                    ReadOnly: !pushReady)
             ],
             ready ? 1 : 0,
             NormalizePathForIdentity(_settings.AdbPath),
@@ -204,9 +211,14 @@ public sealed class FleetIntegrationAdapter
                     request,
                     startedAt,
                     cancellationToken).ConfigureAwait(false),
+                "push" => await InvokePushAsync(
+                    capability,
+                    request,
+                    startedAt,
+                    cancellationToken).ConfigureAwait(false),
                 _ => throw FleetIntegrationException.Input(
                     "operation_unsupported",
-                    "Only read-only 'list' and 'pull' integration operations are supported.")
+                    "Only 'list', 'pull', and explicitly authorized 'push' integration operations are supported.")
             };
         }
         catch (FleetIntegrationException)
@@ -428,6 +440,271 @@ public sealed class FleetIntegrationAdapter
         }
     }
 
+    private async Task<FleetIntegrationOperationResult> InvokePushAsync(
+        FleetIntegrationCapabilitySnapshot capability,
+        FleetIntegrationOperationRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        var verifier = _mutationAuthorityVerifier
+            ?? throw new FleetIntegrationException(
+                FleetIntegrationStatus.Unsupported,
+                "mutation_authority_unavailable",
+                "Push remains disabled until a current Quest identity and Manifold mutation-authority verifier is installed.");
+        var authority = await VerifyMutationAuthorityAsync(
+            verifier,
+            request,
+            cancellationToken).ConfigureAwait(false);
+        var localRoot = capability.RootProfiles[0].LocalStagingRoot
+            ?? throw new InvalidOperationException("A ready integration has no local staging root.");
+        using var source = FleetPushSource.Open(
+            localRoot,
+            request.Operation.LocalArtifactPath!,
+            request.Operation.ExpectedSizeBytes!.Value,
+            request.Operation.ExpectedSha256!);
+        var store = new FleetPushOperationStore(localRoot, _utcNow);
+        using var operation = store.Begin(
+            request,
+            authority.VerifiedAuthorityDigest!);
+        operation.Append(
+            FleetIntegrationOperationPhase.Running,
+            FleetIntegrationCleanupState.Pending,
+            null,
+            null,
+            "The exact staged input is locked and the no-overwrite remote transfer is running.",
+            destinationMayExist: true,
+            partialMayExist: true);
+
+        var remoteStarted = false;
+        var remoteCompleted = false;
+        CancellationTokenSource? authorityDeadline = null;
+        try
+        {
+            var streamAuthority = await VerifyMutationAuthorityAsync(
+                verifier,
+                request,
+                cancellationToken).ConfigureAwait(false);
+            RequireAuthorityContinuity(authority, streamAuthority);
+            authorityDeadline = CreateAuthorityDeadline(request, _utcNow().ToUniversalTime());
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                operation.DurableCancellationToken,
+                authority.RevocationToken,
+                streamAuthority.RevocationToken,
+                authorityDeadline.Token);
+            source.RewindAndValidate();
+            var remotePath = FleetPathPolicy.ToRemotePath(
+                request.Operation.RelativePath,
+                allowEmpty: false);
+            remoteStarted = true;
+            var streamed = await RequireClient().StreamLocalFileToRemoteNoOverwriteAsync(
+                request.DeviceBinding.Serial,
+                remotePath,
+                request.OperationId,
+                source.InputStream,
+                request.Operation.ExpectedSizeBytes.Value,
+                request.Operation.ExpectedSha256!,
+                linked.Token).ConfigureAwait(false);
+            remoteCompleted = true;
+            source.Validate();
+            await RediscoverExactReadyDeviceAsync(
+                request.DeviceBinding.Serial,
+                request.DeviceBinding.Transport,
+                linked.Token).ConfigureAwait(false);
+            var completedAuthority = await VerifyMutationAuthorityAsync(
+                verifier,
+                request,
+                linked.Token).ConfigureAwait(false);
+            RequireAuthorityContinuity(authority, completedAuthority);
+
+            operation.Append(
+                FleetIntegrationOperationPhase.Completed,
+                FleetIntegrationCleanupState.Completed,
+                streamed.BytesWritten,
+                streamed.Sha256,
+                "The remote final path read back with the exact size/SHA-256 and the partial path was removed.",
+                destinationMayExist: true,
+                partialMayExist: false);
+            return CreateResult(
+                capability,
+                request,
+                startedAt,
+                sizeBytes: streamed.BytesWritten,
+                sha256: streamed.Sha256);
+        }
+        catch (OperationCanceledException exception) when (
+            authorityDeadline?.IsCancellationRequested == true)
+        {
+            operation.Append(
+                FleetIntegrationOperationPhase.Cancelled,
+                remoteStarted
+                    ? FleetIntegrationCleanupState.Unknown
+                    : FleetIntegrationCleanupState.NotRequired,
+                null,
+                null,
+                "The request or mutation authority expired during transfer; no automatic retry or remote cleanup is attempted.",
+                destinationMayExist: remoteStarted,
+                partialMayExist: remoteStarted);
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                "mutation_authority_expired_during_operation",
+                "The request or mutation authority expired before the push reached an accepted terminal result.",
+                retryable: true,
+                exception);
+        }
+        catch (OperationCanceledException)
+        {
+            operation.Append(
+                FleetIntegrationOperationPhase.Cancelled,
+                remoteStarted
+                    ? FleetIntegrationCleanupState.Unknown
+                    : FleetIntegrationCleanupState.NotRequired,
+                null,
+                null,
+                "Transfer cancellation was observed; poll durable status before assuming remote cleanup.",
+                destinationMayExist: remoteStarted,
+                partialMayExist: remoteStarted);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            var cleanupState = !remoteStarted
+                ? FleetIntegrationCleanupState.NotRequired
+                : remoteCompleted
+                ? FleetIntegrationCleanupState.NotRequired
+                : exception is FleetIntegrationException integrationException &&
+                  integrationException.Code is
+                    "remote_parent_absent" or
+                    "mutation_authority_changed"
+                ? FleetIntegrationCleanupState.NotRequired
+                : exception is FleetRemotePathException remoteException &&
+                  remoteException.Code is
+                    "remote_parent_absent"
+                    ? FleetIntegrationCleanupState.NotRequired
+                    : FleetIntegrationCleanupState.Unknown;
+            operation.Append(
+                cleanupState == FleetIntegrationCleanupState.Unknown
+                    ? FleetIntegrationOperationPhase.CleanupRequired
+                    : FleetIntegrationOperationPhase.Failed,
+                cleanupState,
+                null,
+                null,
+                exception.Message,
+                destinationMayExist: remoteStarted,
+                partialMayExist: remoteStarted &&
+                    !remoteCompleted &&
+                    cleanupState == FleetIntegrationCleanupState.Unknown);
+            throw;
+        }
+        finally
+        {
+            authorityDeadline?.Dispose();
+        }
+    }
+
+    public FleetIntegrationOperationStatusSnapshot GetOperationStatus(string operationId)
+    {
+        var capability = RequireReadyCapability();
+        var localRoot = capability.RootProfiles[0].LocalStagingRoot
+            ?? throw new InvalidOperationException("A ready integration has no local staging root.");
+        return new FleetPushOperationStore(localRoot, _utcNow).ReadStatus(operationId);
+    }
+
+    public async Task<FleetIntegrationOperationStatusSnapshot> RequestOperationCancellationAsync(
+        string operationId,
+        CancellationToken cancellationToken = default)
+    {
+        var verifier = _mutationAuthorityVerifier
+            ?? throw new FleetIntegrationException(
+                FleetIntegrationStatus.Unsupported,
+                "mutation_authority_unavailable",
+                "Cancellation is not available without the same current mutation-authority verifier.");
+        var capability = RequireReadyCapability();
+        var localRoot = capability.RootProfiles[0].LocalStagingRoot
+            ?? throw new InvalidOperationException("A ready integration has no local staging root.");
+        var store = new FleetPushOperationStore(localRoot, _utcNow);
+        var authority = store.ReadOperationAuthority(operationId);
+        var current = await VerifyMutationAuthorityAsync(
+            verifier,
+            authority.Request,
+            cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(
+                authority.VerifiedAuthorityDigest,
+                current.VerifiedAuthorityDigest,
+                StringComparison.Ordinal))
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                "mutation_authority_changed",
+                "Cancellation authority does not match the operation's admitted authority.",
+                retryable: true);
+        }
+        return store.RequestCancellation(operationId);
+    }
+
+    private static async ValueTask<FleetMutationAuthorityDecision> VerifyMutationAuthorityAsync(
+        IFleetMutationAuthorityVerifier verifier,
+        FleetIntegrationOperationRequest request,
+        CancellationToken cancellationToken)
+    {
+        var decision = await verifier.VerifyCurrentAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!decision.Accepted ||
+            decision.RevocationToken.IsCancellationRequested ||
+            decision.VerifiedAuthorityDigest is null ||
+            decision.VerifiedAuthorityDigest.Length != 64 ||
+            decision.VerifiedAuthorityDigest.Any(static character =>
+                !char.IsAsciiDigit(character) &&
+                (character < 'a' || character > 'f')))
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                decision.Code ?? "mutation_authority_rejected",
+                decision.Reason ?? "The current Quest identity and Manifold mutation authority were not accepted.",
+                retryable: true);
+        }
+        return decision;
+    }
+
+    private static void RequireAuthorityContinuity(
+        FleetMutationAuthorityDecision admitted,
+        FleetMutationAuthorityDecision current)
+    {
+        if (!string.Equals(
+                admitted.VerifiedAuthorityDigest,
+                current.VerifiedAuthorityDigest,
+                StringComparison.Ordinal))
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                "mutation_authority_changed",
+                "The accepted Quest identity or Manifold command/lease/revocation authority changed during the operation.",
+                retryable: true);
+        }
+    }
+
+    private static CancellationTokenSource CreateAuthorityDeadline(
+        FleetIntegrationOperationRequest request,
+        DateTimeOffset now)
+    {
+        var mutationExpiry = request.MutationAuthority?.ExpiresAtUtc
+            ?? throw FleetIntegrationException.Input(
+                "mutation_authority_invalid",
+                "Push requires mutation authority.");
+        var deadline = request.ExpiresAtUtc <= mutationExpiry
+            ? request.ExpiresAtUtc
+            : mutationExpiry;
+        var remaining = deadline - now - TimeSpan.FromMilliseconds(250);
+        if (remaining <= TimeSpan.Zero)
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Rejected,
+                "mutation_authority_expired_during_operation",
+                "Too little request/authority lifetime remains to start the remote stream.",
+                retryable: true);
+        }
+        return new CancellationTokenSource(remaining);
+    }
+
     private FleetIntegrationOperationResult CreateResult(
         FleetIntegrationCapabilitySnapshot capability,
         FleetIntegrationOperationRequest request,
@@ -522,7 +799,11 @@ public sealed class FleetIntegrationAdapter
         if (request.Operation.Kind == "list")
         {
             if (request.Operation.MaximumEntries is null or < 1 or > FleetIntegrationContract.MaximumListEntries ||
-                request.Operation.MaximumBytes is not null)
+                request.Operation.MaximumBytes is not null ||
+                request.Operation.LocalArtifactPath is not null ||
+                request.Operation.ExpectedSizeBytes is not null ||
+                request.Operation.ExpectedSha256 is not null ||
+                request.MutationAuthority is not null)
             {
                 throw FleetIntegrationException.Input(
                     "operation_bounds_invalid",
@@ -532,18 +813,72 @@ public sealed class FleetIntegrationAdapter
         else if (request.Operation.Kind == "pull")
         {
             if (request.Operation.MaximumBytes is null or < 1 or > FleetIntegrationContract.MaximumPullBytes ||
-                request.Operation.MaximumEntries is not null)
+                request.Operation.MaximumEntries is not null ||
+                request.Operation.LocalArtifactPath is not null ||
+                request.Operation.ExpectedSizeBytes is not null ||
+                request.Operation.ExpectedSha256 is not null ||
+                request.MutationAuthority is not null)
             {
                 throw FleetIntegrationException.Input(
                     "operation_bounds_invalid",
                     "Pull requires only maximumBytes within the advertised limit.");
             }
         }
+        else if (request.Operation.Kind == "push")
+        {
+            if (_mutationAuthorityVerifier is null)
+            {
+                throw new FleetIntegrationException(
+                    FleetIntegrationStatus.Unsupported,
+                    "mutation_authority_unavailable",
+                    "Push is not advertised without an installed mutation-authority verifier.");
+            }
+            if (request.Operation.MaximumBytes is null or < 1 or > FleetIntegrationContract.MaximumPushBytes ||
+                request.Operation.MaximumEntries is not null ||
+                request.Operation.LocalArtifactPath is null ||
+                request.Operation.ExpectedSizeBytes is null or < 1 ||
+                request.Operation.ExpectedSizeBytes > request.Operation.MaximumBytes ||
+                request.Operation.ExpectedSha256 is null ||
+                request.MutationAuthority is null)
+            {
+                throw FleetIntegrationException.Input(
+                    "operation_bounds_invalid",
+                    "Push requires a staged input, exact size/SHA-256, maximumBytes, and mutation authority.");
+            }
+            FleetPathPolicy.ValidatePushArtifactPath(request.Operation.LocalArtifactPath);
+            if (request.Operation.ExpectedSha256.Length != 64 ||
+                request.Operation.ExpectedSha256.Any(static character =>
+                    !char.IsAsciiDigit(character) &&
+                    (character < 'a' || character > 'f')))
+            {
+                throw FleetIntegrationException.Input(
+                    "digest_invalid",
+                    "Push expectedSha256 must be lowercase hexadecimal.");
+            }
+            if (!string.Equals(
+                    request.MutationAuthority.Schema,
+                    FleetIntegrationContract.MutationAuthoritySchema,
+                    StringComparison.Ordinal) ||
+                request.MutationAuthority.FleetIdentityRevision < 0 ||
+                request.MutationAuthority.RevocationBarrierRevision < 0 ||
+                request.MutationAuthority.ExpiresAtUtc <= now ||
+                request.MutationAuthority.ExpiresAtUtc > request.ExpiresAtUtc)
+            {
+                throw FleetIntegrationException.Input(
+                    "mutation_authority_invalid",
+                    "Push mutation authority is unsupported, expired, or outlives the request.");
+            }
+            ValidateIdentifier(request.MutationAuthority.FleetDeviceId, "FleetDeviceId");
+            ValidateIdentifier(request.MutationAuthority.QuestIdentityProofId, "QuestIdentityProofId");
+            ValidateIdentifier(request.MutationAuthority.ManifoldCommandId, "ManifoldCommandId");
+            ValidateIdentifier(request.MutationAuthority.ManifoldLeaseId, "ManifoldLeaseId");
+            ValidateIdentifier(request.MutationAuthority.ManifoldProviderEpoch, "ManifoldProviderEpoch");
+        }
         else
         {
             throw FleetIntegrationException.Input(
                 "operation_unsupported",
-                "Only read-only 'list' and 'pull' integration operations are supported.");
+                "Only 'list', 'pull', and explicitly authorized 'push' integration operations are supported.");
         }
 
         if (!string.Equals(request.AdapterEpoch, capability.AdapterEpoch, StringComparison.Ordinal))
@@ -659,7 +994,8 @@ public sealed class FleetIntegrationAdapter
     private static string ComputeAdapterEpoch(
         FleetIntegrationStatus state,
         string? localRoot,
-        string? adbPath)
+        string? adbPath,
+        bool mutationAuthorityAvailable)
     {
         var assemblyVersion = typeof(FleetIntegrationAdapter).Assembly.GetName().Version?.ToString() ?? "unknown";
         var canonical = string.Join(
@@ -668,7 +1004,8 @@ public sealed class FleetIntegrationAdapter
             assemblyVersion,
             state.ToString(),
             "root:" + (NormalizePathForIdentity(localRoot) ?? "absent-or-invalid"),
-            "adb:" + (NormalizePathForIdentity(adbPath) ?? "absent-or-invalid"));
+            "adb:" + (NormalizePathForIdentity(adbPath) ?? "absent-or-invalid"),
+            "push-authority:" + (mutationAuthorityAvailable ? "available" : "absent"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
     }
 

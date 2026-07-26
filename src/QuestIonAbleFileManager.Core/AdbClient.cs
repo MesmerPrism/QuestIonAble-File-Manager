@@ -170,6 +170,163 @@ public sealed class AdbClient
         return result;
     }
 
+    public async Task<StreamingCommandResult> StreamLocalFileToRemoteNoOverwriteAsync(
+        string serial,
+        string remotePath,
+        string operationId,
+        Stream source,
+        long expectedBytes,
+        string expectedSha256,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationId);
+        ArgumentNullException.ThrowIfNull(source);
+        if (expectedBytes is < 1 or > FleetIntegrationContract.MaximumPushBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(expectedBytes));
+        }
+        if (expectedSha256.Length != 64 ||
+            expectedSha256.Any(static character =>
+                !char.IsAsciiDigit(character) &&
+                (character < 'a' || character > 'f')))
+        {
+            throw new ArgumentException("Expected SHA-256 must be lowercase hexadecimal.", nameof(expectedSha256));
+        }
+        if (operationId.Length > 64 ||
+            !char.IsAsciiLetterOrDigit(operationId[0]) ||
+            operationId.Any(static character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-'))
+        {
+            throw new ArgumentException("The operation ID is not safe for remote staging.", nameof(operationId));
+        }
+        if (_runner is not IStreamingCommandRunner streamingRunner)
+        {
+            throw new InvalidOperationException(
+                "The configured command runner does not support bounded binary streaming.");
+        }
+
+        var slash = remotePath.LastIndexOf('/');
+        if (slash < FleetIntegrationContract.RemoteRoot.Length)
+        {
+            throw new ArgumentException("The integration push target must have a parent below /sdcard.", nameof(remotePath));
+        }
+        var remoteParent = remotePath[..slash];
+        var remoteName = remotePath[(slash + 1)..];
+        var parentRelative = string.Equals(
+                remoteParent,
+                FleetIntegrationContract.RemoteRoot,
+                StringComparison.Ordinal)
+            ? string.Empty
+            : remoteParent[(FleetIntegrationContract.RemoteRoot.Length + 1)..];
+        FleetPathPolicy.ValidateRelativePath(parentRelative, allowEmpty: true);
+        FleetPathPolicy.ValidateRelativePath(remoteName, allowEmpty: false);
+        var partialName = $".qfm-{operationId}.partial";
+        var invariantBytes = expectedBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var command =
+            $"root=$(realpath {AndroidInput.ShellQuote(FleetIntegrationContract.RemoteRoot)}) || {{ " +
+            "printf 'qfm-integration:root-unavailable\\n' >&2; exit 40; }; " +
+            $"parent=$(realpath {AndroidInput.ShellQuote(remoteParent)}) || {{ " +
+            "printf 'qfm-integration:parent-absent\\n' >&2; exit 60; }; " +
+            (parentRelative.Length == 0
+                ? "expected_parent=\"$root\"; "
+                : $"expected_parent=\"$root\"/{AndroidInput.ShellQuote(parentRelative)}; ") +
+            "if [ \"$parent\" != \"$expected_parent\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            $"candidate=\"$parent\"/{AndroidInput.ShellQuote(remoteName)}; " +
+            $"partial=\"$parent\"/{AndroidInput.ShellQuote(partialName)}; " +
+            "if [ -e \"$candidate\" ] || [ -L \"$candidate\" ]; then " +
+            "printf 'qfm-integration:destination-exists\\n' >&2; exit 61; fi; " +
+            "if [ -e \"$partial\" ] || [ -L \"$partial\" ]; then " +
+            "printf 'qfm-integration:partial-exists\\n' >&2; exit 62; fi; " +
+            "committed=0; partial_id=''; final_id=''; " +
+            "cleanup() { " +
+            "if [ \"$committed\" != 1 ]; then " +
+            "if [ -n \"$final_id\" ] && [ -e \"$candidate\" ]; then " +
+            "current=$(stat -c %d:%i -- \"$candidate\" 2>/dev/null || true); " +
+            "if [ \"$current\" = \"$final_id\" ]; then rm -f -- \"$candidate\" || true; fi; fi; " +
+            "if [ -n \"$partial_id\" ] && [ -e \"$partial\" ]; then " +
+            "current=$(stat -c %d:%i -- \"$partial\" 2>/dev/null || true); " +
+            "if [ \"$current\" = \"$partial_id\" ]; then rm -f -- \"$partial\" || true; fi; fi; fi; }; " +
+            "trap cleanup EXIT; trap 'exit 67' HUP INT TERM; set -C; " +
+            "exec 3>\"$partial\" || { printf 'qfm-integration:partial-exists\\n' >&2; exit 62; }; " +
+            "partial_id=$(stat -c %d:%i -- /proc/self/fd/3) || exit 63; " +
+            "opened=$(realpath /proc/self/fd/3) || exit 63; " +
+            "if [ \"$opened\" != \"$partial\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "cat >&3; exec 3>&-; " +
+            "size=$(stat -c %s -- \"$partial\") || exit 63; " +
+            "digest=$(sha256sum \"$partial\") || exit 63; digest=${digest%% *}; " +
+            $"if [ \"$size\" != {invariantBytes} ]; then " +
+            "printf 'qfm-integration:push-size-mismatch\\n' >&2; exit 63; fi; " +
+            $"if [ \"$digest\" != {AndroidInput.ShellQuote(expectedSha256)} ]; then " +
+            "printf 'qfm-integration:push-digest-mismatch\\n' >&2; exit 64; fi; " +
+            "current=$(stat -c %d:%i -- \"$partial\") || exit 65; " +
+            "if [ \"$current\" != \"$partial_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "if ln -T -- \"$partial\" \"$candidate\" 2>/dev/null; then :; " +
+            "elif [ -e \"$candidate\" ] || [ -L \"$candidate\" ]; then " +
+            "printf 'qfm-integration:destination-exists\\n' >&2; exit 61; " +
+            "else printf 'qfm-integration:atomic-publish-unavailable\\n' >&2; exit 68; fi; " +
+            "final_id=$(stat -c %d:%i -- \"$candidate\") || exit 65; " +
+            "if [ \"$final_id\" != \"$partial_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "exec 4<\"$candidate\" || exit 65; " +
+            "published_id=$(stat -c %d:%i -- /proc/self/fd/4) || exit 65; " +
+            "opened=$(realpath /proc/self/fd/4) || exit 65; " +
+            "if [ \"$opened\" != \"$candidate\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "if [ \"$published_id\" != \"$partial_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "final_size=$(stat -c %s -- /proc/self/fd/4) || exit 65; " +
+            "final_digest=$(sha256sum <&4) || exit 65; final_digest=${final_digest%% *}; " +
+            "exec 4<&-; " +
+            $"if [ \"$final_size\" != {invariantBytes} ] || " +
+            $"[ \"$final_digest\" != {AndroidInput.ShellQuote(expectedSha256)} ]; then " +
+            "printf 'qfm-integration:push-readback-mismatch\\n' >&2; exit 65; fi; " +
+            "current=$(stat -c %d:%i -- \"$candidate\") || exit 65; " +
+            "if [ \"$current\" != \"$final_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "current=$(stat -c %d:%i -- \"$partial\") || exit 65; " +
+            "if [ \"$current\" != \"$partial_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "rm -f -- \"$partial\" || { printf 'qfm-integration:partial-cleanup-failed\\n' >&2; exit 66; }; " +
+            "current=$(stat -c %d:%i -- \"$candidate\") || exit 65; " +
+            "if [ \"$current\" != \"$final_id\" ]; then " +
+            "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; " +
+            "committed=1; trap - EXIT HUP INT TERM; " +
+            "printf 'qfm-integration:push-complete:%s:%s\\n' \"$final_size\" \"$final_digest\"";
+
+        var arguments = new[] { "-s", serial, "exec-in", "sh", "-c", command };
+        var result = await streamingRunner.RunFromStreamAsync(
+            AdbPath,
+            arguments,
+            source,
+            expectedBytes,
+            TransferTimeout,
+            cancellationToken).ConfigureAwait(false);
+        ThrowFleetRemoteError(result.CommandResult, "Push remote integration file", expectedBytes);
+        result.CommandResult.EnsureSuccess($"Push {remotePath}");
+        var expectedReceipt =
+            $"qfm-integration:push-complete:{invariantBytes}:{expectedSha256}";
+        if (!string.Equals(
+                result.CommandResult.StandardOutput.Trim(),
+                expectedReceipt,
+                StringComparison.Ordinal) ||
+            !string.IsNullOrWhiteSpace(result.CommandResult.StandardError) ||
+            result.BytesWritten != expectedBytes ||
+            !string.Equals(result.Sha256, expectedSha256, StringComparison.Ordinal))
+        {
+            throw new FleetIntegrationException(
+                FleetIntegrationStatus.Failed,
+                "push_evidence_mismatch",
+                "The push stream, remote readback, and expected size/SHA-256 did not agree.",
+                retryable: false);
+        }
+        return result;
+    }
+
     public async Task<IReadOnlyList<string>> GetThirdPartyPackageNamesAsync(
         string serial,
         CancellationToken cancellationToken = default)
@@ -1388,6 +1545,18 @@ public sealed class AdbClient
             "qfm-integration:path-absent" => new FleetRemotePathException(
                 "remote_path_absent",
                 "The remote path is absent."),
+            "qfm-integration:parent-absent" => new FleetRemotePathException(
+                "remote_parent_absent",
+                "The remote push parent is absent."),
+            "qfm-integration:destination-exists" => new FleetRemotePathException(
+                "remote_destination_collision",
+                "The remote push destination already exists; overwrite is forbidden."),
+            "qfm-integration:partial-exists" => new FleetRemotePathException(
+                "remote_partial_collision",
+                "The operation-owned remote partial path already exists; replay or orphan reuse is forbidden."),
+            "qfm-integration:atomic-publish-unavailable" => new FleetRemotePathException(
+                "remote_atomic_publish_unavailable",
+                "The remote filesystem could not atomically publish the verified payload without replacing a destination."),
             "qfm-integration:path-not-directory" => new FleetRemotePathException(
                 "remote_path_not_directory",
                 "The remote list target is not a directory."),
@@ -1418,6 +1587,14 @@ public sealed class AdbClient
             "qfm-integration:path-open-proof-failed" => new FleetRemotePathException(
                 "remote_path_open_failed",
                 "The remote path could not be opened and rebound to the canonical proof."),
+            "qfm-integration:push-size-mismatch" or
+            "qfm-integration:push-digest-mismatch" or
+            "qfm-integration:push-readback-mismatch" => new FleetRemotePathException(
+                "remote_push_readback_mismatch",
+                "The remote push staging or final readback did not match the requested size and SHA-256."),
+            "qfm-integration:partial-cleanup-failed" => new FleetRemotePathException(
+                "remote_cleanup_required",
+                "The remote payload committed, but its operation-owned partial file could not be removed."),
             _ => new FleetRemotePathException(
                 "remote_proof_failed",
                 $"{operation} failed its remote containment proof.")

@@ -4,7 +4,10 @@
 
 Expose a disabled-by-default, versioned subprocess contract for one exact ADB
 device at a time. Rusty Fleet may discover the contract, observe one serial,
-and request a read-only shared-storage listing or one staged file pull.
+and request a read-only shared-storage listing or one staged file pull. The
+Core additionally implements bounded no-overwrite push, but advertises it only
+when its host injects a current Quest-identity and Manifold mutation-authority
+verifier. The ordinary environment-created CLI adapter remains read-only.
 QuestIonAble File Manager remains the owner of ADB discovery, the `/sdcard`
 root mapping, local staging, path validation, transfer evidence, and the final
 JSON result.
@@ -33,6 +36,12 @@ discovery never creates the root, starts ADB, or opens the WPF application.
 Removing the enable setting returns the adapter to `disabled` without changing
 standalone File Manager behavior.
 
+These settings enable only list, pull, and read-only durable status in the
+shipped CLI. They cannot enable push or cancellation. A host that embeds the
+Core must inject `IFleetMutationAuthorityVerifier`; the verifier, not request
+fields or environment variables, decides whether the exact Quest proof,
+command, lease, provider epoch, and revocation barrier are current.
+
 The capability state is explicit:
 
 | State | Meaning |
@@ -56,6 +65,7 @@ document on standard output:
 questionable-file-manager.exe integration capabilities --json
 questionable-file-manager.exe integration observe --serial <quest-serial> --json
 questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
+questionable-file-manager.exe integration status --operation <operation-id> --json
 ```
 
 Pass `--contract-version 1.0` when the caller wants an explicit negotiation
@@ -84,8 +94,10 @@ The v1 schema family is:
 - `questionable.file_manager.integration.capability_snapshot.v1`;
 - `questionable.file_manager.integration.device_observation.v1`;
 - `questionable.file_manager.integration.device_binding.v1`;
+- `questionable.file_manager.integration.mutation_authority.v1`;
 - `questionable.file_manager.integration.operation_request.v1`;
-- `questionable.file_manager.integration.operation_result.v1`.
+- `questionable.file_manager.integration.operation_result.v1`;
+- `questionable.file_manager.integration.operation_status.v1`.
 
 The contract version is exactly `1.0`. Request JSON rejects comments, trailing
 commas, duplicate fields, unknown fields, excessive nesting, documents over
@@ -146,6 +158,41 @@ A pull replaces the operation object with:
 }
 ```
 
+An injected-authority host may use push with a source already staged below the
+approved root:
+
+```json
+{
+  "operation": {
+    "kind": "push",
+    "rootProfile": "adb-shared",
+    "relativePath": "Download/example.bin",
+    "maximumBytes": 104857600,
+    "localArtifactPath": "artifacts/<artifact-id>/payload.bin",
+    "expectedSizeBytes": 12345,
+    "expectedSha256": "<lowercase-sha256>"
+  },
+  "mutationAuthority": {
+    "schema": "questionable.file_manager.integration.mutation_authority.v1",
+    "fleetDeviceId": "<fleet-device-id>",
+    "fleetIdentityRevision": 1,
+    "questIdentityProofId": "<quest-proof-id>",
+    "manifoldCommandId": "<command-id>",
+    "manifoldLeaseId": "<lease-id>",
+    "manifoldProviderEpoch": "<provider-epoch>",
+    "revocationBarrierRevision": 1,
+    "expiresAtUtc": "<time-no-later-than-request-expiry>"
+  }
+}
+```
+
+Caller-supplied authority fields are evidence inputs, not acceptance. The
+injected verifier must accept them before staging, immediately before the
+stream, and after exact-serial readback. All three decisions must return the
+same verified authority digest. A revocation token and an absolute deadline
+250 ms before the earlier request/authority expiry stop the process tree; a
+late copy is never automatically retried.
+
 ## Path And Transfer Safety
 
 `adb-shared` is the only v1 route profile and maps to `/sdcard`. The caller
@@ -195,18 +242,47 @@ by path. Ctrl+C cancels the linked operation token, kills the subprocess, and
 runs the same owned-handle cleanup. Timeouts return a retryable
 `operation_timeout` error and also clean the operation-owned payload staging.
 
+Push sources are limited to
+`artifacts/<id>/payload.bin` or a completed
+`operations/<id>/payload.bin`. File Manager opens and retains every Windows
+ancestor plus the source handle without write/delete sharing, rejects reparse
+points, delete-pending state, hardlinks, size drift, and digest drift, then
+hashes the bytes again from that same handle while writing ADB standard input.
+
+The remote command canonicalizes the exact `/sdcard` parent, creates a unique
+operation partial with shell no-clobber semantics, validates its descriptor
+through `/proc/self/fd`, and verifies size/SHA-256 while the final name remains
+absent. It atomically hard-links that verified inode to the final name without
+replace, repeats descriptor-bound size/SHA/inode readback, and removes only the
+operation-owned partial name. Destination collisions are rejected without
+overwrite. A filesystem that cannot provide the atomic hard-link primitive
+fails closed. It never overwrites, deletes an existing target, or falls back
+to `adb push`.
+
+Push reserves `<operation-id>.lock` with the full request and authority digest
+before creating its append-only journal. Journal entries use contiguous
+sequences and must preserve the reservation's request digest, target, source,
+serial, authority, and expected content exactly. An OS-enforced share-zero
+`owner.live` handle proves that a process is still active without relying on a
+PID. When the handle is no longer locked and no terminal journal exists,
+read-only status reports `recoveryRequired`; it separately reports
+`destinationMayExist` and `partialMayExist`. Recovery never retries a mutation
+or cleans a remote path automatically. Cancellation is available only through
+the injected-authority Core API, which revalidates the reservation's exact
+authority digest before writing the durable cancel marker.
+
 ## Non-scope And Remaining Authority
 
-V1 has no push, delete, move, rename, overwrite, multi-target route, ADB daemon
-lifecycle, Fleet scheduling, WPF automation, durable polling, background
-service, installer, or Kiosk-staging substitution. Fleet must call one process
-per exact target and remains the only owner of 10–100-device batching.
+The ordinary environment/CLI adapter has no push or cancellation authority.
+The injected Core route has no delete, move, rename, overwrite, multi-target
+route, ADB daemon lifecycle, Fleet scheduling, WPF automation, background
+service, installer, or Kiosk-staging substitution. Fleet remains the only
+owner of 10–100-device batching.
 
 The v1 observation proves File Manager transport continuity; it does not prove
-that an ADB serial is a Rusty Fleet device identity. Unattended Fleet mutations
-remain disabled. A future Quest-owned identity proof and a current Manifold
-command/lease/revocation binding are required before adding push or other
-state-changing operations.
+that an ADB serial is a Rusty Fleet device identity. Push therefore remains
+unadvertised unless a separate owner supplies the current Quest-owned identity
+proof and Manifold command/lease/revocation verifier.
 
 ## Validation
 
@@ -216,7 +292,12 @@ unsupported mutation rejection, traversal and reserved-name damage, bounded
 listing, canonical remote escape rejection, hard-capped streaming, coherent
 staged pull hashing, collision rejection, hardlink/final-file/parent-junction
 race defense, cancellation/timeout cleanup, stale binding rejection, and loss
-of the exact serial after transfer. Repository
+of the exact serial after transfer. Push tests cover disabled advertisement,
+staged-input containment, same-stream hashing, no-overwrite construction,
+exact serial before/after, authority digest continuity, revocation and expiry
+during streaming, cancellation authorization, live/dead owner status,
+reservation/journal substitution, truthful uncertain cleanup, and one-use
+replay. Repository
 build, test, CLI help, public-boundary, branding, and asset checks remain the
 normal source gates. Live headset validation is separate and is not implied by
 these host tests.

@@ -590,6 +590,487 @@ public sealed class FleetIntegrationTests
         }
     }
 
+    [Fact]
+    public void Capabilities_PushIsUnadvertisedWithoutInjectedAuthority()
+    {
+        using var root = new TemporaryDirectory();
+        var adapter = CreateReadyAdapter(
+            root.Path,
+            new ScriptedRunner((_, _, _) => Failure("ADB must not run")));
+
+        var capability = adapter.GetCapabilities();
+
+        Assert.Equal(["list", "pull"], capability.Operations);
+        Assert.True(capability.RootProfiles.Single().ReadOnly);
+    }
+
+    [Fact]
+    public async Task InvokePush_LocksStagedInputAndReturnsSameStreamRemoteEvidence()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 7, 3, 1, 9, 5 };
+        StagePushInput(root.Path, "input01", payload);
+        var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var runner = new ScriptedRunner(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device product:eureka model:Quest_3\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: async (
+                fileName,
+                arguments,
+                _,
+                source,
+                maximumBytes,
+                cancellationToken) =>
+            {
+                Assert.Equal("exec-in", arguments[2]);
+                Assert.Contains("set -C", arguments[5], StringComparison.Ordinal);
+                Assert.Contains("qfm-integration:destination-exists", arguments[5], StringComparison.Ordinal);
+                Assert.Contains(".qfm-operation01.partial", arguments[5], StringComparison.Ordinal);
+                AssertAtomicPushPublicationContract(arguments[5]);
+                using var buffer = new MemoryStream();
+                await source.CopyToAsync(buffer, cancellationToken);
+                var bytes = buffer.ToArray();
+                Assert.Equal(payload, bytes);
+                Assert.Equal(payload.LongLength, maximumBytes);
+                var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+                return new StreamingCommandResult(
+                    new CommandResult(
+                        fileName,
+                        arguments.ToArray(),
+                        0,
+                        $"qfm-integration:push-complete:{bytes.LongLength}:{digest}\n",
+                        string.Empty,
+                        TimeSpan.Zero),
+                    bytes.LongLength,
+                    digest);
+            });
+        var adapter = CreateReadyAdapter(root.Path, runner, verifier);
+        var capability = adapter.GetCapabilities();
+        Assert.Equal(["list", "pull", "push"], capability.Operations);
+        Assert.False(capability.RootProfiles.Single().ReadOnly);
+        var request = CreatePushRequest(adapter, payload);
+
+        var result = await adapter.InvokeAsync(request);
+
+        Assert.Equal("push", result.Operation);
+        Assert.Equal(payload.LongLength, result.SizeBytes);
+        Assert.Equal(Sha256(payload), result.Sha256);
+        Assert.Equal(3, verifier.Calls);
+        Assert.Equal(3, runner.Calls.Count);
+        Assert.Equal(["devices", "-l"], runner.Calls[0].Arguments);
+        Assert.Equal(["devices", "-l"], runner.Calls[2].Arguments);
+        var status = adapter.GetOperationStatus(request.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Completed, status.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Completed, status.CleanupState);
+        Assert.True(status.DestinationMayExist);
+        Assert.False(status.PartialMayExist);
+
+        var replay = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => adapter.InvokeAsync(request));
+        Assert.Equal("destination_collision", replay.Code);
+    }
+
+    [Fact]
+    public async Task InvokePush_RejectsChangedAuthorityBeforeStreamAndAfterRemoteCommit()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 1, 2, 3 };
+        StagePushInput(root.Path, "input01", payload);
+        var streamCalls = 0;
+        var runner = CreatePushRunner(payload, () => streamCalls++);
+        var beforeStreamVerifier = new ScriptedAuthorityVerifier(call =>
+            AcceptedAuthority(call == 0 ? 'd' : 'e'));
+        var beforeStreamAdapter = CreateReadyAdapter(root.Path, runner, beforeStreamVerifier);
+        var beforeStreamRequest = CreatePushRequest(beforeStreamAdapter, payload);
+
+        var beforeStream = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => beforeStreamAdapter.InvokeAsync(beforeStreamRequest));
+
+        Assert.Equal("mutation_authority_changed", beforeStream.Code);
+        Assert.Equal(0, streamCalls);
+        var beforeStatus = beforeStreamAdapter.GetOperationStatus(beforeStreamRequest.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Failed, beforeStatus.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.NotRequired, beforeStatus.CleanupState);
+        Assert.False(beforeStatus.DestinationMayExist);
+
+        using var secondRoot = new TemporaryDirectory();
+        StagePushInput(secondRoot.Path, "input01", payload);
+        var afterStreamVerifier = new ScriptedAuthorityVerifier(call =>
+            AcceptedAuthority(call < 2 ? 'd' : 'e'));
+        var afterStreamAdapter = CreateReadyAdapter(
+            secondRoot.Path,
+            CreatePushRunner(payload),
+            afterStreamVerifier);
+        var afterStreamRequest = CreatePushRequest(afterStreamAdapter, payload);
+
+        var afterStream = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => afterStreamAdapter.InvokeAsync(afterStreamRequest));
+
+        Assert.Equal("mutation_authority_changed", afterStream.Code);
+        var afterStatus = afterStreamAdapter.GetOperationStatus(afterStreamRequest.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Failed, afterStatus.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.NotRequired, afterStatus.CleanupState);
+        Assert.True(afterStatus.DestinationMayExist);
+        Assert.False(afterStatus.PartialMayExist);
+    }
+
+    [Fact]
+    public async Task InvokePush_DurableCancellationUsesSameAuthorityAndReportsUncertainCleanup()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 4, 4, 2, 1 };
+        StagePushInput(root.Path, "input01", payload);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var runner = new ScriptedRunner(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: async (_, _, _, _, _, cancellationToken) =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            });
+        var adapter = CreateReadyAdapter(root.Path, runner, verifier);
+        var request = CreatePushRequest(adapter, payload);
+        var invoke = adapter.InvokeAsync(request);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var live = adapter.GetOperationStatus(request.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Running, live.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Pending, live.CleanupState);
+        var untrusted = CreateReadyAdapter(
+            root.Path,
+            new ScriptedRunner((_, _, _) => Failure("ADB must not run")));
+        var untrustedCancel = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => untrusted.RequestOperationCancellationAsync(request.OperationId));
+        Assert.Equal("mutation_authority_unavailable", untrustedCancel.Code);
+        Assert.False(File.Exists(Path.Combine(
+            root.Path,
+            "operations",
+            request.OperationId,
+            "cancel.request")));
+
+        var cancel = await adapter.RequestOperationCancellationAsync(request.OperationId);
+        var exception = await Assert.ThrowsAsync<FleetIntegrationException>(() => invoke);
+
+        Assert.Equal(FleetIntegrationOperationPhase.CancelRequested, cancel.Phase);
+        Assert.Equal("operation_cancelled", exception.Code);
+        var status = adapter.GetOperationStatus(request.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Cancelled, status.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Unknown, status.CleanupState);
+        Assert.True(status.DestinationMayExist);
+        Assert.True(status.PartialMayExist);
+    }
+
+    [Fact]
+    public async Task InvokePush_NoOverwriteRaceAndJournalSubstitutionFailClosed()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 8, 8 };
+        StagePushInput(root.Path, "input01", payload);
+        var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var runner = new ScriptedRunner(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: (fileName, arguments, _, _, _, _) =>
+            {
+                AssertAtomicPushPublicationContract(arguments[5]);
+                Assert.Contains(
+                    "elif [ -e \"$candidate\" ] || [ -L \"$candidate\" ]; then",
+                    arguments[5],
+                    StringComparison.Ordinal);
+                var publication = arguments[5].IndexOf(
+                    "ln -T -- \"$partial\" \"$candidate\"",
+                    StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    ">\"$candidate\"",
+                    arguments[5][..publication],
+                    StringComparison.Ordinal);
+                return Task.FromResult(new StreamingCommandResult(
+                    new CommandResult(
+                        fileName,
+                        arguments.ToArray(),
+                        61,
+                        string.Empty,
+                        "qfm-integration:destination-exists\n",
+                        TimeSpan.Zero),
+                    0,
+                    Sha256(Array.Empty<byte>())));
+            });
+        var adapter = CreateReadyAdapter(root.Path, runner, verifier);
+        var request = CreatePushRequest(adapter, payload);
+
+        var collision = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => adapter.InvokeAsync(request));
+
+        Assert.Equal("remote_destination_collision", collision.Code);
+        var status = adapter.GetOperationStatus(request.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.CleanupRequired, status.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Unknown, status.CleanupState);
+        Assert.True(status.DestinationMayExist);
+        Assert.True(status.PartialMayExist);
+
+        var lastJournal = Directory.EnumerateFiles(
+                Path.Combine(root.Path, "operations", request.OperationId),
+                "state-*.json")
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Last();
+        var originalJournal = File.ReadAllText(lastJournal);
+        var damaged = originalJournal.Replace(
+            "\"operationId\":\"operation01\"",
+            "\"operationId\":\"foreign01\"",
+            StringComparison.Ordinal);
+        File.WriteAllText(lastJournal, damaged);
+        var journal = Assert.Throws<FleetIntegrationException>(
+            () => adapter.GetOperationStatus(request.OperationId));
+        Assert.Equal("operation_journal_invalid", journal.Code);
+        File.WriteAllText(lastJournal, originalJournal);
+        var reservationPath = Path.Combine(
+            root.Path,
+            "operations",
+            request.OperationId + ".lock");
+        var damagedReservation = File.ReadAllText(reservationPath).Replace(
+            "\"requestId\":\"request01\"",
+            "\"requestId\":\"foreign01\"",
+            StringComparison.Ordinal);
+        File.WriteAllText(reservationPath, damagedReservation);
+        var reservation = Assert.Throws<FleetIntegrationException>(
+            () => adapter.GetOperationStatus(request.OperationId));
+        Assert.Equal("operation_reservation_invalid", reservation.Code);
+    }
+
+    [Fact]
+    public async Task InvokePush_RejectsChangedSourceBeforeRemoteStream()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 2, 4, 6 };
+        StagePushInput(root.Path, "input01", payload);
+        var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var runner = CreatePushRunner(payload);
+        var adapter = CreateReadyAdapter(root.Path, runner, verifier);
+        var request = CreatePushRequest(adapter, payload) with
+        {
+            Operation = CreatePushRequest(adapter, payload).Operation with
+            {
+                ExpectedSha256 = new string('a', 64)
+            }
+        };
+
+        var mismatch = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => adapter.InvokeAsync(request));
+
+        Assert.Equal("push_source_digest_mismatch", mismatch.Code);
+        Assert.Single(runner.Calls);
+        Assert.Equal(["devices", "-l"], runner.Calls[0].Arguments);
+        Assert.False(Directory.Exists(Path.Combine(root.Path, "operations")));
+    }
+
+    [Fact]
+    public async Task InvokePush_LossOfExactSerialAfterRemoteEvidenceDoesNotRetry()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 6, 5, 4 };
+        StagePushInput(root.Path, "input01", payload);
+        var runner = new ScriptedRunner(
+            (_, arguments, callIndex) =>
+            {
+                if (arguments.SequenceEqual(["devices", "-l"]))
+                {
+                    return callIndex == 0
+                        ? Success("List of devices attached\nQUEST123 device\n")
+                        : Success("List of devices attached\n");
+                }
+                return Failure("unexpected");
+            },
+            inputStreamingHandler: CreatePushInputHandler(payload));
+        var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var adapter = CreateReadyAdapter(root.Path, runner, verifier);
+        var request = CreatePushRequest(adapter, payload);
+
+        var missing = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => adapter.InvokeAsync(request));
+
+        Assert.Equal("device_absent", missing.Code);
+        Assert.Equal(3, runner.Calls.Count);
+        var status = adapter.GetOperationStatus(request.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Failed, status.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.NotRequired, status.CleanupState);
+        Assert.True(status.DestinationMayExist);
+        Assert.False(status.PartialMayExist);
+    }
+
+    [Fact]
+    public async Task InvokePush_RevocationAndExpiryDuringStreamCancelWithoutAutomaticRetry()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 9, 1, 1 };
+        StagePushInput(root.Path, "input01", payload);
+        using var revoked = new CancellationTokenSource();
+        var revocationVerifier = new ScriptedAuthorityVerifier(call =>
+            AcceptedAuthority() with
+            {
+                RevocationToken = call == 1 ? revoked.Token : default
+            });
+        var revocationRunner = new ScriptedRunner(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: async (_, _, _, _, _, cancellationToken) =>
+            {
+                revoked.Cancel();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            });
+        var revocationAdapter = CreateReadyAdapter(
+            root.Path,
+            revocationRunner,
+            revocationVerifier);
+        var revocationRequest = CreatePushRequest(revocationAdapter, payload);
+
+        var revokedResult = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => revocationAdapter.InvokeAsync(revocationRequest));
+
+        Assert.Equal("operation_cancelled", revokedResult.Code);
+        var revokedStatus = revocationAdapter.GetOperationStatus(revocationRequest.OperationId);
+        Assert.Equal(FleetIntegrationCleanupState.Unknown, revokedStatus.CleanupState);
+        Assert.True(revokedStatus.DestinationMayExist);
+        Assert.True(revokedStatus.PartialMayExist);
+
+        using var expiryRoot = new TemporaryDirectory();
+        StagePushInput(expiryRoot.Path, "input01", payload);
+        var expiryVerifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
+        var expiryRunner = new ScriptedRunner(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: async (_, _, _, _, _, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            });
+        var expiryAdapter = CreateReadyAdapter(expiryRoot.Path, expiryRunner, expiryVerifier);
+        var expiryRequest = CreatePushRequest(expiryAdapter, payload);
+        expiryRequest = expiryRequest with
+        {
+            ExpiresAtUtc = Now + TimeSpan.FromMilliseconds(600),
+            MutationAuthority = expiryRequest.MutationAuthority! with
+            {
+                ExpiresAtUtc = Now + TimeSpan.FromMilliseconds(600)
+            }
+        };
+
+        var expired = await Assert.ThrowsAsync<FleetIntegrationException>(
+            () => expiryAdapter.InvokeAsync(expiryRequest));
+
+        Assert.Equal("mutation_authority_expired_during_operation", expired.Code);
+        var expiredStatus = expiryAdapter.GetOperationStatus(expiryRequest.OperationId);
+        Assert.Equal(FleetIntegrationOperationPhase.Cancelled, expiredStatus.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Unknown, expiredStatus.CleanupState);
+        Assert.True(expiredStatus.DestinationMayExist);
+        Assert.True(expiredStatus.PartialMayExist);
+    }
+
+    [Fact]
+    public async Task OperationStatus_DeadExclusiveOwnerBecomesRecoveryWithoutRemoteAction()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 3, 3, 7 };
+        StagePushInput(root.Path, "input01", payload);
+        var runner = CreatePushRunner(payload);
+        var adapter = CreateReadyAdapter(
+            root.Path,
+            runner,
+            new ScriptedAuthorityVerifier(_ => AcceptedAuthority()));
+        var request = CreatePushRequest(adapter, payload);
+        await adapter.InvokeAsync(request);
+        var operationRoot = Path.Combine(root.Path, "operations", request.OperationId);
+        var terminal = Directory.EnumerateFiles(operationRoot, "state-*.json")
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Last();
+        File.Delete(terminal);
+        var priorCalls = runner.Calls.Count;
+
+        var recovered = adapter.GetOperationStatus(request.OperationId);
+
+        Assert.Equal(FleetIntegrationOperationPhase.RecoveryRequired, recovered.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Unknown, recovered.CleanupState);
+        Assert.True(recovered.DestinationMayExist);
+        Assert.True(recovered.PartialMayExist);
+        Assert.Equal(priorCalls, runner.Calls.Count);
+        Assert.False(File.Exists(Path.Combine(operationRoot, "cancel.request")));
+    }
+
+    [Fact]
+    public async Task OperationStatus_MissingFirstJournalUsesReservationAndOwnerTruth()
+    {
+        using var liveRoot = new TemporaryDirectory();
+        var payload = new byte[] { 2, 4, 6 };
+        StagePushInput(liveRoot.Path, "input01", payload);
+        var runner = CreatePushRunner(payload);
+        var verifier = new BlockingSecondAuthorityVerifier();
+        var adapter = CreateReadyAdapter(
+            liveRoot.Path,
+            runner,
+            verifier);
+        var request = CreatePushRequest(adapter, payload);
+        using var cancellation = new CancellationTokenSource();
+        var invoke = adapter.InvokeAsync(request, cancellation.Token);
+        await verifier.SecondCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var operationRoot = Path.Combine(liveRoot.Path, "operations", request.OperationId);
+        foreach (var journal in Directory.EnumerateFiles(operationRoot, "state-*.json"))
+        {
+            File.Delete(journal);
+        }
+        var priorCalls = runner.Calls.Count;
+
+        var live = adapter.GetOperationStatus(request.OperationId);
+
+        Assert.Equal(FleetIntegrationOperationPhase.Accepted, live.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.NotRequired, live.CleanupState);
+        Assert.False(live.DestinationMayExist);
+        Assert.False(live.PartialMayExist);
+        Assert.Equal(priorCalls, runner.Calls.Count);
+
+        cancellation.Cancel();
+        var cancelled = await Assert.ThrowsAsync<FleetIntegrationException>(() => invoke);
+        Assert.Equal("operation_cancelled", cancelled.Code);
+
+        using var deadRoot = new TemporaryDirectory();
+        StagePushInput(deadRoot.Path, "input01", payload);
+        var deadRunner = CreatePushRunner(payload);
+        var deadAdapter = CreateReadyAdapter(
+            deadRoot.Path,
+            deadRunner,
+            new ScriptedAuthorityVerifier(_ => AcceptedAuthority()));
+        var deadRequest = CreatePushRequest(deadAdapter, payload);
+        await deadAdapter.InvokeAsync(deadRequest);
+        var deadOperationRoot = Path.Combine(
+            deadRoot.Path,
+            "operations",
+            deadRequest.OperationId);
+        foreach (var journal in Directory.EnumerateFiles(deadOperationRoot, "state-*.json"))
+        {
+            File.Delete(journal);
+        }
+        var deadPriorCalls = deadRunner.Calls.Count;
+
+        var recovered = deadAdapter.GetOperationStatus(deadRequest.OperationId);
+
+        Assert.Equal(FleetIntegrationOperationPhase.RecoveryRequired, recovered.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.NotRequired, recovered.CleanupState);
+        Assert.False(recovered.DestinationMayExist);
+        Assert.False(recovered.PartialMayExist);
+        Assert.Equal(deadPriorCalls, deadRunner.Calls.Count);
+    }
+
     [Theory]
     [InlineData("../escape.txt", "path_traversal")]
     [InlineData("folder/../../escape.txt", "path_traversal")]
@@ -608,7 +1089,7 @@ public sealed class FleetIntegrationTests
     }
 
     [Fact]
-    public void RequestParser_AcceptsStrictV1AndRejectsUnknownDuplicateAndMutationFields()
+    public void RequestParser_AcceptsStrictV1AndRejectsUnknownDuplicateAndIncompletePush()
     {
         var valid = CreateRequestJson("""
             "kind": "list",
@@ -647,9 +1128,16 @@ public sealed class FleetIntegrationTests
             "maximumBytes": 10
             """);
         Assert.Equal(
-            "operation_unsupported",
+            "push_source_invalid",
             Assert.Throws<FleetIntegrationException>(
                 () => FleetIntegrationOperationRequest.Parse(Encoding.UTF8.GetBytes(push))).Code);
+
+        var completePush = FleetIntegrationOperationRequest.Parse(
+            Encoding.UTF8.GetBytes(CreatePushRequestJson()));
+        Assert.Equal("push", completePush.Operation.Kind);
+        Assert.Equal("artifacts/input01/payload.bin", completePush.Operation.LocalArtifactPath);
+        Assert.Equal(10, completePush.Operation.ExpectedSizeBytes);
+        Assert.NotNull(completePush.MutationAuthority);
     }
 
     [Fact]
@@ -740,7 +1228,8 @@ public sealed class FleetIntegrationTests
 
     private static FleetIntegrationAdapter CreateReadyAdapter(
         string root,
-        ICommandRunner runner)
+        ICommandRunner runner,
+        IFleetMutationAuthorityVerifier? mutationAuthorityVerifier = null)
     {
         var adbPath = System.IO.Path.Combine(root, "adb-test.exe");
         File.WriteAllBytes(adbPath, []);
@@ -751,7 +1240,8 @@ public sealed class FleetIntegrationTests
                 adbPath,
                 null),
             new AdbClient("adb-test", runner),
-            () => Now);
+            () => Now,
+            mutationAuthorityVerifier);
     }
 
     private static FleetIntegrationOperationRequest CreateRequest(
@@ -799,6 +1289,139 @@ public sealed class FleetIntegrationTests
             }
             return Failure("unexpected");
         }, StreamBytes(bytes));
+
+    private static ScriptedRunner CreatePushRunner(
+        byte[] expectedBytes,
+        Action? onStream = null) =>
+        new(
+            (_, arguments, _) =>
+                arguments.SequenceEqual(["devices", "-l"])
+                    ? Success("List of devices attached\nQUEST123 device product:eureka model:Quest_3\n")
+                    : Failure("unexpected"),
+            inputStreamingHandler: CreatePushInputHandler(expectedBytes, onStream));
+
+    private static void AssertAtomicPushPublicationContract(string command)
+    {
+        var partialSizeRead = command.IndexOf(
+            "size=$(stat -c %s -- \"$partial\")",
+            StringComparison.Ordinal);
+        var partialDigestRead = command.IndexOf(
+            "digest=$(sha256sum \"$partial\")",
+            StringComparison.Ordinal);
+        var sizeVerification = command.IndexOf(
+            "if [ \"$size\" !=",
+            StringComparison.Ordinal);
+        var digestVerification = command.IndexOf(
+            "if [ \"$digest\" !=",
+            StringComparison.Ordinal);
+        var publication = command.IndexOf(
+            "ln -T -- \"$partial\" \"$candidate\"",
+            StringComparison.Ordinal);
+        var finalOpen = command.IndexOf(
+            "exec 4<\"$candidate\"",
+            StringComparison.Ordinal);
+
+        Assert.True(partialSizeRead >= 0);
+        Assert.True(partialDigestRead > partialSizeRead);
+        Assert.True(sizeVerification > partialDigestRead);
+        Assert.True(digestVerification > sizeVerification);
+        Assert.True(publication > digestVerification);
+        Assert.True(finalOpen > publication);
+        Assert.DoesNotContain("exec 4>\"$candidate\"", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("cat <&5 >&4", command, StringComparison.Ordinal);
+        Assert.Contains(
+            "if [ \"$final_id\" != \"$partial_id\" ]",
+            command,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "final_digest=$(sha256sum <&4)",
+            command,
+            StringComparison.Ordinal);
+    }
+
+    private static Func<
+        string,
+        IReadOnlyList<string>,
+        int,
+        Stream,
+        long,
+        CancellationToken,
+        Task<StreamingCommandResult>> CreatePushInputHandler(
+            byte[] expectedBytes,
+            Action? onStream = null) =>
+        async (
+            fileName,
+            arguments,
+            _,
+            source,
+            maximumBytes,
+            cancellationToken) =>
+        {
+            onStream?.Invoke();
+            using var buffer = new MemoryStream();
+            await source.CopyToAsync(buffer, cancellationToken);
+            var bytes = buffer.ToArray();
+            Assert.Equal(expectedBytes, bytes);
+            Assert.Equal(expectedBytes.LongLength, maximumBytes);
+            var digest = Sha256(bytes);
+            return new StreamingCommandResult(
+                new CommandResult(
+                    fileName,
+                    arguments.ToArray(),
+                    0,
+                    $"qfm-integration:push-complete:{bytes.LongLength}:{digest}\n",
+                    string.Empty,
+                    TimeSpan.Zero),
+                bytes.LongLength,
+                digest);
+        };
+
+    private static FleetIntegrationOperationRequest CreatePushRequest(
+        FleetIntegrationAdapter adapter,
+        byte[] payload)
+    {
+        var request = CreateRequest(
+            adapter,
+            kind: "push",
+            relativePath: "Download/file.bin",
+            maximumBytes: payload.LongLength);
+        return request with
+        {
+            Operation = request.Operation with
+            {
+                LocalArtifactPath = "artifacts/input01/payload.bin",
+                ExpectedSizeBytes = payload.LongLength,
+                ExpectedSha256 = Sha256(payload)
+            },
+            MutationAuthority = new FleetIntegrationMutationAuthority(
+                FleetIntegrationContract.MutationAuthoritySchema,
+                "fleet-device-1",
+                7,
+                "quest-proof-1",
+                "command-1",
+                "lease-1",
+                "provider-1",
+                9,
+                Now + TimeSpan.FromSeconds(30))
+        };
+    }
+
+    private static FleetMutationAuthorityDecision AcceptedAuthority(char digest = 'd') =>
+        new(
+            Accepted: true,
+            Code: null,
+            Reason: null,
+            VerifiedAuthorityDigest: new string(digest, 64));
+
+    private static void StagePushInput(string root, string artifactId, byte[] bytes)
+    {
+        var directory = Path.Combine(root, "artifacts", artifactId);
+        Directory.CreateDirectory(directory);
+        File.WriteAllBytes(Path.Combine(directory, "payload.bin"), bytes);
+    }
+
+    private static string Sha256(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
     private static Func<
         string,
@@ -873,6 +1496,44 @@ public sealed class FleetIntegrationTests
         }
         """;
 
+    private static string CreatePushRequestJson() => $$"""
+        {
+          "schema": "{{FleetIntegrationContract.RequestSchema}}",
+          "contractVersion": "{{FleetIntegrationContract.Version}}",
+          "requestId": "request01",
+          "operationId": "operation01",
+          "adapterEpoch": "{{new string('b', 64)}}",
+          "expiresAtUtc": "{{(Now + TimeSpan.FromMinutes(1)).ToString("O")}}",
+          "deviceBinding": {
+            "schema": "{{FleetIntegrationContract.BindingSchema}}",
+            "observationId": "{{new string('a', 64)}}",
+            "serial": "QUEST123",
+            "transport": "usb",
+            "observedAtUtc": "{{(Now - TimeSpan.FromSeconds(5)).ToString("O")}}"
+          },
+          "operation": {
+            "kind": "push",
+            "rootProfile": "adb-shared",
+            "relativePath": "Download/file.txt",
+            "maximumBytes": 10,
+            "localArtifactPath": "artifacts/input01/payload.bin",
+            "expectedSizeBytes": 10,
+            "expectedSha256": "{{new string('c', 64)}}"
+          },
+          "mutationAuthority": {
+            "schema": "{{FleetIntegrationContract.MutationAuthoritySchema}}",
+            "fleetDeviceId": "fleet-device-1",
+            "fleetIdentityRevision": 7,
+            "questIdentityProofId": "quest-proof-1",
+            "manifoldCommandId": "command-1",
+            "manifoldLeaseId": "lease-1",
+            "manifoldProviderEpoch": "provider-1",
+            "revocationBarrierRevision": 9,
+            "expiresAtUtc": "{{(Now + TimeSpan.FromSeconds(30)).ToString("O")}}"
+          }
+        }
+        """;
+
     private static CommandResult Success(string output) =>
         new("adb-test", Array.Empty<string>(), 0, output, string.Empty, TimeSpan.Zero);
 
@@ -903,7 +1564,15 @@ public sealed class FleetIntegrationTests
             Stream,
             long,
             CancellationToken,
-            Task<StreamingCommandResult>>? streamingHandler = null) : IStreamingCommandRunner
+            Task<StreamingCommandResult>>? streamingHandler = null,
+        Func<
+            string,
+            IReadOnlyList<string>,
+            int,
+            Stream,
+            long,
+            CancellationToken,
+            Task<StreamingCommandResult>>? inputStreamingHandler = null) : IStreamingCommandRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
 
@@ -940,6 +1609,65 @@ public sealed class FleetIntegrationTests
                     destination,
                     maximumBytes,
                     cancellationToken);
+        }
+
+        public Task<StreamingCommandResult> RunFromStreamAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            Stream source,
+            long maximumBytes,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var callIndex = Calls.Count;
+            Calls.Add((fileName, arguments.ToArray()));
+            return inputStreamingHandler is null
+                ? throw new InvalidOperationException("Unexpected input streaming command.")
+                : inputStreamingHandler(
+                    fileName,
+                    arguments,
+                    callIndex,
+                    source,
+                    maximumBytes,
+                    cancellationToken);
+        }
+    }
+
+    private sealed class ScriptedAuthorityVerifier(
+        Func<int, FleetMutationAuthorityDecision> handler) : IFleetMutationAuthorityVerifier
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask<FleetMutationAuthorityDecision> VerifyCurrentAsync(
+            FleetIntegrationOperationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.NotNull(request.MutationAuthority);
+            return ValueTask.FromResult(handler(Calls++));
+        }
+    }
+
+    private sealed class BlockingSecondAuthorityVerifier : IFleetMutationAuthorityVerifier
+    {
+        private int _calls;
+
+        public TaskCompletionSource SecondCallStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<FleetMutationAuthorityDecision> VerifyCurrentAsync(
+            FleetIntegrationOperationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.NotNull(request.MutationAuthority);
+            var call = Interlocked.Increment(ref _calls);
+            if (call == 2)
+            {
+                SecondCallStarted.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            return AcceptedAuthority();
         }
     }
 
