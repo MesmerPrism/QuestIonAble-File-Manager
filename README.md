@@ -63,6 +63,9 @@ action can be automated and tested.
 - optionally expose a dedicated hash-pinned Fleet connectivity provider that
   resolves File Manager-owned private profiles, invokes only Kiosk's fixed
   Wi-Fi ADB setup actions, or performs separate exact-USB classic TCP/IP setup;
+- let each of those three dedicated provider artifacts return a short-lived,
+  target-free, explicitly non-authorizing description of its existing typed
+  registry without reading stdin or initializing a backend;
 - optionally verify one configured signed Rusty Fleet Windows release and open
   Fleet's own guided installer, without giving File Manager Fleet device,
   connectivity, hotspot, credential, policy, or hidden-elevation authority;
@@ -102,6 +105,7 @@ ADB is located in this order:
 dotnet build QuestIonAbleFileManager.slnx
 dotnet test QuestIonAbleFileManager.slnx
 dotnet run --project src/QuestIonAbleFileManager.App
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./tools/Test-ProviderCapabilityDiscovery.ps1 -ContractRoot <meta-quest-agent-workflow-root>
 ```
 
 ## Install
@@ -161,6 +165,9 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- fleet install --confirm-
 dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
 dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- integration quest-awake --json < <strict-request.json>
 dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- integration quest-connectivity --json < <strict-request.json>
+dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- --describe-json
+dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- --describe-json
+dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- --describe-json
 ```
 
 The optional `questionable-file-manager-api` executable is inert unless
@@ -221,8 +228,9 @@ Fleet uses only the release's dedicated
 lowercase SHA-256 and stages only that file into its private launch directory.
 The executable is published directly from the narrow
 `QuestIonAbleFileManager.FleetKioskV2Provider` project; it is never a renamed
-copy of the general operator CLI. Its only admitted argument vector is the
-exact case-sensitive `integration kiosk-v2-catalog --json`. A framework-
+copy of the general operator CLI. Its execution vector is the exact
+case-sensitive `integration kiosk-v2-catalog --json`; its other admitted
+vector is the separate exact inert `--describe-json` route. A framework-
 dependent `bin/Release` apphost is not an acceptable provider artifact because
 it can load mutable sibling assemblies. The release gate proves the dedicated
 self-contained single-file executable rejects the general CLI's file, APK,
@@ -236,6 +244,17 @@ pinned provider stage for any native bundle extraction.
 The provider's strict status/exit mapping is `verified=0`, `failed=1`,
 `rejected=2`, and `unavailable=3`; Fleet checks both values and requires empty
 standard error.
+
+All three dedicated provider executables implement that same exact
+`--describe-json` route. It returns the shared
+`rusty.quest.workflow.provider_capability_discovery.v1` shape before stdin,
+provider factories, profiles, ADB, targets, backends, or state are used.
+Actions are projected from the awake and connectivity registries and Kiosk's
+single catalog-summary scope. The five-minute descriptor contains no target,
+path, executable location, endpoint, credential, invocation, or authority.
+`descriptor-available` describes only the local typed surface; it does not
+prove a usable backend, approval, activation, or owner-effective result.
+Mixed, case-varied, or extra description arguments fail closed.
 The separate Fleet awake provider is documented in
 [Quest awake control](docs/quest-awake-control.md). It owns only the
 exact-serial ADB effects and independent readbacks for bounded holds and

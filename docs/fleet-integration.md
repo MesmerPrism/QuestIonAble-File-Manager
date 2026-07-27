@@ -345,11 +345,16 @@ Fleet invokes this route only through the reviewed release artifact named
 self-contained, single-file `win-x64` publish produced directly from
 `QuestIonAbleFileManager.FleetKioskV2Provider`; it is never copied or renamed
 from the general `QuestIonAbleFileManager.Cli` executable. Its entrypoint has
-one exact case-sensitive argument vector:
-`integration kiosk-v2-catalog --json`. All help, ADB, file, APK, Wi-Fi, Kiosk,
-kiosk-direct, device, other integration, missing/extra, reordered, and
-case-varied shapes return the strict `provider_arguments_invalid` response
-before stdin, profile, HTTP, or general CLI initialization.
+one exact case-sensitive execution vector,
+`integration kiosk-v2-catalog --json`, and one separate exact inert description
+vector, `--describe-json`. Description derives only the existing
+`kiosk.catalog-summary` scope and returns before stdin, profile, provider, HTTP,
+target, or owner-session use. It is target-free and explicitly
+non-authorizing; descriptor availability is not Kiosk/backend availability.
+All help, ADB, file, APK, Wi-Fi, Kiosk, kiosk-direct, device, other integration,
+mixed, missing/extra, reordered, and case-varied shapes return the strict
+`provider_arguments_invalid` response before stdin, profile, HTTP, or general
+CLI initialization.
 
 Fleet pins the artifact by lowercase SHA-256 before staging the EXE into a new
 private launch directory and creating only its empty private `bundle-extract`
@@ -366,15 +371,17 @@ any other top-level stage entry.
 `tools/Test-FleetKioskV2ProviderArtifact.ps1` publishes the exact dedicated
 project with no arbitrary input-artifact override, rejects sibling
 DLL/PDB/dependency/runtime-configuration outputs, stages the EXE with its empty
-private extraction directory, and runs an absent-profile request. The gate
-requires exit code `3`, byte-exact strict `unavailable` JSON, zero
-standard-error bytes, and no unexpected sibling files. It runs 15 rejected
-argument shapes with a poisoned ADB setting to prove the general dispatcher is
-unreachable. It emits a receipt that binds the dedicated source project, those
-negative checks, and the exact lowercase SHA-256 Fleet must pin. The gate also
-builds the dedicated project's normal framework-dependent apphost and proves
-that isolating that apphost does not operate. The normal release build runs the
-same gate and places the executable and receipt in both portable archives.
+private extraction directory, first proves description exits while stdin stays
+open and ADB/Kiosk settings are poisoned, and then runs an absent-profile
+request. The gate requires exit code `3`, byte-exact strict `unavailable` JSON,
+zero standard-error bytes, and no unexpected sibling files. It runs the
+existing broad rejection set plus mixed, extra, and case-varied description
+arguments to prove the general dispatcher is unreachable. It emits a receipt
+that binds the dedicated source project, those negative checks, and the exact
+lowercase SHA-256 Fleet must pin. The gate also builds the dedicated project's
+normal framework-dependent apphost and proves that isolating that apphost does
+not operate. The normal release build runs the same gate and places the
+executable and receipt in both portable archives.
 
 The request schema is
 `questionable.file_manager.fleet_kiosk_v2_catalog_request.v1`:

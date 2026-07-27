@@ -40,6 +40,7 @@ function Invoke-IsolatedProvider {
         [Parameter(Mandatory)][string]$BundleExtractionRoot,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Arguments,
         [string]$InputJson = '',
+        [switch]$KeepStandardInputOpen,
         [int]$TimeoutMilliseconds = 5000
     )
 
@@ -77,7 +78,9 @@ function Invoke-IsolatedProvider {
         if ($InputJson.Length -ne 0) {
             $process.StandardInput.Write($InputJson)
         }
-        $process.StandardInput.Close()
+        if (-not $KeepStandardInputOpen) {
+            $process.StandardInput.Close()
+        }
         if (-not $process.WaitForExit($TimeoutMilliseconds)) {
             $process.Kill($true)
             $process.WaitForExit()
@@ -160,6 +163,43 @@ try {
     Copy-Item -LiteralPath $artifactPath -Destination $isolatedArtifactPath
     New-Item -ItemType Directory -Path $bundleExtractionDirectory | Out-Null
 
+    $description = Invoke-IsolatedProvider `
+        -Executable $isolatedArtifactPath `
+        -WorkingDirectory $isolationDirectory `
+        -BundleExtractionRoot $bundleExtractionDirectory `
+        -Arguments @('--describe-json') `
+        -KeepStandardInputOpen
+    if ($description.ExitCode -ne 0 -or
+        $description.Stderr.Length -ne 0) {
+        throw 'The isolated connectivity descriptor failed or blocked on standard input.'
+    }
+    $descriptionDocument = $description.Stdout | ConvertFrom-Json
+    $descriptionActions = @(
+        $descriptionDocument.capabilities.actions.id |
+            Sort-Object
+    )
+    $expectedDescriptionActions = @(
+        'disable_request_after_boot',
+        'disable_wireless_adb',
+        'enable_classic_tcpip_from_usb',
+        'enable_request_after_boot',
+        'request_wireless_adb',
+        'status'
+    )
+    if ($descriptionDocument.schema -cne
+            'rusty.quest.workflow.provider_capability_discovery.v1' -or
+        $descriptionDocument.provider.id -cne
+            'questionable-file-manager.quest-connectivity-provider' -or
+        $descriptionDocument.authorizes_execution -ne $false -or
+        $descriptionDocument.target_specific -ne $false -or
+        ($descriptionActions -join "`n") -cne
+            ($expectedDescriptionActions -join "`n") -or
+        $description.Stdout.Contains(
+            'must-not-run-adb.exe',
+            [StringComparison]::Ordinal)) {
+        throw 'The isolated connectivity provider returned an invalid inert descriptor.'
+    }
+
     $rejectedShapes = @(
         [string[]]@(),
         [string[]]@('--help'),
@@ -170,7 +210,14 @@ try {
         [string[]]@('integration', 'quest-connectivity', '--json', 'extra'),
         [string[]]@('Integration', 'quest-connectivity', '--json'),
         [string[]]@('integration', 'QUEST-CONNECTIVITY', '--json'),
-        [string[]]@('integration', 'quest-connectivity', '--JSON')
+        [string[]]@('integration', 'quest-connectivity', '--JSON'),
+        [string[]]@('--Describe-json'),
+        [string[]]@('--describe-json', 'extra'),
+        [string[]]@(
+            'integration',
+            'quest-connectivity',
+            '--json',
+            '--describe-json')
     )
     foreach ($arguments in $rejectedShapes) {
         $rejected = Invoke-IsolatedProvider `
@@ -235,7 +282,7 @@ try {
     $launchExtractionDirectories = @(
         Get-ChildItem -LiteralPath $bundleExtractionDirectory -Directory)
     if ($launchExtractionDirectories.Count -ne
-            ($rejectedShapes.Count + 1) -or
+            ($rejectedShapes.Count + 2) -or
         @($launchExtractionDirectories | Where-Object {
             $_.Name -cnotmatch '^launch-[0-9a-f]{32}$'
         }).Count -ne 0) {
@@ -301,6 +348,13 @@ try {
         ordinary_apphost_isolation_rejected = $true
         general_cli_dispatch_unreachable = $true
         rejected_argument_shapes = $rejectedShapes.Count
+        description_route = '--describe-json'
+        description_schema =
+            'rusty.quest.workflow.provider_capability_discovery.v1'
+        description_action_count = $descriptionActions.Count
+        description_stdin_unread = $true
+        description_authorizes_execution = $false
+        description_target_specific = $false
         private_profile_required = $true
         request_schema = 'rusty.fleet.quest_wifi_adb_owner_invocation.v1'
         receipt_schema = 'questionable.file_manager.quest_wifi_adb_receipt.v1'

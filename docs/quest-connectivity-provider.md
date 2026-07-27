@@ -108,12 +108,20 @@ evidence digest.
 
 The release artifact is
 `questionable-file-manager-connectivity-provider.exe`, published directly from
-`QuestIonAbleFileManager.FleetConnectivityProvider`. Its only accepted,
-case-sensitive argument vector is:
+`QuestIonAbleFileManager.FleetConnectivityProvider`. Its execution route
+accepts this exact, case-sensitive argument vector:
 
 ```text
 integration quest-connectivity --json
 ```
+
+Its only description route is the separate exact `--describe-json` vector.
+That target-free, non-authorizing response derives every action from
+`QuestConnectivityContract.Actions`. It keeps Kiosk-owned wireless actions and
+File Manager-owned classic TCP/IP in separate capabilities, then returns
+before stdin, replay state, provider/controller factory, profile, Kiosk, ADB,
+target, or endpoint use. It proves registry description only, never profile,
+listener, wearer-approval, target, or backend availability.
 
 It reads one strict snake-case JSON request with schema
 `rusty.fleet.quest_wifi_adb_owner_invocation.v1` from standard input. The input
@@ -139,6 +147,7 @@ pwsh -NoProfile -File ./tools/Test-FleetConnectivityProviderArtifact.ps1
 
 The gate produces an ignored self-contained single-file `win-x64` executable
 and receipt, proves broad commands reject before initialization, proves a
+description exits with stdin held open and poisoned backend settings, proves a
 valid request fails closed without its private profile, and proves an isolated
 framework-dependent apphost cannot substitute for the release artifact. Fleet
 must pin the receipt's lowercase SHA-256. The gate creates and verifies a

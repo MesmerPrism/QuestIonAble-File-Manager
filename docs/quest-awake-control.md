@@ -73,12 +73,19 @@ before every individual device mutation.
 
 The dedicated executable is
 `questionable-file-manager-awake-provider.exe`, published directly from
-`QuestIonAbleFileManager.FleetAwakeProvider`. It accepts only this exact,
-case-sensitive argument vector:
+`QuestIonAbleFileManager.FleetAwakeProvider`. Its execution route accepts this
+exact, case-sensitive argument vector:
 
 ```text
 integration quest-awake --json
 ```
+
+Its only description route is the separate exact `--describe-json` vector.
+That target-free, non-authorizing response derives its stable action list from
+`QuestAwakeContract.Actions` and returns before stdin, provider/controller
+factory, ADB, target, or state use. It proves only that the executable can
+describe its registry, not that ADB, a target, Fleet authority, or any awake
+effect is available.
 
 It reads one strict JSON request capped at 16 KiB. Unknown and duplicate
 properties, unsupported actions, invalid identifiers, malformed serials,
@@ -116,11 +123,12 @@ pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
 
 The gate produces a self-contained, single-file `win-x64` executable and a
 receipt under ignored `artifacts/`. It stages only the executable and a private
-`bundle-extract` directory, rejects broad and case-varied argument shapes
-before ADB discovery, proves the former 24-hour bound is rejected, and verifies
-that an isolated framework-dependent apphost cannot substitute for the
-published trust unit. Fleet must pin the receipt's lowercase SHA-256 and use a
-new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` for each staged launch.
+`bundle-extract` directory, proves description exits with stdin held open and
+a poisoned ADB setting, rejects broad, mixed, extra, and case-varied argument
+shapes before ADB discovery, proves the former 24-hour bound is rejected, and
+verifies that an isolated framework-dependent apphost cannot substitute for
+the published trust unit. Fleet must pin the receipt's lowercase SHA-256 and
+use a new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` for each staged launch.
 The canonical release build runs this gate, publishes the executable and
 receipt as top-level release assets, and includes both in the app-plus-CLI and
 CLI-only portable archives. `release-validation.json` binds their final hash

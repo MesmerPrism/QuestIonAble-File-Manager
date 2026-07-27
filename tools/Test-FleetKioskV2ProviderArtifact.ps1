@@ -109,6 +109,70 @@ try {
         throw 'Provider stage must contain only the dedicated executable and empty private bundle-extract directory before launch.'
     }
 
+    $descriptionStartInfo = [Diagnostics.ProcessStartInfo]::new()
+    $descriptionStartInfo.FileName = $isolatedArtifactPath
+    $descriptionStartInfo.WorkingDirectory = $isolationDirectory
+    $descriptionStartInfo.UseShellExecute = $false
+    $descriptionStartInfo.CreateNoWindow = $true
+    $descriptionStartInfo.RedirectStandardInput = $true
+    $descriptionStartInfo.RedirectStandardOutput = $true
+    $descriptionStartInfo.RedirectStandardError = $true
+    $descriptionStartInfo.Environment['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] =
+        $bundleExtractionDirectory
+    $descriptionStartInfo.Environment['QUESTIONABLE_FILE_MANAGER_ADB'] =
+        (Join-Path $isolationDirectory 'must-not-run-adb.exe')
+    $descriptionStartInfo.Environment[
+        'QUESTIONABLE_FILE_MANAGER_KIOSK_BUNDLE'] =
+        (Join-Path $isolationDirectory 'must-not-read-kiosk-bundle')
+    $descriptionStartInfo.ArgumentList.Add('--describe-json')
+
+    $descriptionProcess = [Diagnostics.Process]::new()
+    $descriptionProcess.StartInfo = $descriptionStartInfo
+    try {
+        if (-not $descriptionProcess.Start()) {
+            throw 'Could not start isolated Kiosk provider description.'
+        }
+        $descriptionStdoutTask =
+            $descriptionProcess.StandardOutput.ReadToEndAsync()
+        $descriptionStderrTask =
+            $descriptionProcess.StandardError.ReadToEndAsync()
+        if (-not $descriptionProcess.WaitForExit(5000)) {
+            $descriptionProcess.Kill($true)
+            $descriptionProcess.WaitForExit()
+            throw 'Kiosk provider description blocked on standard input.'
+        }
+        $descriptionStdout =
+            $descriptionStdoutTask.GetAwaiter().GetResult()
+        $descriptionStderr =
+            $descriptionStderrTask.GetAwaiter().GetResult()
+        if ($descriptionProcess.ExitCode -ne 0 -or
+            $descriptionStderr.Length -ne 0) {
+            throw 'The isolated Kiosk provider description route failed.'
+        }
+    }
+    finally {
+        $descriptionProcess.Dispose()
+    }
+    $descriptionDocument =
+        $descriptionStdout | ConvertFrom-Json
+    $descriptionActions = @(
+        $descriptionDocument.capabilities.actions.id |
+            Sort-Object
+    )
+    if ($descriptionDocument.schema -cne
+            'rusty.quest.workflow.provider_capability_discovery.v1' -or
+        $descriptionDocument.provider.id -cne
+            'questionable-file-manager.kiosk-v2-catalog-provider' -or
+        $descriptionDocument.authorizes_execution -ne $false -or
+        $descriptionDocument.target_specific -ne $false -or
+        $descriptionActions.Count -ne 1 -or
+        $descriptionActions[0] -cne 'kiosk.catalog-summary' -or
+        $descriptionStdout.Contains(
+            'must-not-run',
+            [StringComparison]::Ordinal)) {
+        throw 'The isolated Kiosk provider returned an invalid inert descriptor.'
+    }
+
     $profileId = 'gate-' + [Guid]::NewGuid().ToString('N')
     $requestId = 'catalog-gate-' + [Guid]::NewGuid().ToString('N')
     $issuedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -238,6 +302,14 @@ try {
     $rejectedArgumentShapes.Add([string[]]@('Integration', 'kiosk-v2-catalog', '--json'))
     $rejectedArgumentShapes.Add([string[]]@('integration', 'KIOSK-V2-CATALOG', '--json'))
     $rejectedArgumentShapes.Add([string[]]@('integration', 'kiosk-v2-catalog', '--JSON'))
+    $rejectedArgumentShapes.Add([string[]]@('--Describe-json'))
+    $rejectedArgumentShapes.Add([string[]]@('--describe-json', 'extra'))
+    $rejectedArgumentShapes.Add(
+        [string[]]@(
+            'integration',
+            'kiosk-v2-catalog',
+            '--json',
+            '--describe-json'))
     $expectedRejectedResponse = (
         '{"schema":"questionable.file_manager.fleet_kiosk_v2_catalog_response.v1",' +
         '"status":"rejected","profile_id":"unavailable","request_id":"unavailable",' +
@@ -366,6 +438,13 @@ try {
         ordinary_apphost_isolation_rejected = $true
         general_cli_dispatch_unreachable = $true
         rejected_argument_shapes = $rejectedArgumentShapes.Count
+        description_route = '--describe-json'
+        description_schema =
+            'rusty.quest.workflow.provider_capability_discovery.v1'
+        description_action_count = $descriptionActions.Count
+        description_stdin_unread = $true
+        description_authorizes_execution = $false
+        description_target_specific = $false
         exit_codes = [ordered]@{
             verified = 0
             failed = 1

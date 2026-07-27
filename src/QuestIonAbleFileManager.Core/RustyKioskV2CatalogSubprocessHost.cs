@@ -6,11 +6,14 @@ public sealed class RustyKioskV2CatalogSubprocessHost
 {
     private static readonly byte[] Newline = [(byte)'\n'];
     private readonly Func<RustyKioskV2CatalogProvider> _providerFactory;
+    private readonly TimeProvider _timeProvider;
 
     public RustyKioskV2CatalogSubprocessHost(
-        Func<RustyKioskV2CatalogProvider> providerFactory)
+        Func<RustyKioskV2CatalogProvider> providerFactory,
+        TimeProvider? timeProvider = null)
     {
         _providerFactory = providerFactory ?? throw new ArgumentNullException(nameof(providerFactory));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public static RustyKioskV2CatalogSubprocessHost CreateWindows() =>
@@ -26,6 +29,17 @@ public sealed class RustyKioskV2CatalogSubprocessHost
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
+
+        if (ProviderCapabilityDiscoveryContract.HasExactDescribeArguments(
+                arguments))
+        {
+            await ProviderCapabilityDiscoveryProjection.WriteAsync(
+                    output,
+                    ProviderCapabilityDiscoveryProjection.CreateKioskCatalog(
+                        _timeProvider.GetUtcNow()),
+                    cancellationToken);
+            return 0;
+        }
 
         const string unavailableIdentity = "unavailable";
         var profileId = unavailableIdentity;

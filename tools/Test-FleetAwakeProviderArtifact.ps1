@@ -45,6 +45,7 @@ function Invoke-IsolatedProvider {
         [AllowEmptyCollection()]
         [string[]]$Arguments,
         [string]$InputJson = '',
+        [switch]$KeepStandardInputOpen,
         [int]$TimeoutMilliseconds = 5000
     )
 
@@ -75,7 +76,9 @@ function Invoke-IsolatedProvider {
         if ($InputJson.Length -ne 0) {
             $process.StandardInput.Write($InputJson)
         }
-        $process.StandardInput.Close()
+        if (-not $KeepStandardInputOpen) {
+            $process.StandardInput.Close()
+        }
         if (-not $process.WaitForExit($TimeoutMilliseconds)) {
             $process.Kill($true)
             $process.WaitForExit()
@@ -164,6 +167,43 @@ try {
         throw 'Provider stage must contain only the executable and private bundle-extract directory.'
     }
 
+    $description = Invoke-IsolatedProvider `
+        -Executable $isolatedArtifactPath `
+        -WorkingDirectory $isolationDirectory `
+        -BundleExtractionDirectory $bundleExtractionDirectory `
+        -Arguments @('--describe-json') `
+        -KeepStandardInputOpen
+    if ($description.ExitCode -ne 0 -or
+        $description.Stderr.Length -ne 0) {
+        throw 'The isolated awake provider description route failed or blocked on standard input.'
+    }
+    $descriptionDocument = $description.Stdout | ConvertFrom-Json
+    $descriptionActions = @(
+        $descriptionDocument.capabilities.actions.id |
+            Sort-Object
+    )
+    $expectedDescriptionActions = @(
+        'applyBounded',
+        'repairOnce',
+        'restoreNormal',
+        'startDeviceWatchdog',
+        'status',
+        'stopWatchdogs'
+    )
+    if ($descriptionDocument.schema -cne
+            'rusty.quest.workflow.provider_capability_discovery.v1' -or
+        $descriptionDocument.provider.id -cne
+            'questionable-file-manager.quest-awake-provider' -or
+        $descriptionDocument.authorizes_execution -ne $false -or
+        $descriptionDocument.target_specific -ne $false -or
+        ($descriptionActions -join "`n") -cne
+            ($expectedDescriptionActions -join "`n") -or
+        $description.Stdout.Contains(
+            'must-not-run-adb.exe',
+            [StringComparison]::Ordinal)) {
+        throw 'The isolated awake provider returned an invalid inert descriptor.'
+    }
+
     $issuedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     $formerTwentyFourHourRequest = [ordered]@{
         contractVersion = 'questionable.file_manager.fleet_awake_provider.v1'
@@ -208,7 +248,14 @@ try {
         [string[]]@('integration', 'quest-awake', '--json', 'extra'),
         [string[]]@('Integration', 'quest-awake', '--json'),
         [string[]]@('integration', 'QUEST-AWAKE', '--json'),
-        [string[]]@('integration', 'quest-awake', '--JSON')
+        [string[]]@('integration', 'quest-awake', '--JSON'),
+        [string[]]@('--Describe-json'),
+        [string[]]@('--describe-json', 'extra'),
+        [string[]]@(
+            'integration',
+            'quest-awake',
+            '--json',
+            '--describe-json')
     )
     foreach ($arguments in $rejectedShapes) {
         $rejected = Invoke-IsolatedProvider `
@@ -307,6 +354,13 @@ try {
         ordinary_apphost_isolation_rejected = $true
         general_cli_dispatch_unreachable = $true
         rejected_argument_shapes = $rejectedShapes.Count
+        description_route = '--describe-json'
+        description_schema =
+            'rusty.quest.workflow.provider_capability_discovery.v1'
+        description_action_count = $descriptionActions.Count
+        description_stdin_unread = $true
+        description_authorizes_execution = $false
+        description_target_specific = $false
         strict_request_rejection = 'durationInvalid'
         former_duration_maximum_rejected_ms = 86400000
         supported_duration_maximum_ms = 28800000

@@ -421,6 +421,18 @@ public sealed class QuestAwakeProviderSubprocessHost(
         Stream output,
         CancellationToken cancellationToken = default)
     {
+        if (ProviderCapabilityDiscoveryContract.HasExactDescribeArguments(
+                arguments))
+        {
+            await ProviderCapabilityDiscoveryProjection.WriteAsync(
+                    output,
+                    ProviderCapabilityDiscoveryProjection.CreateAwake(
+                        _timeProvider.GetUtcNow()),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return 0;
+        }
+
         if (arguments.Length != 3 ||
             arguments[0] != "integration" ||
             arguments[1] != "quest-awake" ||

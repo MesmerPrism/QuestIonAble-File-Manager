@@ -135,11 +135,16 @@ public validation receipt records that Kiosk provenance alongside the Windows
 signatures and public release filenames, never local or CI-runner build paths.
 It also isolation-tests both exact dedicated Fleet provider executables with no
 unexpected sibling files. The Kiosk provider must return the strict
-absent-profile response with 15 rejected broad/general argument shapes. The
-awake provider must reject the former 24-hour bound and nine broad or
-case-varied argument shapes before ADB discovery. Both require empty standard
-error, an unreachable general CLI dispatcher, and rejection of an isolated
-framework-dependent apphost before either portable archive is created.
+absent-profile response while preserving its existing broad/general negative
+vectors. The awake provider must reject the former 24-hour bound and preserve
+its existing broad and case-varied negatives before ADB discovery. Awake,
+connectivity, and Kiosk provider gates additionally require the exact
+`--describe-json` route to exit while stdin remains open, with poisoned backend
+settings, empty standard error, exact registry actions, and no authority or
+target claim. Mixed, extra, and case-varied description shapes reject. All
+three require an unreachable general CLI dispatcher and rejection of an
+isolated framework-dependent apphost before either portable archive is
+created.
 Existing release assets are not overwritten; any payload change requires a new
 semantic version. The consumer test stages a local HTTP feed with range
 support because the Windows deployment service does not consume workspace file

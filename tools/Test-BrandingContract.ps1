@@ -109,6 +109,15 @@ Assert-Contains 'docs\release-workflow.md' '`questionable-file-manager-connectiv
 Assert-Contains 'docs\fleet-integration.md' '`questionable-file-manager-kiosk-v2-provider.exe`'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '-p:PublishSingleFile=true'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '--self-contained true'
+Assert-Contains 'src\QuestIonAbleFileManager.Core\ProviderCapabilityDiscovery.cs' 'rusty.quest.workflow.provider_capability_discovery.v1'
+Assert-Contains 'src\QuestIonAbleFileManager.Core\QuestAwakeProvider.cs' 'ProviderCapabilityDiscoveryProjection.CreateAwake'
+Assert-Contains 'src\QuestIonAbleFileManager.Core\QuestConnectivityProvider.cs' 'ProviderCapabilityDiscoveryProjection.CreateConnectivity'
+Assert-Contains 'src\QuestIonAbleFileManager.Core\RustyKioskV2CatalogSubprocessHost.cs' 'ProviderCapabilityDiscoveryProjection.CreateKioskCatalog'
+Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' 'description_stdin_unread = $true'
+Assert-Contains 'tools\Test-FleetConnectivityProviderArtifact.ps1' 'description_stdin_unread = $true'
+Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' 'description_stdin_unread = $true'
+Assert-Contains 'README.md' '`rusty.quest.workflow.provider_capability_discovery.v1`'
+Assert-Contains 'docs\architecture.md' '`ProviderCapabilityDiscoveryProjection`'
 
 $currentSurfaces = @(
     'site\index.html',

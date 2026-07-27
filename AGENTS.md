@@ -14,7 +14,11 @@ controls, an optional disabled-by-default single-device Rusty Fleet hook whose
 shipped CLI stays read-only and whose Core push requires injected current
 Quest/Manifold authority, an optional summary-only encrypted Kiosk v2 catalog
 provider whose endpoint and credential remain File Manager-owned, and Windows
-delivery. It also owns an optional distribution-only handoff that verifies one
+delivery. The three dedicated provider artifacts may describe their existing
+typed registries through the shared short-lived, target-free, explicitly
+non-authorizing discovery contract; description is not backend health,
+activation, target resolution, or execution authority. It also owns an
+optional distribution-only handoff that verifies one
 configured signed Rusty Fleet Windows release and opens Fleet's own guided
 installer; this is not Fleet runtime, device, connectivity, or policy
 authority. Rusty Kiosk remains a separate AGPL-licensed
@@ -135,17 +139,22 @@ documented.
 - Fleet may launch awake control only through the self-contained, single-file
   `questionable-file-manager-awake-provider.exe`, pinned by lowercase SHA-256
   and staged with a per-launch private `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its
-  sole argument vector is exact case-sensitive
-  `integration quest-awake --json`. Invalid arguments and strict-request
-  failures must reject before ADB discovery. Never substitute the general CLI
-  or a framework-dependent apphost.
+  execution vector is exact case-sensitive
+  `integration quest-awake --json`. Its separate inert discovery vector is
+  exactly `--describe-json`; that route must return before stdin, provider
+  factory, ADB, target, or state use. Invalid, mixed, case-varied, and extra
+  arguments and strict-request failures reject before ADB discovery. Never
+  substitute the general CLI or a framework-dependent apphost.
 - Fleet may launch Wi-Fi ADB connectivity only through the self-contained,
   single-file `questionable-file-manager-connectivity-provider.exe`, pinned by
   lowercase SHA-256 and staged with a per-launch private
-  `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its sole argument vector is exact
-  case-sensitive `integration quest-connectivity --json`. Invalid arguments
-  and strict-request failures must reject before profile or ADB initialization.
-  Never substitute the general CLI or a framework-dependent apphost.
+  `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its execution vector is exact
+  case-sensitive `integration quest-connectivity --json`. Its separate inert
+  discovery vector is exactly `--describe-json`; that route must return before
+  stdin, profile, provider factory, Kiosk, ADB, target, or replay-state use.
+  Invalid, mixed, case-varied, and extra arguments and strict-request failures
+  reject before profile or ADB initialization. Never substitute the general
+  CLI or a framework-dependent apphost.
 - The optional Fleet installer handoff is distribution bootstrap only. It
   accepts no caller URL, program, argument, credential, device, ADB, hotspot,
   or elevation choice. Configuration selects one reviewed HTTPS Rusty Fleet
@@ -169,9 +178,12 @@ documented.
   `QuestIonAbleFileManager.FleetKioskV2Provider`; never rename or package the
   general operator CLI as the provider. Never point Fleet at a `dotnet build`
   apphost; it loads mutable sibling assemblies and is not a complete trust
-  unit. The dedicated entrypoint admits only the exact case-sensitive
-  `integration kiosk-v2-catalog --json` argument vector and cannot dispatch
-  ADB, file, APK, Wi-Fi, Kiosk, kiosk-direct, or device-control commands.
+  unit. The dedicated entrypoint admits the exact case-sensitive execution
+  vector `integration kiosk-v2-catalog --json` and the separate exact inert
+  discovery vector `--describe-json`. Discovery must return before stdin,
+  credential/profile, provider, HTTP, target, or owner-session use. The
+  entrypoint cannot dispatch ADB, file, APK, Wi-Fi, Kiosk, kiosk-direct, or
+  device-control commands.
   The artifact gate must smoke-run a stage containing only the dedicated EXE
   and an empty private `bundle-extract` subdirectory, require the exact
   absent-profile response and exit code, and require zero standard-error bytes.
@@ -280,6 +292,7 @@ pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
 pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
 pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
 pwsh -NoProfile -File ./tools/Test-FleetConnectivityProviderArtifact.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./tools/Test-ProviderCapabilityDiscovery.ps1 -ContractRoot <meta-quest-agent-workflow-root>
 ```
 
 The canonical folder mark and multi-resolution Windows icon live under
@@ -342,6 +355,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
 - `QuestIonAbleFileManager.FleetConnectivityProvider` is the narrow Fleet
   execution artifact for Kiosk-owned wireless requests and exact-USB classic
   TCP/IP setup; it is not a general CLI projection.
+- `ProviderCapabilityDiscoveryProjection` is the shared Core-only inert
+  description of the awake, connectivity, and Kiosk catalog registries. It
+  owns no execution, target, profile, credential, backend, or effect truth.
 - Fleet integration stays in the Core/CLI boundary described in
   `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
   one read-only target without a separate authority and UX review.

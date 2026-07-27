@@ -32,6 +32,8 @@ general Quest runtime console or fleet manager.
 - Optional dedicated Fleet connectivity provider for File Manager-owned
   private target resolution, fixed Kiosk Wi-Fi ADB setup requests, and a
   separate exact-USB classic TCP/IP route.
+- Shared inert capability descriptions for the three dedicated providers,
+  derived from their existing typed registries without backend initialization.
 - Optional distribution-only verification and handoff of one configured,
   signed Rusty Fleet Windows guided installer release.
 - Public CI, Pages, release archives, and boundary validation.
@@ -125,6 +127,16 @@ deployment uses a separate Windows identity when that caller boundary matters.
 Classic TCP/IP also binds the pre-mutation USB identity to fresh readback from
 the exact connected endpoint so a stale endpoint cannot be relabeled.
 
+`ProviderCapabilityDiscoveryProjection` owns only the strict DTO projection of
+those three existing provider registries. Awake and connectivity action lists
+come directly from `QuestAwakeContract.Actions` and
+`QuestConnectivityContract.Actions`; Kiosk exposes only
+`CatalogSummaryScope`. Connectivity is split into Kiosk-owned wireless and
+File Manager-owned classic TCP/IP capability records so discovery does not
+move effect ownership. The descriptor is fresh for five minutes, target-free,
+and explicitly non-authorizing. It carries no invocation, path, endpoint,
+credential, profile value, target, backend status, or execution receipt.
+
 The Fleet installer handoff owns only release-consumer verification: a pinned
 descriptor RSA key and channel, strict signed payload, exact installer
 size/hash/name/protocol, pinned Authenticode signer, a private retained stage,
@@ -165,6 +177,13 @@ reconcilable on later refresh.
 Direct commands use the same desired/effective-state matcher. Direct file
 mutations confirm only after signed byte/hash readback; local installs stay
 pending until the matching Android receipt reports installed or failed.
+
+Each dedicated provider host admits `--describe-json` as one exact,
+case-sensitive vector separate from its existing execution vector. That branch
+runs before stdin, controller/provider factories, profile stores, ADB, Kiosk,
+HTTP, targets, replay state, or other backend use. Mixed, case-varied, or extra
+arguments use the existing fail-closed execution rejection and cannot select
+description.
 
 The CLI is the contract surface for agents and future GUI, Android-host, and
 Apple-host adapters. Any new GUI action must first have an equivalent typed
@@ -254,6 +273,11 @@ evidence local.
   scoping and stable identity continuity for classic TCP/IP, in-process replay
   rejection, sanitized receipts, and independent Kiosk, wearer, and listener
   facts plus the absence of foreign Termux claims.
+- Provider-discovery tests prove exact registry equality and stable ordering,
+  exhaustive kind/authentication/effect-owner/receipt classification, strict
+  DTO shape, deterministic freshness, poisoned factories and stdin, and
+  fail-closed alternate argument vectors. Artifact gates repeat the inert
+  route with stdin held open and poisoned backend settings.
 - CI builds the WPF app, runs the core tests, exercises CLI help, and scans the
   tracked public boundary.
 - Live Quest validation is a separate serial-scoped manual gate.
