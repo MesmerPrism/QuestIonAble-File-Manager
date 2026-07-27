@@ -3,6 +3,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -12,8 +13,8 @@ namespace QuestIonAbleFileManager.Core;
 
 public static class FleetInstallerContract
 {
-    public const string EnvelopeSchema = "rusty.fleet.release_descriptor_envelope.v1";
-    public const string PayloadSchema = "rusty.fleet.windows_release.v1";
+    public const string EnvelopeSchema = "rusty.fleet.release_descriptor_envelope.v2";
+    public const string PayloadSchema = "rusty.fleet.windows_release.v2";
     public const string PlanSchema = "rusty.fleet.guided_installer_plan.v1";
     public const string StatusSchema = "questionable.file_manager.fleet_installer_status.v1";
     public const string HandoffSchema = "questionable.file_manager.fleet_installer_handoff.v1";
@@ -24,6 +25,9 @@ public static class FleetInstallerContract
     public const int MaximumDescriptorBytes = 64 * 1024;
     public const long MaximumAssetBytes = 512L * 1024 * 1024;
     public static readonly TimeSpan MaximumDescriptorLifetime = TimeSpan.FromDays(14);
+    public const string PagesMetadataOrigin = "https://mesmerprism.com";
+    public const string PagesMetadataRoot = "/Rusty-Fleet/metadata";
+    public const string ReleaseAssetOrigin = "https://github.com";
 }
 
 public sealed class FleetInstallerException : InvalidOperationException
@@ -48,7 +52,7 @@ public sealed record FleetInstallerTrustPolicy(
         if (DescriptorSignerSubjectPublicKeyInfo.Length is < 64 or > 4096 ||
             !FleetInstallerValidation.IsLowerSha256(DescriptorSignerSpkiSha256) ||
             !FleetInstallerValidation.IsLowerSha256(InstallerSignerCertificateSha256) ||
-            !FleetInstallerValidation.IsIdentifier(Channel, 64))
+            !FleetInstallerValidation.IsReleaseChannel(Channel))
         {
             throw new FleetInstallerException(
                 "fleet_trust_policy_invalid",
@@ -65,32 +69,69 @@ public sealed record FleetInstallerTrustPolicy(
                 "fleet_descriptor_signer_pin_mismatch",
                 "The configured Fleet descriptor public key does not match its SHA-256 pin.");
         }
+
+        try
+        {
+            using var rsa = RSA.Create();
+            rsa.ImportSubjectPublicKeyInfo(
+                DescriptorSignerSubjectPublicKeyInfo,
+                out var bytesRead);
+            if (bytesRead != DescriptorSignerSubjectPublicKeyInfo.Length)
+            {
+                throw new CryptographicException(
+                    "The SPKI contains trailing data.");
+            }
+        }
+        catch (CryptographicException exception)
+        {
+            throw new FleetInstallerException(
+                "fleet_trust_policy_invalid",
+                "The configured Fleet descriptor public key is not a valid RSA SPKI.",
+                exception);
+        }
     }
 }
 
 public sealed record FleetInstallerSettings(
     IFleetReleaseSource Source,
     FleetInstallerTrustPolicy TrustPolicy,
-    string PrivateStageRoot)
+    string PrivateStageRoot,
+    string? ConfigurationSourceKind = null)
 {
-    public static FleetInstallerSettings? FromEnvironment()
+    private const string MetadataPrefix =
+        "QuestIonAbleFileManager.FleetInstaller.";
+
+    public static FleetInstallerSettings? FromEnvironment() =>
+        FromConfiguration(
+            static name => Environment.GetEnvironmentVariable(name),
+            ReadEmbeddedConfiguration());
+
+    internal static FleetInstallerSettings? FromConfiguration(
+        Func<string, string?> environment,
+        IReadOnlyDictionary<string, string>? embeddedConfiguration)
     {
-        var descriptorSource = Environment.GetEnvironmentVariable(
+        ArgumentNullException.ThrowIfNull(environment);
+        if (embeddedConfiguration is not null)
+        {
+            return FromEmbeddedConfiguration(embeddedConfiguration);
+        }
+
+        var descriptorSource = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_RELEASE_DESCRIPTOR");
         if (string.IsNullOrWhiteSpace(descriptorSource))
         {
             return null;
         }
 
-        var stageRoot = Environment.GetEnvironmentVariable(
+        var stageRoot = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_INSTALLER_STATE");
-        var publicKeyPath = Environment.GetEnvironmentVariable(
+        var publicKeyPath = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_DESCRIPTOR_PUBLIC_KEY");
-        var publicKeyDigest = Environment.GetEnvironmentVariable(
+        var publicKeyDigest = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_DESCRIPTOR_SIGNER_SHA256");
-        var installerSigner = Environment.GetEnvironmentVariable(
+        var installerSigner = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_INSTALLER_SIGNER_SHA256");
-        var channel = Environment.GetEnvironmentVariable(
+        var channel = environment(
             "QUESTIONABLE_FILE_MANAGER_FLEET_CHANNEL") ?? "stable";
         if (string.IsNullOrWhiteSpace(stageRoot) ||
             string.IsNullOrWhiteSpace(publicKeyPath) ||
@@ -119,19 +160,22 @@ public sealed record FleetInstallerSettings(
         }
 
         IFleetReleaseSource source;
+        string sourceKind;
         if (Uri.TryCreate(descriptorSource, UriKind.Absolute, out var uri) &&
             uri.Scheme == Uri.UriSchemeHttps)
         {
+            FleetInstallerValidation.ValidateDescriptorUri(uri, channel);
             var handler = new HttpClientHandler { AllowAutoRedirect = false };
             source = new HttpsFleetReleaseSource(
                 uri,
-                new Uri(uri, "."),
+                channel,
                 new HttpClient(handler, disposeHandler: true));
+            sourceKind = "environment_pages_metadata";
         }
         else
         {
             if (!string.Equals(
-                    Environment.GetEnvironmentVariable(
+                    environment(
                         "QUESTIONABLE_FILE_MANAGER_FLEET_ALLOW_LOCAL_FIXTURE"),
                     "1",
                     StringComparison.Ordinal))
@@ -141,6 +185,7 @@ public sealed record FleetInstallerSettings(
                     "Fleet release descriptors must use the configured HTTPS source.");
             }
             source = new LocalFleetReleaseSource(Path.GetFullPath(descriptorSource));
+            sourceKind = "environment_local_fixture";
         }
 
         var policy = new FleetInstallerTrustPolicy(
@@ -149,7 +194,112 @@ public sealed record FleetInstallerSettings(
             installerSigner,
             channel);
         policy.Validate();
-        return new FleetInstallerSettings(source, policy, Path.GetFullPath(stageRoot));
+        return new FleetInstallerSettings(
+            source,
+            policy,
+            Path.GetFullPath(stageRoot),
+            sourceKind);
+    }
+
+    private static FleetInstallerSettings FromEmbeddedConfiguration(
+        IReadOnlyDictionary<string, string> values)
+    {
+        static string Required(
+            IReadOnlyDictionary<string, string> source,
+            string name)
+        {
+            if (!source.TryGetValue(name, out var value) ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                throw new FleetInstallerException(
+                    "fleet_embedded_configuration_invalid",
+                    "The embedded Fleet installer trust configuration is incomplete.");
+            }
+            return value;
+        }
+
+        if (values.Count != 7 ||
+            Required(values, "ConfigurationVersion") != "2")
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet installer trust configuration is unsupported.");
+        }
+
+        var descriptorUriText = Required(values, "DescriptorUri");
+        var publicKeyBase64 = Required(values, "DescriptorPublicKeySpkiBase64");
+        var publicKeyDigest = Required(values, "DescriptorSignerSpkiSha256");
+        var installerSigner = Required(values, "InstallerSignerCertificateSha256");
+        var channel = Required(values, "Channel");
+        var relativeStateRoot = Required(values, "StateRootRelativePath");
+
+        if (!Uri.TryCreate(descriptorUriText, UriKind.Absolute, out var descriptorUri))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet release descriptor URI is invalid.");
+        }
+        FleetInstallerValidation.ValidateDescriptorUri(descriptorUri, channel);
+
+        byte[] publicKey;
+        try
+        {
+            publicKey = Convert.FromBase64String(publicKeyBase64);
+        }
+        catch (FormatException exception)
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet descriptor public key is invalid.",
+                exception);
+        }
+        if (Convert.ToBase64String(publicKey) != publicKeyBase64)
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet descriptor public key is not canonical.");
+        }
+
+        var policy = new FleetInstallerTrustPolicy(
+            publicKey,
+            publicKeyDigest,
+            installerSigner,
+            channel);
+        policy.Validate();
+        var stateRoot = FleetInstallerValidation.ResolveEmbeddedStateRoot(
+            relativeStateRoot);
+        return new FleetInstallerSettings(
+            new HttpsFleetReleaseSource(
+                descriptorUri,
+                channel,
+                new HttpClient(
+                    new HttpClientHandler { AllowAutoRedirect = false },
+                    disposeHandler: true)),
+            policy,
+            stateRoot,
+            "embedded_pages_metadata");
+    }
+
+    private static IReadOnlyDictionary<string, string>? ReadEmbeddedConfiguration()
+    {
+        var attributes = typeof(FleetInstallerSettings).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Where(static attribute =>
+                attribute.Key.StartsWith(MetadataPrefix, StringComparison.Ordinal))
+            .ToArray();
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var attribute in attributes)
+        {
+            if (!values.TryAdd(
+                    attribute.Key[MetadataPrefix.Length..],
+                    attribute.Value ?? string.Empty))
+            {
+                throw new FleetInstallerException(
+                    "fleet_embedded_configuration_invalid",
+                    "The embedded Fleet installer trust configuration contains duplicate fields.");
+            }
+        }
+        return values.Count == 0 ? null : values;
     }
 }
 
@@ -160,7 +310,7 @@ public interface IFleetReleaseSource
     Task<byte[]> ReadDescriptorAsync(CancellationToken cancellationToken);
 
     Task CopyAssetAsync(
-        string assetName,
+        FleetReleaseAsset asset,
         Stream destination,
         long maximumBytes,
         CancellationToken cancellationToken);
@@ -196,13 +346,13 @@ public sealed class LocalFleetReleaseSource : IFleetReleaseSource
             cancellationToken).ConfigureAwait(false);
 
     public async Task CopyAssetAsync(
-        string assetName,
+        FleetReleaseAsset asset,
         Stream destination,
         long maximumBytes,
         CancellationToken cancellationToken)
     {
         if (!string.Equals(
-                assetName,
+                asset.Name,
                 FleetInstallerContract.AssetName,
                 StringComparison.Ordinal))
         {
@@ -288,30 +438,19 @@ public sealed class LocalFleetReleaseSource : IFleetReleaseSource
 public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
 {
     private readonly Uri _descriptorUri;
-    private readonly Uri _assetBaseUri;
     private readonly HttpClient _httpClient;
 
     public HttpsFleetReleaseSource(
         Uri descriptorUri,
-        Uri assetBaseUri,
+        string channel,
         HttpClient httpClient)
     {
-        ValidateInitialUri(descriptorUri);
-        ValidateInitialUri(assetBaseUri);
-        if (!descriptorUri.AbsolutePath.StartsWith(
-                assetBaseUri.AbsolutePath,
-                StringComparison.Ordinal))
-        {
-            throw new FleetInstallerException(
-                "fleet_asset_source_invalid",
-                "The Fleet asset base must contain the configured descriptor.");
-        }
+        FleetInstallerValidation.ValidateDescriptorUri(descriptorUri, channel);
         _descriptorUri = descriptorUri;
-        _assetBaseUri = assetBaseUri;
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
     }
 
-    public string Kind => "https";
+    public string Kind => "pages_metadata";
 
     public async Task<byte[]> ReadDescriptorAsync(CancellationToken cancellationToken)
     {
@@ -336,13 +475,13 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
     }
 
     public async Task CopyAssetAsync(
-        string assetName,
+        FleetReleaseAsset asset,
         Stream destination,
         long maximumBytes,
         CancellationToken cancellationToken)
     {
         if (!string.Equals(
-                assetName,
+                asset.Name,
                 FleetInstallerContract.AssetName,
                 StringComparison.Ordinal))
         {
@@ -350,16 +489,9 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
                 "fleet_asset_name_invalid",
                 "The Fleet descriptor selected an unsupported installer asset.");
         }
-        var assetUri = new Uri(_assetBaseUri, assetName);
-        ValidateInitialUri(assetUri);
-        if (!assetUri.AbsolutePath.StartsWith(
-                _assetBaseUri.AbsolutePath,
-                StringComparison.Ordinal))
-        {
-            throw new FleetInstallerException(
-                "fleet_asset_source_invalid",
-                "The Fleet installer asset escaped the configured release source.");
-        }
+        var assetUri = FleetInstallerValidation.ValidateReleaseAssetUri(
+            asset.Url,
+            expectedVersion: null);
         using var response = await SendBoundedAsync(assetUri, cancellationToken)
             .ConfigureAwait(false);
         await using var input = await response.Content.ReadAsStreamAsync(cancellationToken)
@@ -436,45 +568,15 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
             target.Host,
             "release-assets.githubusercontent.com",
             StringComparison.OrdinalIgnoreCase) &&
+        target.Port == 443 &&
         string.IsNullOrEmpty(target.UserInfo) &&
         string.IsNullOrEmpty(target.Fragment);
 
-    private static void ValidateInitialUri(Uri uri)
-    {
-        if (!uri.IsAbsoluteUri ||
-            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !string.IsNullOrEmpty(uri.Query) ||
-            !string.IsNullOrEmpty(uri.Fragment) ||
-            uri.Port != 443)
-        {
-            throw new FleetInstallerException(
-                "fleet_descriptor_source_invalid",
-                "The Fleet release source must be a clean HTTPS URI.");
-        }
-
-        var githubRelease =
-            string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) &&
-            uri.AbsolutePath.StartsWith(
-                "/MesmerPrism/rusty-fleet/releases/download/",
-                StringComparison.Ordinal);
-        var githubPages =
-            string.Equals(
-                uri.Host,
-                "mesmerprism.github.io",
-                StringComparison.OrdinalIgnoreCase) &&
-            uri.AbsolutePath.StartsWith("/rusty-fleet/", StringComparison.Ordinal);
-        if (!githubRelease && !githubPages)
-        {
-            throw new FleetInstallerException(
-                "fleet_descriptor_source_invalid",
-                "The Fleet release source must be the reviewed Rusty Fleet GitHub Release or Pages path.");
-        }
-    }
 }
 
 public sealed record FleetReleaseAsset(
     string Name,
+    string Url,
     long SizeBytes,
     string Sha256,
     string SignerCertificateSha256,
@@ -1089,7 +1191,7 @@ public sealed class FleetInstallerHandoff
                 FleetInstallerContract.StatusSchema,
                 status,
                 Configured: true,
-                _settings.Source.Kind,
+                _settings.ConfigurationSourceKind ?? _settings.Source.Kind,
                 descriptor.Product,
                 descriptor.Version,
                 descriptor.Channel,
@@ -1573,7 +1675,7 @@ internal sealed class FleetInstallerStage : IDisposable
                 ExecutablePath,
                 requireSingleLink: true);
             await source.CopyAssetAsync(
-                asset.Name,
+                asset,
                 output,
                 asset.SizeBytes,
                 cancellationToken).ConfigureAwait(false);
@@ -1836,7 +1938,151 @@ internal static class FleetInstallerValidation
         version.Major >= 0 &&
         version.Minor >= 0 &&
         version.Build >= 0 &&
-        string.Equals(version.ToString(3), value, StringComparison.Ordinal);
+            string.Equals(version.ToString(3), value, StringComparison.Ordinal);
+
+    public static bool IsReleaseChannel(string? value) =>
+        value is "stable" or "preview" or "dev";
+
+    public static void ValidateDescriptorUri(Uri uri, string channel)
+    {
+        if (!IsReleaseChannel(channel))
+        {
+            throw new FleetInstallerException(
+                "fleet_descriptor_source_invalid",
+                "The Fleet descriptor channel is invalid.");
+        }
+        var expected =
+            $"{FleetInstallerContract.PagesMetadataOrigin}" +
+            $"{FleetInstallerContract.PagesMetadataRoot}/{channel}/release.json";
+        if (!uri.IsAbsoluteUri ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            uri.Port != 443 ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) ||
+            !string.Equals(uri.OriginalString, expected, StringComparison.Ordinal))
+        {
+            throw new FleetInstallerException(
+                "fleet_descriptor_source_invalid",
+                "The Fleet release descriptor must use the canonical MesmerPrism Pages metadata path.");
+        }
+    }
+
+    public static Uri ValidateReleaseAssetUri(
+        string value,
+        string? expectedVersion)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            !uri.IsAbsoluteUri ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            uri.Port != 443 ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment))
+        {
+            throw new FleetInstallerException(
+                "fleet_asset_source_invalid",
+                "The Fleet installer asset URL is invalid.");
+        }
+
+        var prefix =
+            $"{FleetInstallerContract.ReleaseAssetOrigin}/MesmerPrism/" +
+            "rusty-fleet/releases/download/v";
+        var suffix = $"/{FleetInstallerContract.AssetName}";
+        if (!value.StartsWith(prefix, StringComparison.Ordinal) ||
+            !value.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            throw new FleetInstallerException(
+                "fleet_asset_source_invalid",
+                "The Fleet installer asset must use the immutable GitHub Release path.");
+        }
+        var version = value[prefix.Length..^suffix.Length];
+        if (!IsThreePartVersion(version) ||
+            (expectedVersion is not null &&
+             !string.Equals(version, expectedVersion, StringComparison.Ordinal)) ||
+            !string.Equals(
+                value,
+                $"{prefix}{version}{suffix}",
+                StringComparison.Ordinal))
+        {
+            throw new FleetInstallerException(
+                "fleet_asset_source_invalid",
+                "The Fleet installer asset URL does not bind the exact release version.");
+        }
+        return uri;
+    }
+
+    public static string ResolveEmbeddedStateRoot(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath) ||
+            Path.IsPathFullyQualified(relativePath) ||
+            relativePath.Contains(':', StringComparison.Ordinal) ||
+            relativePath.EndsWith(' ') ||
+            relativePath.EndsWith('.') ||
+            relativePath.Split(
+                    ['/', '\\'],
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Any(static segment =>
+                    !IsSafeEmbeddedStateSegment(segment)))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet installer state root is invalid.");
+        }
+        var segments = relativePath.Split(
+            ['/', '\\'],
+            StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length is < 1 or > 4 ||
+            string.Join("/", segments) != relativePath.Replace('\\', '/'))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet installer state root is not canonical.");
+        }
+        var localAppData = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData,
+            Environment.SpecialFolderOption.DoNotVerify);
+        if (string.IsNullOrWhiteSpace(localAppData) ||
+            !Path.IsPathFullyQualified(localAppData))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The per-user local application data root is unavailable.");
+        }
+        var stateRoot = Path.GetFullPath(
+            Path.Combine([localAppData, .. segments]));
+        var localAppDataPrefix =
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(localAppData)) +
+            Path.DirectorySeparatorChar;
+        if (!stateRoot.StartsWith(
+                localAppDataPrefix,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded Fleet installer state root escaped the per-user root.");
+        }
+        return stateRoot;
+    }
+
+    private static bool IsSafeEmbeddedStateSegment(string segment)
+    {
+        if (!IsIdentifier(segment, 64) ||
+            segment is "." or ".." ||
+            segment.EndsWith('.'))
+        {
+            return false;
+        }
+        var reservedStem = segment.Split('.')[0];
+        return !reservedStem.Equals("CON", StringComparison.OrdinalIgnoreCase) &&
+               !reservedStem.Equals("PRN", StringComparison.OrdinalIgnoreCase) &&
+               !reservedStem.Equals("AUX", StringComparison.OrdinalIgnoreCase) &&
+               !reservedStem.Equals("NUL", StringComparison.OrdinalIgnoreCase) &&
+               !(reservedStem.Length == 4 &&
+                 (reservedStem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
+                  reservedStem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
+                 reservedStem[3] is >= '1' and <= '9');
+    }
 
     private static void ValidatePayload(
         FleetReleasePayload payload,
@@ -1879,6 +2125,7 @@ internal static class FleetInstallerValidation
                 "fleet_asset_binding_invalid",
                 "The Fleet installer asset identity or trust binding is invalid.");
         }
+        ValidateReleaseAssetUri(payload.Asset.Url, payload.Version);
     }
 
     private static byte[] DecodeBase64Url(

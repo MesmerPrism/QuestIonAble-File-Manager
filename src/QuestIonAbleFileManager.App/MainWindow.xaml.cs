@@ -107,7 +107,8 @@ public partial class MainWindow : Window
                         "Fleet installer status did not return a receipt.");
                 FleetInstallerStatusText.Text = status.Configured
                     ? $"Trusted release: {status.Product} {status.Version} ({status.Channel}); " +
-                      $"status: {status.Status}; last handoff: {status.LastOutcome ?? "none"}."
+                      $"source: {status.SourceKind}; status: {status.Status}; " +
+                      $"last handoff: {status.LastOutcome ?? "none"}."
                     : "Fleet installer handoff is optional and is not configured.";
                 StatusText.Text = "Fleet installer status checked.";
             },
@@ -118,9 +119,10 @@ public partial class MainWindow : Window
         if (MessageBox.Show(
                 this,
                 "Verify and open the Fleet-owned guided installer?\n\n" +
-                "File Manager will accept only the configured signed release, verify its " +
-                "exact size, hash, and Windows signer, check Fleet's plan, and then open " +
-                "the visible installer. File Manager does not configure devices or Wi-Fi.",
+                "File Manager will accept only the configured signed Pages metadata and " +
+                "its exact immutable GitHub Release Setup asset, verify size, hash, and " +
+                "Windows signer, check Fleet's plan, and then open the visible installer. " +
+                "File Manager does not configure devices or Wi-Fi.",
                 "Confirm Rusty Fleet installation",
                 MessageBoxButton.OKCancel,
                 MessageBoxImage.Question) != MessageBoxResult.OK)

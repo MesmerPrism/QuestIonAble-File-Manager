@@ -115,6 +115,28 @@ pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -RemoveAfterTest
 ```
 
+For a release that exposes the optional Fleet download handoff, the release
+owner must also supply all six public trust inputs:
+
+```powershell
+-FleetInstallerReleaseDescriptorUri 'https://mesmerprism.com/Rusty-Fleet/metadata/<channel>/release.json' `
+-FleetInstallerDescriptorPublicKeySpkiBase64 '<canonical-public-rsa-spki>' `
+-FleetInstallerDescriptorSignerSpkiSha256 '<lowercase-spki-sha256>' `
+-FleetInstallerSetupSignerCertificateSha256 '<lowercase-setup-certificate-sha256>' `
+-FleetInstallerChannel '<channel>' `
+-FleetInstallerStateRootRelativePath 'QuestIonAbleFileManager/FleetInstaller'
+```
+
+Append those arguments to `Invoke-ReleaseBuild.ps1`; do not store real
+publisher values or local paths in this repository. They are all-or-none and
+are embedded as versioned assembly metadata. The script clears ambient MSBuild
+values, validates the SPKI and pins, and restores its caller's environment.
+Omitting all six produces an inert release; a partial set fails. The canonical
+Pages location publishes only short-lived signed `release.json` metadata. Its
+v2 payload must bind
+`https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`;
+never publish or derive a Pages-sibling Setup binary.
+
 The default consumer test exercises the elevated guided route. On an
 unattended, non-elevated agent shell, use `-DirectPackage` to validate the
 helper's no-change plan and then install the same signed MSIX directly; the

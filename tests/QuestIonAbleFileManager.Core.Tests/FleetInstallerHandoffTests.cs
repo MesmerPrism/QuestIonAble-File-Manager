@@ -46,10 +46,19 @@ public sealed class FleetInstallerHandoffTests
         Assert.Equal(1, runner.PlanCalls);
         Assert.Equal(1, runner.GuidedCalls);
         Assert.Empty(Directory.EnumerateDirectories(fixture.StateRoot, "fleet-*"));
+        var receipts = JsonSerializer.Serialize(new { status, handoff });
         Assert.DoesNotContain(
             fixture.StateRoot,
-            JsonSerializer.Serialize(handoff),
+            receipts,
             StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            ReleaseAssetUrl("1.2.3"),
+            receipts,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "https://mesmerprism.com/",
+            receipts,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,6 +111,25 @@ public sealed class FleetInstallerHandoffTests
         exception = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().GetStatusAsync());
         Assert.Equal("fleet_descriptor_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task VersionOneDescriptorContractsAreRejected()
+    {
+        using var fixture = new SignedFixture();
+        var envelope = JsonNode.Parse(fixture.DescriptorBytes)!.AsObject();
+        envelope["schema"] = "rusty.fleet.release_descriptor_envelope.v1";
+        fixture.DescriptorBytes = Encoding.UTF8.GetBytes(envelope.ToJsonString());
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_signer_mismatch", exception.Code);
+
+        fixture.ResignPayload(
+            payload => payload["schema"] = "rusty.fleet.windows_release.v1");
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_binding_invalid", exception.Code);
     }
 
     [Fact]
@@ -262,6 +290,7 @@ public sealed class FleetInstallerHandoffTests
         {
             payload["descriptor_id"] = "release-1";
             payload["version"] = "1.9.9";
+            payload["asset"]!.AsObject()["url"] = ReleaseAssetUrl("1.9.9");
         });
         fixture.Plan = fixture.Plan with { Version = "1.9.9" };
         var status = await fixture.CreateService().GetStatusAsync();
@@ -465,16 +494,49 @@ public sealed class FleetInstallerHandoffTests
     public async Task HttpsSourceRejectsUnreviewedAndChainedRedirects()
     {
         var descriptor = new Uri(
-            "https://github.com/MesmerPrism/rusty-fleet/releases/download/v1/release.json");
-        var baseUri = new Uri(descriptor, ".");
+            "https://mesmerprism.com/Rusty-Fleet/metadata/stable/release.json");
         using var evilClient = new HttpClient(new SequenceHandler(
             Redirect("https://example.invalid/asset")));
         using var evilSource = new HttpsFleetReleaseSource(
             descriptor,
-            baseUri,
+            "stable",
             evilClient);
         var exception = await Assert.ThrowsAsync<FleetInstallerException>(
             () => evilSource.ReadDescriptorAsync(CancellationToken.None));
+        Assert.Equal("fleet_source_redirect_rejected", exception.Code);
+
+        using var escapedAssetClient = new HttpClient(new SequenceHandler(
+            Redirect("https://example.invalid/RustyFleet-Setup.exe")));
+        using var escapedAssetSource = new HttpsFleetReleaseSource(
+            descriptor,
+            "stable",
+            escapedAssetClient);
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(async () =>
+        {
+            using var output = new MemoryStream();
+            await escapedAssetSource.CopyAssetAsync(
+                ReleaseAsset(),
+                output,
+                1024,
+                CancellationToken.None);
+        });
+        Assert.Equal("fleet_source_redirect_rejected", exception.Code);
+
+        using var alternatePortClient = new HttpClient(new SequenceHandler(
+            Redirect("https://release-assets.githubusercontent.com:444/asset")));
+        using var alternatePortSource = new HttpsFleetReleaseSource(
+            descriptor,
+            "stable",
+            alternatePortClient);
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(async () =>
+        {
+            using var output = new MemoryStream();
+            await alternatePortSource.CopyAssetAsync(
+                ReleaseAsset(),
+                output,
+                1024,
+                CancellationToken.None);
+        });
         Assert.Equal("fleet_source_redirect_rejected", exception.Code);
 
         using var chainedClient = new HttpClient(new SequenceHandler(
@@ -482,18 +544,25 @@ public sealed class FleetInstallerHandoffTests
             Redirect("https://release-assets.githubusercontent.com/two")));
         using var chainedSource = new HttpsFleetReleaseSource(
             descriptor,
-            baseUri,
+            "stable",
             chainedClient);
-        exception = await Assert.ThrowsAsync<FleetInstallerException>(
-            () => chainedSource.ReadDescriptorAsync(CancellationToken.None));
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(async () =>
+        {
+            using var output = new MemoryStream();
+            await chainedSource.CopyAssetAsync(
+                ReleaseAsset(),
+                output,
+                1024,
+                CancellationToken.None);
+        });
         Assert.Equal("fleet_source_redirect_rejected", exception.Code);
     }
 
     [Fact]
-    public async Task ReviewedPagesAndExplicitLocalFixtureSourcesWorkOffline()
+    public async Task CanonicalPagesMetadataAndImmutableReleaseAssetAreSeparated()
     {
         var descriptorUri = new Uri(
-            "https://mesmerprism.github.io/rusty-fleet/releases/stable/release.json");
+            "https://mesmerprism.com/Rusty-Fleet/metadata/stable/release.json");
         var descriptorBytes = Encoding.UTF8.GetBytes("{\"fixture\":true}");
         var assetBytes = Encoding.UTF8.GetBytes("installer");
         using (var client = new HttpClient(new SequenceHandler(
@@ -501,7 +570,7 @@ public sealed class FleetInstallerHandoffTests
                    Ok(assetBytes))))
         using (var source = new HttpsFleetReleaseSource(
                    descriptorUri,
-                   new Uri(descriptorUri, "."),
+                   "stable",
                    client))
         {
             Assert.Equal(
@@ -509,13 +578,17 @@ public sealed class FleetInstallerHandoffTests
                 await source.ReadDescriptorAsync(CancellationToken.None));
             using var output = new MemoryStream();
             await source.CopyAssetAsync(
-                FleetInstallerContract.AssetName,
+                ReleaseAsset(sizeBytes: assetBytes.Length),
                 output,
                 maximumBytes: assetBytes.Length,
                 CancellationToken.None);
             Assert.Equal(assetBytes, output.ToArray());
         }
+    }
 
+    [Fact]
+    public async Task ExplicitLocalFixtureStillWorksWithoutNetwork()
+    {
         if (!OperatingSystem.IsWindows())
         {
             return;
@@ -550,6 +623,138 @@ public sealed class FleetInstallerHandoffTests
         {
             Directory.Delete(fixtureRoot, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData("https://mesmerprism.github.io/rusty-fleet/metadata/stable/release.json")]
+    [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/stable/RustyFleet-Setup.exe")]
+    [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/preview/release.json")]
+    [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/release.json")]
+    [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/stable/release.json?latest=1")]
+    public void DescriptorSourceRejectsEveryNoncanonicalMetadataPath(string value)
+    {
+        var exception = Assert.Throws<FleetInstallerException>(() =>
+            new HttpsFleetReleaseSource(
+                new Uri(value),
+                "stable",
+                new HttpClient(new SequenceHandler())));
+        Assert.Equal("fleet_descriptor_source_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("stable")]
+    [InlineData("preview")]
+    [InlineData("dev")]
+    public void DescriptorSourceAcceptsOnlyCanonicalAllowlistedChannel(string channel)
+    {
+        using var source = new HttpsFleetReleaseSource(
+            new Uri(
+                $"https://mesmerprism.com/Rusty-Fleet/metadata/{channel}/release.json"),
+            channel,
+            new HttpClient(new SequenceHandler()));
+        Assert.Equal("pages_metadata", source.Kind);
+    }
+
+    [Theory]
+    [InlineData("prod")]
+    [InlineData("Stable")]
+    [InlineData("nightly")]
+    public void DescriptorSourceRejectsUnallowlistedChannel(string channel)
+    {
+        var exception = Assert.Throws<FleetInstallerException>(() =>
+            new HttpsFleetReleaseSource(
+                new Uri(
+                    $"https://mesmerprism.com/Rusty-Fleet/metadata/{channel}/release.json"),
+                channel,
+                new HttpClient(new SequenceHandler())));
+        Assert.Equal("fleet_descriptor_source_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/stable/RustyFleet-Setup.exe")]
+    [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/latest/download/RustyFleet-Setup.exe")]
+    [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.4/RustyFleet-Setup.exe")]
+    [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/Other.exe")]
+    [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/RustyFleet-Setup.exe?x=1")]
+    public async Task PayloadRejectsNonimmutableOrWrongVersionAssetUrl(string value)
+    {
+        using var fixture = new SignedFixture();
+        fixture.ResignPayload(
+            payload => payload["asset"]!.AsObject()["url"] = value);
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_asset_source_invalid", exception.Code);
+    }
+
+    [Fact]
+    public void EmbeddedReleaseConfigurationIsCompleteAndIgnoresEnvironment()
+    {
+        var metadata = EmbeddedMetadata();
+        var environmentRead = false;
+
+        var settings = FleetInstallerSettings.FromConfiguration(
+            _ =>
+            {
+                environmentRead = true;
+                return "untrusted-override";
+            },
+            metadata);
+
+        Assert.NotNull(settings);
+        Assert.False(environmentRead);
+        Assert.Equal("embedded_pages_metadata", settings.ConfigurationSourceKind);
+        Assert.Equal("pages_metadata", settings.Source.Kind);
+        Assert.EndsWith(
+            Path.Combine("QuestIonAbleFileManager", "FleetInstaller"),
+            settings.PrivateStageRoot,
+            StringComparison.Ordinal);
+
+        var withUnknown = new Dictionary<string, string>(metadata)
+        {
+            ["Unexpected"] = "value"
+        };
+        var exception = Assert.Throws<FleetInstallerException>(() =>
+            FleetInstallerSettings.FromConfiguration(_ => null, withUnknown));
+        Assert.Equal("fleet_embedded_configuration_invalid", exception.Code);
+    }
+
+    [Fact]
+    public void IncompleteOrInvalidEmbeddedConfigurationFailsClosed()
+    {
+        var metadata = EmbeddedMetadata();
+        metadata.Remove("InstallerSignerCertificateSha256");
+        var exception = Assert.Throws<FleetInstallerException>(() =>
+            FleetInstallerSettings.FromConfiguration(_ => null, metadata));
+        Assert.Equal("fleet_embedded_configuration_invalid", exception.Code);
+
+        metadata = EmbeddedMetadata();
+        var invalidSpki = Enumerable.Repeat((byte)0x5a, 128).ToArray();
+        metadata["DescriptorPublicKeySpkiBase64"] =
+            Convert.ToBase64String(invalidSpki);
+        metadata["DescriptorSignerSpkiSha256"] = Sha256(invalidSpki);
+        exception = Assert.Throws<FleetInstallerException>(() =>
+            FleetInstallerSettings.FromConfiguration(_ => null, metadata));
+        Assert.Equal("fleet_trust_policy_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("../FleetInstaller")]
+    [InlineData("QuestIonAbleFileManager/../FleetInstaller")]
+    [InlineData("C:\\private\\FleetInstaller")]
+    [InlineData("/private/FleetInstaller")]
+    [InlineData("QuestIonAbleFileManager//FleetInstaller")]
+    [InlineData("QuestIonAbleFileManager/Fleet Installer")]
+    [InlineData("CON/FleetInstaller")]
+    [InlineData("QuestIonAbleFileManager./FleetInstaller")]
+    public void EmbeddedStateRootMustBeSafeCanonicalAndPerUser(string value)
+    {
+        var metadata = EmbeddedMetadata();
+        metadata["StateRootRelativePath"] = value;
+
+        var exception = Assert.Throws<FleetInstallerException>(() =>
+            FleetInstallerSettings.FromConfiguration(_ => null, metadata));
+        Assert.Equal("fleet_embedded_configuration_invalid", exception.Code);
     }
 
     [Fact]
@@ -650,6 +855,7 @@ public sealed class FleetInstallerHandoffTests
                 ["asset"] = new JsonObject
                 {
                     ["name"] = FleetInstallerContract.AssetName,
+                    ["url"] = ReleaseAssetUrl(version),
                     ["size_bytes"] = AssetBytes.LongLength,
                     ["sha256"] = Sha256(AssetBytes),
                     ["signer_certificate_sha256"] = InstallerSigner,
@@ -747,12 +953,13 @@ public sealed class FleetInstallerHandoffTests
                 Task.FromResult(fixture.DescriptorBytes.ToArray());
 
             public async Task CopyAssetAsync(
-                string assetName,
+                FleetReleaseAsset asset,
                 Stream destination,
                 long maximumBytes,
                 CancellationToken cancellationToken)
             {
-                Assert.Equal(FleetInstallerContract.AssetName, assetName);
+                Assert.Equal(FleetInstallerContract.AssetName, asset.Name);
+                Assert.Equal(ReleaseAssetUrl(fixture.Plan.Version), asset.Url);
                 await destination.WriteAsync(
                     fixture.AssetBytes,
                     cancellationToken);
@@ -832,5 +1039,42 @@ public sealed class FleetInstallerHandoffTests
             response.RequestMessage = request;
             return Task.FromResult(response);
         }
+    }
+
+    private static FleetReleaseAsset ReleaseAsset(
+        string version = "1.2.3",
+        long sizeBytes = 9) =>
+        new(
+            FleetInstallerContract.AssetName,
+            ReleaseAssetUrl(version),
+            sizeBytes,
+            new string('1', 64),
+            InstallerSigner,
+            "application/vnd.microsoft.portable-executable",
+            FleetInstallerContract.InstallerProtocol);
+
+    private static string ReleaseAssetUrl(string version) =>
+        "https://github.com/MesmerPrism/rusty-fleet/releases/download/" +
+        $"v{version}/{FleetInstallerContract.AssetName}";
+
+    private static string Sha256(byte[] value) =>
+        Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
+
+    private static Dictionary<string, string> EmbeddedMetadata()
+    {
+        using var rsa = RSA.Create(2048);
+        var spki = rsa.ExportSubjectPublicKeyInfo();
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["ConfigurationVersion"] = "2",
+            ["DescriptorUri"] =
+                "https://mesmerprism.com/Rusty-Fleet/metadata/stable/release.json",
+            ["DescriptorPublicKeySpkiBase64"] = Convert.ToBase64String(spki),
+            ["DescriptorSignerSpkiSha256"] = Sha256(spki),
+            ["InstallerSignerCertificateSha256"] = InstallerSigner,
+            ["Channel"] = "stable",
+            ["StateRootRelativePath"] =
+                "QuestIonAbleFileManager/FleetInstaller"
+        };
     }
 }

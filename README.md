@@ -67,8 +67,10 @@ action can be automated and tested.
   target-free, explicitly non-authorizing description of its existing typed
   registry without reading stdin or initializing a backend;
 - optionally verify one configured signed Rusty Fleet Windows release and open
-  Fleet's own guided installer, without giving File Manager Fleet device,
-  connectivity, hotspot, credential, policy, or hidden-elevation authority;
+  Fleet's own guided installer from a signed Pages metadata document whose v2
+  payload binds one immutable GitHub Release asset, without giving File Manager
+  Fleet device, connectivity, hotspot, credential, policy, or hidden-elevation
+  authority;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -200,11 +202,15 @@ The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact
 `fleet status` / `fleet install` CLI routes even when ADB is absent. It accepts
 no runtime URL or executable argument. Core verifies the configured signed
-release descriptor, exact `RustyFleet-Setup.exe` size and SHA-256, Windows
-signer, and Fleet's non-mutating plan before opening the visible Fleet-owned
-installer. Receipts expose release evidence but no source URL, local path,
-credential, process argument, or device data. Fleet remains the authority for
-all fleet/device/connectivity behavior.
+v2 release descriptor at the canonical MesmerPrism Pages metadata path, its
+explicit immutable numeric-version GitHub Release URL, exact
+`RustyFleet-Setup.exe` size and SHA-256, Windows signer, and Fleet's
+non-mutating plan before opening the visible Fleet-owned installer. Published
+releases embed their all-or-none trust configuration; source builds may use
+the explicit development environment fallback. Pages remains binary-free.
+Receipts expose release evidence and truthful source kind but no source URL,
+local path, credential, process argument, or device data. Fleet remains the
+authority for all fleet/device/connectivity behavior.
 The optional [Rusty Fleet integration](docs/fleet-integration.md) is disabled
 until the operator configures an approved staging root. Its shipped v1 CLI
 routes are single-device and read-only: bounded list, staged pull, and durable

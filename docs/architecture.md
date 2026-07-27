@@ -156,13 +156,16 @@ value generated from `$(Version)`, then checked against the shared contract's
 strict lowercase semantic-version grammar before any descriptor is emitted.
 
 The Fleet installer handoff owns only release-consumer verification: a pinned
-descriptor RSA key and channel, strict signed payload, exact installer
-size/hash/name/protocol, pinned Authenticode signer, a private retained stage,
-replay/downgrade state, and Fleet's fixed non-mutating plan contract. Fleet's
-guided installer owns installation behavior and any visible Windows consent.
-Neither the WPF nor CLI can choose a source, executable, argument vector,
-credential, device, ADB action, network action, or elevation mode. See
-[Fleet installer handoff](fleet-installer-handoff.md).
+descriptor RSA key and channel, strict v2 signed payload, exact immutable
+GitHub Release URL/version plus installer size/hash/name/protocol, pinned
+Authenticode signer, a private retained stage, replay/downgrade state, and
+Fleet's fixed non-mutating plan contract. The canonical MesmerPrism Pages path
+owns metadata only; it is never an installer origin. Published builds use
+release-owned embedded trust metadata and ignore developer environment
+overrides. Fleet's guided installer owns installation behavior and any visible
+Windows consent. Neither the WPF nor CLI can choose a source, executable,
+argument vector, credential, device, ADB action, network action, or elevation
+mode. See [Fleet installer handoff](fleet-installer-handoff.md).
 
 The shipped CLI has no push or cancellation authority. A Core host may
 advertise push only when it injects a verifier for the current Quest identity

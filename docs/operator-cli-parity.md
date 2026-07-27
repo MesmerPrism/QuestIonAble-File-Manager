@@ -17,8 +17,11 @@ preview/confirmation UI owns the managed operation; File Manager's ordinary
 WPF `Keep awake` button continues to map only to `device keep-awake`.
 The distribution-only **Get Fleet** tab is different: its two buttons are
 ordinary typed operator routes with exact CLI equivalents. They verify and
-handoff one configured Fleet installer release; they do not project any Fleet
-runtime or device capability.
+handoff one configured Fleet installer release: signed canonical Pages
+metadata binds one immutable numeric-version GitHub Release Setup asset.
+Published builds take this trust configuration only from embedded release
+metadata; status reports its sanitized source kind. They do not project any
+Fleet runtime or device capability.
 That tab also owns File Manager's private Quest connectivity-profile
 lifecycle. Its status/list/import/revoke controls and the CLI use the same
 `OperatorCommand` dispatcher without initializing ADB. The convenience action
@@ -153,8 +156,10 @@ Fleet installer parity additionally proves the CLI accepts only the two exact
 argument vectors above, install requires the same explicit confirmation as the
 WPF dialog, and neither route initializes ADB. Offline contract tests cover
 strict/duplicate JSON, signatures and signer pins, product/channel/asset
-binding, size and digest, freshness, replay/downgrade, redirects, process
-timeouts, private-stage cleanup, and reparse rejection.
+binding, v1 rejection, exact immutable URL/version tag, size and digest,
+freshness, replay/downgrade, Pages-binary rejection, redirect escape, embedded
+configuration precedence/completeness, receipt redaction, process timeouts,
+private-stage cleanup, and reparse rejection.
 
 Connectivity-profile parity proves status/list receipts contain only IDs and
 sanitized state, both import sources reach the same strict parser and

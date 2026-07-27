@@ -767,7 +767,7 @@
                                 <TextBlock Margin="0,8,0,0"
                                            Foreground="{StaticResource MutedTextBrush}"
                                            TextWrapping="Wrap"
-                                           Text="Optional distribution bootstrap. File Manager verifies one configured, signed Fleet release and opens Fleet's own visible guided installer. Fleet—not File Manager—owns headset discovery, connectivity, Wi-Fi, and device operations." />
+                                           Text="Optional distribution bootstrap. File Manager verifies signed MesmerPrism Pages metadata and its exact immutable GitHub Release Setup asset, then opens Fleet's own visible guided installer. Pages carries no installer binary. Fleet—not File Manager—owns headset discovery, connectivity, Wi-Fi, and device operations." />
                                 <TextBlock x:Name="FleetInstallerStatusText"
                                            Margin="0,18,0,0"
                                            Text="Fleet installer status has not been checked."

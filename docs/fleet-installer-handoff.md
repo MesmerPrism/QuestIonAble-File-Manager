@@ -31,34 +31,62 @@ the route without explicit operator confirmation.
 downloads and verifies the descriptor and reads File Manager's local
 replay/downgrade state. `install` performs the verified handoff.
 
-## Deployment Configuration
+## Release-Owned Configuration
 
-The deployment owner configures the consumer trust boundary outside the CLI:
+A published File Manager release receives its Fleet consumer trust boundary at
+build time. `Invoke-ReleaseBuild.ps1` accepts the following all-or-none
+arguments and passes them to every application/package build as MSBuild
+properties:
+
+| Release argument / MSBuild property | Meaning |
+| --- | --- |
+| `FleetInstallerReleaseDescriptorUri` | Exact `https://mesmerprism.com/Rusty-Fleet/metadata/<channel>/release.json` |
+| `FleetInstallerDescriptorPublicKeySpkiBase64` | Canonical base64 DER RSA SubjectPublicKeyInfo; public verification material, never a private key |
+| `FleetInstallerDescriptorSignerSpkiSha256` | Lowercase SHA-256 of that exact SPKI |
+| `FleetInstallerSetupSignerCertificateSha256` | Lowercase SHA-256 of the exact DER Windows Setup signer certificate |
+| `FleetInstallerChannel` | Exact `stable`, `preview`, or `dev` channel bound into both the metadata path and signed payload |
+| `FleetInstallerStateRootRelativePath` | One-to-four-segment safe relative path resolved under the current user's Local Application Data |
+
+Core emits these values as versioned
+`QuestIonAbleFileManager.FleetInstaller.*` assembly metadata only when all six
+are present. The release script rejects partial, noncanonical, pin-mismatched,
+or unsafe input, clears ambient values while it builds, and restores the
+caller's environment afterward. No private key, certificate, absolute path,
+installer binary, or source credential belongs in the repository or embedded
+configuration.
+
+Embedded configuration is authoritative. When it exists, File Manager does not
+read the developer environment variables below, so another same-user process
+cannot redirect a published release by changing them. A release built without
+embedded configuration is inert unless deliberately configured as a
+development build; status reports `not_configured`.
+
+## Development And Offline Configuration
+
+Source builds retain an explicit environment path for development and offline
+tests:
 
 | Environment variable | Meaning |
 | --- | --- |
-| `QUESTIONABLE_FILE_MANAGER_FLEET_RELEASE_DESCRIPTOR` | One clean HTTPS descriptor URI under the reviewed `github.com/MesmerPrism/rusty-fleet/releases/download/…` or `mesmerprism.github.io/rusty-fleet/…` path |
+| `QUESTIONABLE_FILE_MANAGER_FLEET_RELEASE_DESCRIPTOR` | The exact canonical MesmerPrism Pages metadata URI |
 | `QUESTIONABLE_FILE_MANAGER_FLEET_INSTALLER_STATE` | Local private state/staging directory |
 | `QUESTIONABLE_FILE_MANAGER_FLEET_DESCRIPTOR_PUBLIC_KEY` | PEM file containing the trusted RSA descriptor public key |
 | `QUESTIONABLE_FILE_MANAGER_FLEET_DESCRIPTOR_SIGNER_SHA256` | Lowercase SHA-256 of that key's DER SubjectPublicKeyInfo |
 | `QUESTIONABLE_FILE_MANAGER_FLEET_INSTALLER_SIGNER_SHA256` | Lowercase SHA-256 of the exact DER Windows signer certificate |
 | `QUESTIONABLE_FILE_MANAGER_FLEET_CHANNEL` | Pinned descriptor channel; defaults to `stable` |
 
-If the descriptor variable is absent, the feature reports `not_configured` and
-ordinary File Manager behavior is unaffected. A partial or invalid
-configuration fails closed.
+A partial or invalid configuration fails closed. An absolute local descriptor
+path is accepted only when
+`QUESTIONABLE_FILE_MANAGER_FLEET_ALLOW_LOCAL_FIXTURE=1`; its sibling
+`RustyFleet-Setup.exe` is test input only. The status receipt distinguishes
+`embedded_pages_metadata`, `environment_pages_metadata`,
+`environment_local_fixture`, and inert `none` source kinds without exposing a
+URL or path.
 
-An absolute local descriptor path is accepted only when
-`QUESTIONABLE_FILE_MANAGER_FLEET_ALLOW_LOCAL_FIXTURE=1`. This exists for
-offline validation. The fixture's installer must be the sibling file named
-exactly `RustyFleet-Setup.exe`; production deployments use HTTPS. Do not commit
-private paths, private keys, certificates, installer binaries, or live
-configuration.
-
-The Windows identity that launches File Manager can replace environment
-configuration and its referenced trust files. Deployment must protect those
-inputs from callers that are not allowed to choose the Fleet distribution
-trust root. This feature does not claim same-user process isolation.
+The production source split is fixed: MesmerPrism Pages carries only the small
+signed `release.json` metadata document. It must not carry, mirror, redirect
+to, or place `RustyFleet-Setup.exe` beside that document. The signed payload
+instead binds the exact immutable GitHub Release asset URL.
 
 ## Signed Release Contract
 
@@ -66,7 +94,7 @@ The descriptor envelope uses strict UTF-8 JSON:
 
 ```json
 {
-  "schema": "rusty.fleet.release_descriptor_envelope.v1",
+  "schema": "rusty.fleet.release_descriptor_envelope.v2",
   "payload_base64url": "<canonical-base64url>",
   "signature_base64url": "<canonical-base64url>",
   "signer_spki_sha256": "<64-lowercase-hex>"
@@ -79,7 +107,7 @@ signed payload is also strict:
 
 ```json
 {
-  "schema": "rusty.fleet.windows_release.v1",
+  "schema": "rusty.fleet.windows_release.v2",
   "descriptor_id": "<release-id>",
   "product": "rusty-fleet",
   "version": "1.2.3",
@@ -88,6 +116,7 @@ signed payload is also strict:
   "expires_at_ms": 1800086400000,
   "asset": {
     "name": "RustyFleet-Setup.exe",
+    "url": "https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/RustyFleet-Setup.exe",
     "size_bytes": 123456,
     "sha256": "<64-lowercase-hex>",
     "signer_certificate_sha256": "<64-lowercase-hex>",
@@ -97,17 +126,19 @@ signed payload is also strict:
 }
 ```
 
-Unknown or duplicate properties, case variants, noncanonical base64url,
-malformed three-part versions, an issue time more than 30 seconds in the
-future, expiry, validity longer than fourteen days, wrong
-product/channel/asset/protocol, oversized inputs, and signer mismatch are
+Unknown or duplicate properties, v1 schemas, case variants, noncanonical
+base64url, malformed three-part versions, an issue time more than 30 seconds in
+the future, expiry, validity longer than fourteen days, wrong
+product/channel/asset/protocol, an asset URL whose exact numeric `v<version>`
+tag differs from the payload, oversized inputs, and signer mismatch are
 rejected. The descriptor is capped at 64 KiB and the asset at 512 MiB.
 
-The HTTPS client does not follow redirects automatically. GitHub Release
-downloads may make one HTTPS redirect from `github.com` to
+The HTTPS client does not follow redirects automatically. The canonical Pages
+metadata request may not redirect. The explicit GitHub Release asset may make
+one HTTPS redirect from `github.com` to
 `release-assets.githubusercontent.com`; any other or chained redirect is
-rejected. GitHub Pages downloads do not gain a redirect exception. Both the
-stream bound and the descriptor's exact byte count are enforced.
+rejected. Both the stream bound and the descriptor's exact byte count are
+enforced.
 
 ## Verified Handoff Sequence
 
@@ -178,12 +209,18 @@ includes:
 
 - exact WPF/CLI typed route parity and confirmation;
 - strict, duplicate, and unknown JSON fields;
+- v1 envelope/payload rejection and exact v2 schema binding;
 - descriptor signature/SPKI pin and installer signer pin;
-- product, channel, version, asset name/media/protocol bindings;
+- product, channel, version, asset name/media/protocol and immutable URL/tag
+  bindings;
 - exact asset size and SHA-256;
 - future, expired, and overlong descriptor validity;
 - replay and downgrade across service instances;
-- unreviewed and chained redirects;
+- Pages-sibling binary rejection and unreviewed, escaping, and chained
+  redirects;
+- embedded-over-environment precedence, incomplete/unknown configuration, and
+  unsafe per-user state paths;
+- receipt exclusion of source URLs and private paths;
 - installer-plan mismatch;
 - guided timeout, process-tree termination, and private-stage cleanup;
 - workspace reparse rejection.

@@ -161,13 +161,20 @@ documented.
   CLI or a framework-dependent apphost.
 - The optional Fleet installer handoff is distribution bootstrap only. It
   accepts no caller URL, program, argument, credential, device, ADB, hotspot,
-  or elevation choice. Configuration selects one reviewed HTTPS Rusty Fleet
-  GitHub Release/Pages descriptor, or an explicitly enabled local fixture, and
-  pins the descriptor RSA SPKI SHA-256, channel, and Windows signer-certificate
-  SHA-256. Core strictly verifies schema, product, three-part version, freshness,
-  exact asset name/size/SHA-256/protocol, RSA-PSS signature, Authenticode, and
-  the Fleet-owned `--plan --json` result before starting the exact installer
-  with no arguments. Keep staging local, non-reparse, retained against
+  or elevation choice. Published releases embed one all-or-none versioned trust
+  configuration: the exact canonical
+  `https://mesmerprism.com/Rusty-Fleet/metadata/<channel>/release.json`
+  descriptor, descriptor RSA SPKI and pin, channel, Setup signer pin, and safe
+  per-user relative state root. Embedded configuration is authoritative and
+  ignores environment overrides. Environment and explicitly enabled local
+  fixture configuration are development-only fallbacks. MesmerPrism Pages is
+  metadata-only: never publish, derive, or download a sibling Setup binary
+  there. The strict v2 signed payload binds the exact immutable
+  `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`
+  asset URL. Core verifies schema, product, exact three-part version/tag,
+  freshness, asset name/size/SHA-256/protocol, RSA-PSS signature,
+  Authenticode, and the Fleet-owned `--plan --json` result before starting the
+  exact installer with no arguments. Keep staging local, non-reparse, retained against
   substitution, create-new, and cleaned by handle. Persist replay and
   strictly-monotonic-version state with write-through before guided launch.
   Status and handoff receipts must never contain
@@ -332,6 +339,11 @@ pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -ReleaseDirectory ./artifacts/release `
   -RemoveAfterTest
 ```
+
+If that release enables the optional Fleet distribution handoff, append the
+complete six-argument public trust configuration documented in
+`docs/release-workflow.md`. Omit all six for an inert release; never rely on
+ambient MSBuild/environment values, and never commit real publisher values.
 
 Use `-DirectPackage` only when the agent shell cannot accept UAC. That fallback
 validates the helper plan and signed MSIX install/launch separately, and the

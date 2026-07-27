@@ -1509,12 +1509,14 @@ internal static class CliApplication
             Fleet uses only the hash-pinned self-contained release artifact named
             questionable-file-manager-kiosk-v2-provider.exe, never a dotnet-build apphost.
             The optional fleet routes are a distribution bootstrap only. Configuration
-            selects one HTTPS GitHub release/Pages descriptor (or an explicitly enabled
-            local fixture) and pins both its descriptor key and Windows installer signer.
-            File Manager verifies the signed, hash-bound descriptor and exact
-            RustyFleet-Setup.exe, then invokes only Fleet's fixed plan and guided setup
-            entrypoints. It accepts no URL, program, argument, credential, device, ADB,
-            hotspot, or elevation option and reports only sanitized handoff metadata.
+            selects the canonical MesmerPrism Pages metadata descriptor (or an explicitly
+            enabled development fixture) and pins both its descriptor key and Windows
+            installer signer. Its strict v2 payload binds the exact numeric-version GitHub
+            Release URL for RustyFleet-Setup.exe; Pages never carries the binary. Embedded
+            release configuration ignores environment overrides. File Manager then invokes
+            only Fleet's fixed plan and guided setup entrypoints. It accepts no URL, program,
+            argument, credential, device, ADB, hotspot, or elevation option and reports
+            only sanitized handoff metadata.
             """);
     }
 }
