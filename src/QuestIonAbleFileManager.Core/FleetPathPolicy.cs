@@ -672,8 +672,10 @@ internal static class FleetWindowsFileSafety
     private const uint FileReadAttributes = 0x00000080;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
+    private const uint FileShareDelete = 0x00000004;
     private const uint CreateNew = 1;
     private const uint OpenExisting = 3;
+    private const uint OpenAlways = 4;
     private const uint FileAttributeNormal = 0x00000080;
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
@@ -714,6 +716,89 @@ internal static class FleetWindowsFileSafety
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open staged push input '{path}'");
         return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+    }
+
+    public static FileStream CreateNewRetainedReadableFile(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead | GenericWrite,
+            FileShareRead,
+            IntPtr.Zero,
+            CreateNew,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"create retained file '{path}'");
+        return new FileStream(handle, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
+    }
+
+    public static FileStream OpenRetainedStagedReadOnlyFile(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead,
+            FileShareRead,
+            IntPtr.Zero,
+            OpenExisting,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"open retained staged file '{path}'");
+        return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+    }
+
+    public static FileStream OpenFileForDeletion(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead | DeleteAccess,
+            0,
+            IntPtr.Zero,
+            OpenExisting,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"open file for deletion '{path}'");
+        return new FileStream(handle, FileAccess.Read, 4 * 1024, isAsync: false);
+    }
+
+    public static FileStream OpenRetainedReadOnlyFile(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead | DeleteAccess,
+            FileShareRead | FileShareWrite | FileShareDelete,
+            IntPtr.Zero,
+            OpenExisting,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"open retained file '{path}'");
+        return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+    }
+
+    public static FileStream OpenOrCreateExclusiveFile(string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead | GenericWrite,
+            0,
+            IntPtr.Zero,
+            OpenAlways,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(handle, $"open exclusive file '{path}'");
+        return new FileStream(handle, FileAccess.ReadWrite, 4 * 1024, isAsync: false);
+    }
+
+    public static FleetWindowsFileIdentity GetIdentity(SafeFileHandle handle)
+    {
+        var information = GetInformation(handle);
+        var standard = GetStandardInformation(handle);
+        return new FleetWindowsFileIdentity(
+            information.VolumeSerialNumber,
+            ((ulong)information.FileIndexHigh << 32) | information.FileIndexLow,
+            ((long)information.FileSizeHigh << 32) | information.FileSizeLow,
+            information.NumberOfLinks,
+            standard.DeletePending,
+            (information.FileAttributes & FileAttributeReparsePoint) != 0);
     }
 
     public static SafeFileHandle CreateNewOwnedFileHandle(string path)
@@ -954,3 +1039,11 @@ internal static class FleetWindowsFileSafety
         ref FileDispositionInformation fileInformation,
         uint bufferSize);
 }
+
+internal readonly record struct FleetWindowsFileIdentity(
+    uint VolumeSerialNumber,
+    ulong FileIndex,
+    long SizeBytes,
+    uint NumberOfLinks,
+    bool DeletePending,
+    bool IsReparsePoint);

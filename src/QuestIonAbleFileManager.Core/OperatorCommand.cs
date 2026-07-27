@@ -11,7 +11,10 @@ public enum OperatorCommandKind
     PushFile,
     ListPackages,
     ExportApk,
+    InspectApk,
     InstallApk,
+    LaunchInspectedApp,
+    ObserveInspectedApp,
     InstallApkBundle,
     EnableWifiAdb,
     ConnectWifiAdb,
@@ -322,6 +325,40 @@ public static class OperatorCommands
             serial: serial,
             localPath: fullApkPath,
             installOptions: options);
+    }
+
+    public static OperatorCommand InspectApk(string apkPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.InspectApk,
+            ["apk", "inspect", "--file", fullPath],
+            localPath: fullPath);
+    }
+
+    public static OperatorCommand LaunchInspectedApp(string serial, string apkPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.LaunchInspectedApp,
+            ["apk", "launch", "--serial", serial, "--file", fullPath],
+            serial: serial,
+            localPath: fullPath);
+    }
+
+    public static OperatorCommand ObserveInspectedApp(string serial, string apkPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.ObserveInspectedApp,
+            ["apk", "observe", "--serial", serial, "--file", fullPath],
+            serial: serial,
+            localPath: fullPath);
     }
 
     public static OperatorCommand InstallApkBundle(
@@ -722,6 +759,10 @@ public sealed record OperatorExecutionResult(
     IReadOnlyList<string>? Packages = null,
     CommandResult? CommandResult = null,
     ApkExportResult? ApkExportResult = null,
+    ApkArtifactInspection? ApkArtifactInspection = null,
+    InspectedApkInstallResult? InspectedApkInstallResult = null,
+    ResolvedAppLaunchResult? ResolvedAppLaunchResult = null,
+    AppRuntimeObservation? AppRuntimeObservation = null,
     ApkBundleInstallResult? ApkBundleInstallResult = null,
     WifiAdbEnableResult? WifiAdbEnableResult = null,
     WifiAdbConnectionResult? WifiAdbConnectionResult = null,
@@ -826,13 +867,41 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                         command.Overwrite,
                         cancellationToken).ConfigureAwait(false));
 
-            case OperatorCommandKind.InstallApk:
+            case OperatorCommandKind.InspectApk:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.InstallApkAsync(
+                    ApkArtifactInspection: await _client.InspectApkAsync(
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.InstallApk:
+                {
+                    var install = await _client.InstallInspectedApkAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.InstallOptions,
+                        cancellationToken).ConfigureAwait(false);
+                    return new OperatorExecutionResult(
+                        command,
+                        CommandResult: install.CommandResult,
+                        ApkArtifactInspection: install.Artifact,
+                        InspectedApkInstallResult: install);
+                }
+
+            case OperatorCommandKind.LaunchInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ResolvedAppLaunchResult: await _client.LaunchInspectedAppAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    AppRuntimeObservation: await _client.ObserveInspectedAppAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InstallApkBundle:

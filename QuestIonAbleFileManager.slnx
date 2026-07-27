@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/QuestIonAbleFileManager.Api/QuestIonAbleFileManager.Api.csproj" />
     <Project Path="src/QuestIonAbleFileManager.App/QuestIonAbleFileManager.App.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Cli/QuestIonAbleFileManager.Cli.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj" />

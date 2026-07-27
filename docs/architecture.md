@@ -12,12 +12,15 @@ general Quest runtime console or fleet manager.
 - ADB tool discovery and bounded process execution.
 - Serial-scoped device discovery and operations.
 - Browsing, pulling, and explicit pushing on shell-accessible paths.
-- Third-party package listing, single-APK export, hashing, single-APK install,
-  and atomic folder-based split APK set install.
+- Third-party package listing, single-APK export, inspected/hash-bound
+  single-APK install, constrained resolved launch, structured runtime
+  observation, and atomic folder-based split APK set install.
 - Explicit Wi-Fi ADB enable/connect/disconnect with no ADB daemon lifecycle.
 - Bounded parallel single-APK and complete split-set installation across
   distinct Wi-Fi ADB endpoints, with one result per target.
 - Windows GUI and CLI projections.
+- Optional inert dedicated loopback API projection over a retained,
+  one-use subset of the same typed command registry.
 - Optional single-headset Rusty Kiosk direct transport for typed Kiosk control,
   fixed tags, app-owned staging, and attended PackageInstaller sessions.
 - Optional disabled-by-default Rusty Fleet interop for one exact serial,
@@ -45,6 +48,23 @@ Android's package manager owns installed package paths. ADB owns transport.
 `QuestIonAbleFileManager.Core` owns safe command construction, parsing, transfer
 policy, and export completeness checks. The app and CLI adapt user intent into
 that core and do not redefine behavior.
+
+The inspected-deployment boundary derives identity from one local APK, confirms
+installation through exact serial/package/version/signer/base-APK byte
+readback, resolves only an exported launcher activity, and observes only bounded
+package/activity/process state. See `inspected-deployment.md`.
+
+The dedicated local API owns no device semantics. Core owns its strict
+preflight/retain/consume/status/cancel state machine and exact command digest;
+the API executable owns only explicit loopback binding, bearer admission,
+bounded HTTP bodies, and structured projection. The API is Windows-only.
+Private create-new staging, retained ancestor/directory/file handles, bounded
+HMAC journal plus monotonic external anchor, replay tombstones, serialized
+capacity reservations, journal-before-delete cleanup debt, staged-byte
+reinspection on recovery, and truthful outcome-unknown recovery are part of
+that Core authority. The anchor detects stale-journal replacement but makes no
+claim against compromise of the same Windows user and secret. See
+`local-api.md`.
 
 Wi-Fi enablement is a sequenced transaction: read `wlan0` from one USB serial,
 run `tcpip` on that same serial, connect one validated endpoint, and verify its
@@ -161,6 +181,10 @@ evidence local.
 - Mutation tests prove sent/pending/confirmed ordering, wearer-prompt pending
   behavior, later status reconciliation, CPU/GPU property readback, and bounded
   SHA-256 tag transfer without raw Android-data paths.
+- Local API tests run without network activation and prove credential bounds,
+  explicit loopback admission, strict bounded parsing, closed capabilities,
+  retained-command/artifact digests, one-use/replay, expiry, exact read-only
+  target preflight, status projection, and operation-local cancellation.
 - Fleet interop tests prove disabled/absent/unsupported behavior, strict
   request parsing, exact pre/post serial discovery, bounded list, staged
   pull/hash, remote canonical escape rejection, transfer hard stops,

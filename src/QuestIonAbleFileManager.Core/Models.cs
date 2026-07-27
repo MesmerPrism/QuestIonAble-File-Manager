@@ -78,6 +78,45 @@ public sealed record ApkInstallOptions(
     bool GrantRuntimePermissions = false,
     bool AllowTestPackages = false);
 
+public sealed record ApkArtifactIdentity(
+    string PackageName,
+    long VersionCode,
+    string? VersionName,
+    string SignerSha256,
+    string? SplitName);
+
+public sealed record ApkArtifactInspection(
+    string Path,
+    long SizeBytes,
+    string Sha256,
+    ApkArtifactIdentity Identity);
+
+public sealed record InstalledApkIdentity(
+    string Serial,
+    ApkArtifactIdentity? Identity,
+    IReadOnlyList<string> ApkPaths,
+    string BaseApkSha256,
+    long BaseApkSizeBytes);
+
+public sealed record InspectedApkInstallResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity Installed,
+    CommandResult CommandResult);
+
+public sealed record ResolvedAppLaunchResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity Installed,
+    string Component,
+    CommandResult CommandResult,
+    bool ComponentObservedResumed);
+
+public sealed record AppRuntimeObservation(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity? Installed,
+    bool IsForeground,
+    bool IsTopResumed,
+    IReadOnlyList<int> ProcessIds);
+
 public sealed record ApkExportResult(
     string PackageName,
     string SourcePath,
@@ -170,6 +209,13 @@ public sealed class SplitPackageException : InvalidOperationException
     public string PackageName { get; }
 
     public IReadOnlyList<string> ApkPaths { get; }
+}
+
+public sealed class PackageNotInstalledException(string serial, string packageName)
+    : InvalidOperationException($"The package is not installed on the selected serial.")
+{
+    public string Serial { get; } = serial;
+    public string PackageName { get; } = packageName;
 }
 
 public sealed class FleetTransferLimitException : InvalidOperationException

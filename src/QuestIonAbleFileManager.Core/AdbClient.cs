@@ -10,15 +10,33 @@ public sealed class AdbClient
     private static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan TransferTimeout = TimeSpan.FromMinutes(5);
     private readonly ICommandRunner _runner;
+    private readonly AndroidBuildToolPaths? _buildTools;
 
-    public AdbClient(string adbPath, ICommandRunner? runner = null)
+    public AdbClient(string adbPath, ICommandRunner? runner = null, AndroidBuildToolPaths? buildTools = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(adbPath);
         AdbPath = adbPath;
         _runner = runner ?? new CommandRunner();
+        _buildTools = buildTools;
     }
 
     public string AdbPath { get; }
+
+    internal ApkArtifactInspector CreateApkInspector() =>
+        new(_runner, _buildTools ?? AndroidBuildToolPaths.FindFromAdb(AdbPath));
+
+    public async Task<ApkArtifactInspection> InspectApkAsync(
+        string apkPath,
+        CancellationToken cancellationToken = default)
+    {
+        var reportedPath = Path.GetFullPath(apkPath);
+        using var admission = await ImmutableApkAdmission.CreateAsync(
+            reportedPath,
+            cancellationToken).ConfigureAwait(false);
+        var inspected = await CreateApkInspector()
+            .InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        return inspected with { Path = reportedPath };
+    }
 
     public static AdbClient CreateDefault(string? explicitAdbPath = null, ICommandRunner? runner = null) =>
         new(AdbLocator.FindOrThrow(explicitAdbPath), runner);
@@ -355,11 +373,24 @@ public sealed class AdbClient
             cancellationToken).ConfigureAwait(false);
         result.EnsureSuccess($"Inspect package {packageName}");
 
+        var lines = result.StandardOutput.ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+        {
+            throw new PackageNotInstalledException(serial, packageName);
+        }
+        if (lines.Any(static line =>
+                !line.StartsWith("package:/", StringComparison.Ordinal) ||
+                !line["package:".Length..].EndsWith(".apk", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidDataException(
+                "Package path inspection returned malformed or unexpected non-empty output.");
+        }
         var paths = AdbOutputParser.ParsePackagePaths(result.StandardOutput);
         if (paths.Count == 0)
         {
-            throw new InvalidOperationException(
-                $"Android did not report an installed APK path for {packageName}.");
+            throw new InvalidDataException(
+                "Package path inspection did not return a valid installed APK path.");
         }
 
         return new QuestPackage(packageName, paths);
@@ -448,6 +479,261 @@ public sealed class AdbClient
         result.EnsureSuccess($"Install {Path.GetFileName(fullApkPath)}");
         await GetThirdPartyPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    public async Task<InspectedApkInstallResult> InstallInspectedApkAsync(
+        string serial,
+        string apkPath,
+        ApkInstallOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var reportedPath = Path.GetFullPath(apkPath);
+        using var admission = await ImmutableApkAdmission.CreateAsync(
+            reportedPath,
+            cancellationToken).ConfigureAwait(false);
+        var inspector = CreateApkInspector();
+        var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        RejectSplitArtifact(artifact);
+        var current = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        if (current.Sha256 != artifact.Sha256 || current.SizeBytes != artifact.SizeBytes ||
+            current.Identity != artifact.Identity)
+        {
+            throw new InvalidDataException("The APK changed while it was being admitted for installation.");
+        }
+
+        var arguments = CreateInstallArguments("install", options);
+        arguments.Add(admission.Path);
+        var commandResult = await RunForDeviceAsync(
+            serial, arguments, TransferTimeout, cancellationToken).ConfigureAwait(false);
+        commandResult.EnsureSuccess($"Install {Path.GetFileName(artifact.Path)}");
+        var installed = await ReadInstalledIdentityAsync(
+            serial, artifact, cancellationToken).ConfigureAwait(false);
+        return new InspectedApkInstallResult(
+            artifact with { Path = reportedPath },
+            installed,
+            commandResult);
+    }
+
+    public async Task<InstalledApkIdentity> ReadInstalledIdentityAsync(
+        string serial,
+        ApkArtifactInspection expectedArtifact,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentNullException.ThrowIfNull(expectedArtifact);
+        var packageName = AndroidInput.RequirePackageName(expectedArtifact.Identity.PackageName);
+        var package = await InspectPackageAsync(serial, packageName, cancellationToken).ConfigureAwait(false);
+        var basePaths = package.ApkPaths.Where(path =>
+            string.Equals(Path.GetFileName(path), "base.apk", StringComparison.OrdinalIgnoreCase) ||
+            package.ApkPaths.Count == 1).ToArray();
+        if (basePaths.Length != 1)
+        {
+            throw new InvalidDataException("Installed package readback did not identify exactly one base APK.");
+        }
+
+        var streamed = await StreamInstalledBaseApkAsync(
+            serial,
+            basePaths[0],
+            expectedArtifact.SizeBytes,
+            cancellationToken).ConfigureAwait(false);
+        var exactBytes = streamed.BytesWritten == expectedArtifact.SizeBytes &&
+            string.Equals(streamed.Sha256, expectedArtifact.Sha256, StringComparison.OrdinalIgnoreCase);
+        return new InstalledApkIdentity(
+            serial,
+            exactBytes ? expectedArtifact.Identity : null,
+            package.ApkPaths,
+            streamed.Sha256,
+            streamed.BytesWritten);
+    }
+
+    public async Task<ResolvedAppLaunchResult> LaunchInspectedAppAsync(
+        string serial,
+        string apkPath,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var reportedPath = Path.GetFullPath(apkPath);
+        using var admission = await ImmutableApkAdmission.CreateAsync(
+            reportedPath,
+            cancellationToken).ConfigureAwait(false);
+        var inspector = CreateApkInspector();
+        var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        RejectSplitArtifact(artifact);
+        var installed = await ReadInstalledIdentityAsync(
+            serial, artifact, cancellationToken).ConfigureAwait(false);
+        EnsureSameArtifact(artifact, installed);
+        var query = await RunForDeviceAsync(
+            serial,
+            ["shell", "cmd", "package", "query-activities", "--brief", "--components",
+             "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+             artifact.Identity.PackageName],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        query.EnsureSuccess("Resolve exported launcher activity");
+        var components = query.StandardOutput.ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => line.StartsWith(artifact.Identity.PackageName + "/", StringComparison.Ordinal))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (components.Length != 1 || !IsSafeComponent(components[0], artifact.Identity.PackageName))
+        {
+            throw new InvalidDataException(
+                "Package must resolve to exactly one exported launcher activity.");
+        }
+        var packageDump = await RunForDeviceAsync(
+            serial,
+            ["shell", "dumpsys", "package", artifact.Identity.PackageName],
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        packageDump.EnsureSuccess("Prove launcher activity export state");
+        if (!ProvesExportedActivity(packageDump.StandardOutput, components[0]))
+        {
+            throw new InvalidDataException(
+                "The resolved launcher activity was not proven exported before dispatch.");
+        }
+
+        var start = await RunForDeviceAsync(
+            serial, ["shell", "am", "start", "-n", components[0]],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        start.EnsureSuccess("Start resolved launcher activity");
+        var activities = await RunForDeviceAsync(
+            serial, ["shell", "dumpsys", "activity", "activities"],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        activities.EnsureSuccess("Read back launched activity");
+        var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
+            .Any(line => (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
+                          line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
+                         line.Contains(components[0], StringComparison.Ordinal));
+        return new ResolvedAppLaunchResult(
+            artifact with { Path = reportedPath },
+            installed,
+            components[0],
+            start,
+            observed);
+    }
+
+    public async Task<AppRuntimeObservation> ObserveInspectedAppAsync(
+        string serial,
+        string apkPath,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var reportedPath = Path.GetFullPath(apkPath);
+        using var admission = await ImmutableApkAdmission.CreateAsync(
+            reportedPath,
+            cancellationToken).ConfigureAwait(false);
+        var inspector = CreateApkInspector();
+        var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        RejectSplitArtifact(artifact);
+        InstalledApkIdentity? installed = null;
+        try
+        {
+            installed = await ReadInstalledIdentityAsync(
+                serial, artifact, cancellationToken).ConfigureAwait(false);
+            EnsureSameArtifact(artifact, installed);
+        }
+        catch (PackageNotInstalledException)
+        {
+            // Absence is a structured observation, not an execution failure.
+        }
+
+        var activities = await RunForDeviceAsync(
+            serial, ["shell", "dumpsys", "activity", "activities"],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        activities.EnsureSuccess("Read activity state");
+        var processes = await RunForDeviceAsync(
+            serial, ["shell", "pidof", artifact.Identity.PackageName],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        var packageToken = artifact.Identity.PackageName + "/";
+        var lines = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n');
+        var pids = processes.Succeeded
+            ? processes.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => int.TryParse(value, out var pid) ? pid : -1)
+                .Where(static pid => pid > 0).Distinct().Order().ToArray()
+            : [];
+        return new AppRuntimeObservation(
+            artifact with { Path = reportedPath },
+            installed,
+            lines.Any(line => line.Contains("mResumedActivity", StringComparison.Ordinal) &&
+                              line.Contains(packageToken, StringComparison.Ordinal)),
+            lines.Any(line => line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase) &&
+                              line.Contains(packageToken, StringComparison.Ordinal)),
+            pids);
+    }
+
+    private static void RejectSplitArtifact(ApkArtifactInspection artifact)
+    {
+        if (!string.IsNullOrWhiteSpace(artifact.Identity.SplitName))
+        {
+            throw new InvalidDataException("A split APK cannot be used as a standalone inspected deployment artifact.");
+        }
+    }
+
+    private static void EnsureSameArtifact(
+        ApkArtifactInspection expectedArtifact,
+        InstalledApkIdentity installed)
+    {
+        var expected = expectedArtifact.Identity;
+        var actual = installed.Identity;
+        if (actual is null ||
+            !string.Equals(expected.PackageName, actual.PackageName, StringComparison.Ordinal) ||
+            expected.VersionCode != actual.VersionCode ||
+            !string.Equals(expected.VersionName, actual.VersionName, StringComparison.Ordinal) ||
+            !string.Equals(expected.SignerSha256, actual.SignerSha256, StringComparison.Ordinal) ||
+            !string.Equals(expectedArtifact.Sha256, installed.BaseApkSha256, StringComparison.Ordinal) ||
+            expectedArtifact.SizeBytes != installed.BaseApkSizeBytes)
+        {
+            throw new InvalidDataException(
+                "Installed package/version/signer/base-APK digest and size readback does not match the inspected APK.");
+        }
+    }
+
+    private static bool IsSafeComponent(string component, string packageName)
+    {
+        var slash = component.IndexOf('/');
+        if (slash <= 0 || slash == component.Length - 1 ||
+            !string.Equals(component[..slash], packageName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var activity = component[(slash + 1)..];
+        return Regex.IsMatch(activity, @"^(?:\.[A-Za-z0-9_$]+|[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+)$",
+            RegexOptions.CultureInvariant);
+    }
+
+    private static bool ProvesExportedActivity(string packageDump, string component)
+    {
+        var lines = packageDump.ReplaceLineEndings("\n").Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var activity = Regex.Match(
+                lines[index],
+                @"ActivityInfo\{[^}\r\n]*\s(?<component>[^\s}]+)\}",
+                RegexOptions.CultureInvariant);
+            if (!activity.Success ||
+                !string.Equals(
+                    activity.Groups["component"].Value,
+                    component,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+            var activityIndent = lines[index].TakeWhile(char.IsWhiteSpace).Count();
+            for (var detail = index + 1; detail < lines.Length; detail++)
+            {
+                var value = lines[detail].Trim();
+                if (value.Length == 0) continue;
+                var detailIndent = lines[detail].TakeWhile(char.IsWhiteSpace).Count();
+                if (detailIndent <= activityIndent ||
+                    value.StartsWith("Activity #", StringComparison.Ordinal) ||
+                    value.Contains("ActivityInfo{", StringComparison.Ordinal))
+                    break;
+                if (value.StartsWith("exported=", StringComparison.Ordinal))
+                    return string.Equals(value, "exported=true", StringComparison.Ordinal);
+            }
+            return false;
+        }
+        return false;
     }
 
     public async Task<ApkBundleInstallResult> InstallApkBundleAsync(
@@ -1336,6 +1622,65 @@ public sealed class AdbClient
         var scoped = new List<string> { "-s", AndroidInput.RequireSerial(serial) };
         scoped.AddRange(arguments);
         return RunAsync(scoped, timeout, cancellationToken);
+    }
+
+    private async Task<StreamingCommandResult> StreamInstalledBaseApkAsync(
+        string serial,
+        string remotePath,
+        long maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        if (maximumBytes is < 1 or > FleetIntegrationContract.MaximumPullBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        if (_runner is not IStreamingCommandRunner streamingRunner)
+        {
+            throw new InvalidOperationException(
+                "The configured command runner does not support bounded installed-APK readback.");
+        }
+
+        var invariantMaximum = maximumBytes.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        var command =
+            $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || {{ " +
+            "printf 'qfm-integration:path-absent\\n' >&2; exit 41; }; " +
+            "expected=\"$candidate\"; " +
+            BuildOpenedRemoteHandleProof() +
+            "if [ ! -f /proc/self/fd/3 ]; then " +
+            "printf 'qfm-integration:path-not-file\\n' >&2; exit 44; fi; " +
+            "size=$(stat -c %s -- /proc/self/fd/3) || { " +
+            "printf 'qfm-integration:size-unavailable\\n' >&2; exit 45; }; " +
+            "case \"$size\" in ''|*[!0-9]*) " +
+            "printf 'qfm-integration:size-invalid\\n' >&2; exit 46;; esac; " +
+            $"if [ \"$size\" -gt {invariantMaximum} ]; then " +
+            "printf 'qfm-integration:maximum-bytes\\n' >&2; exit 47; fi; " +
+            "exec cat <&3";
+        var arguments = new[] { "-s", serial, "exec-out", "sh", "-c", command };
+        var result = await streamingRunner.RunToStreamAsync(
+            AdbPath,
+            arguments,
+            Stream.Null,
+            maximumBytes,
+            TransferTimeout,
+            cancellationToken).ConfigureAwait(false);
+        ThrowFleetRemoteError(
+            result.CommandResult,
+            "Read back installed base APK",
+            maximumBytes);
+        if (!string.IsNullOrWhiteSpace(result.CommandResult.StandardError))
+        {
+            throw new AdbCommandException(
+                "Read back installed base APK",
+                result.CommandResult with
+                {
+                    ExitCode = result.CommandResult.ExitCode == 0
+                        ? 1
+                        : result.CommandResult.ExitCode
+                });
+        }
+        result.CommandResult.EnsureSuccess("Read back installed base APK");
+        return result;
     }
 
     private static List<string> CreateInstallArguments(

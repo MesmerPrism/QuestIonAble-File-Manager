@@ -121,8 +121,11 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- files list --serial <que
 dotnet run --project src/QuestIonAbleFileManager.Cli -- files pull --serial <quest-serial> --remote /sdcard/Download/example.txt --output ./example.txt
 dotnet run --project src/QuestIonAbleFileManager.Cli -- files push --serial <quest-serial> --file ./example.txt --remote /sdcard/Download/example.txt
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk list --serial <quest-serial>
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk inspect --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk export --serial <quest-serial> --package com.example.app --output ./com.example.app.apk
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <quest-serial> --file ./example.apk
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
 dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
 dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
@@ -145,6 +148,21 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --req
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
 dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
 ```
+
+The optional `questionable-file-manager-api` executable is inert unless
+explicitly started. It requires a private bearer value in
+`QUESTIONABLE_FILE_MANAGER_API_BEARER`, a private state directory in
+`QUESTIONABLE_FILE_MANAGER_API_STATE`, and a private journal integrity secret
+in `QUESTIONABLE_FILE_MANAGER_API_JOURNAL_SECRET`. It accepts only an explicit
+numeric loopback listener:
+
+```powershell
+dotnet run --project src/QuestIonAbleFileManager.Api -- --listen http://127.0.0.1:8123/
+```
+
+It projects only the bounded inspected-deployment registry and is not a generic
+CLI, shell, or ADB wrapper. Private request fields are intentionally omitted
+from public examples. See [Dedicated local API](docs/local-api.md).
 
 Pass `--json` to list commands for machine-readable output. Pass `--adb` to
 select an explicit ADB executable without changing global machine settings.
@@ -217,6 +235,8 @@ A base APK and its split APKs are submitted together as one session.
 - [Progress reporting contract](docs/progress-reporting.md)
 - [Rusty Kiosk integration and synchronization](docs/rusty-kiosk-integration.md)
 - [Optional Rusty Fleet integration](docs/fleet-integration.md)
+- [Inspected single-device deployment](docs/inspected-deployment.md)
+- [Dedicated local API](docs/local-api.md)
 - [Release workflow](docs/release-workflow.md)
 - [Branding and compatibility](docs/branding-and-compatibility.md)
 - [Reference intake](docs/reference-intake.md)

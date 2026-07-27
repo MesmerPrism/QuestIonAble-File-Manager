@@ -566,6 +566,25 @@ internal static class CliApplication
 
         switch (action)
         {
+            case "inspect":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.InspectApk(RequireOption(arguments, "--file")));
+                    var inspection = execution.ApkArtifactInspection ??
+                        throw new InvalidOperationException("APK inspection returned no result.");
+                    if (HasFlag(arguments, "--json"))
+                    {
+                        WriteJson(inspection);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{inspection.Identity.PackageName} versionCode={inspection.Identity.VersionCode}");
+                        Console.WriteLine($"Signer SHA-256: {inspection.Identity.SignerSha256}");
+                        Console.WriteLine($"Artifact SHA-256: {inspection.Sha256} ({inspection.SizeBytes} bytes)");
+                    }
+                    return 0;
+                }
+
             case "list":
                 {
                     var serial = RequireOption(arguments, "--serial");
@@ -624,6 +643,42 @@ internal static class CliApplication
                         execution.CommandResult,
                         HasFlag(arguments, "--json"),
                         () => Console.WriteLine(execution.CommandResult?.StandardOutput.Trim()));
+                    return 0;
+                }
+
+            case "launch":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.LaunchInspectedApp(
+                            RequireOption(arguments, "--serial"),
+                            RequireOption(arguments, "--file")));
+                    WriteMutationAware(
+                        execution,
+                        execution.ResolvedAppLaunchResult,
+                        HasFlag(arguments, "--json"),
+                        () => Console.WriteLine(execution.ResolvedAppLaunchResult?.Component));
+                    return 0;
+                }
+
+            case "observe":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.ObserveInspectedApp(
+                            RequireOption(arguments, "--serial"),
+                            RequireOption(arguments, "--file")));
+                    var observation = execution.AppRuntimeObservation ??
+                        throw new InvalidOperationException("Runtime observation returned no result.");
+                    if (HasFlag(arguments, "--json"))
+                    {
+                        WriteJson(observation);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Installed: {observation.Installed is not null}");
+                        Console.WriteLine($"Foreground: {observation.IsForeground}");
+                        Console.WriteLine($"Top resumed: {observation.IsTopResumed}");
+                        Console.WriteLine($"Processes: {string.Join(", ", observation.ProcessIds)}");
+                    }
                     return 0;
                 }
 
@@ -1190,8 +1245,11 @@ internal static class CliApplication
               questionable-file-manager files pull --serial <serial> --remote <path> --output <path>
               questionable-file-manager files push --serial <serial> --file <path> --remote <path>
               questionable-file-manager apk list --serial <serial> [--json]
+              questionable-file-manager apk inspect --file <file.apk> [--json]
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
+              questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
               questionable-file-manager apk install-bundle-many --serial <host:port> --serial <host:port> --folder <apk-folder> [options]

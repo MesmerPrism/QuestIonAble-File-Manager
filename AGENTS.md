@@ -128,6 +128,18 @@ the prefix is:
 dotnet run --project src/QuestIonAbleFileManager.Cli --
 ```
 
+The optional `QuestIonAbleFileManager.Api` executable is a separate,
+Windows-only, inert-until-started loopback projection of only the
+inspected-deployment typed
+registry. It requires `QUESTIONABLE_FILE_MANAGER_API_BEARER`, refuses
+non-loopback listeners, and is not a general CLI/ADB wrapper. Private staged
+state and its integrity secret must be explicitly configured through
+`QUESTIONABLE_FILE_MANAGER_API_STATE` and
+`QUESTIONABLE_FILE_MANAGER_API_JOURNAL_SECRET`; its local private root, retained
+non-reparse handles, journal/anchor chain, capacity reservations, and
+journal-before-delete cleanup ordering are part of the reviewed boundary. See
+`docs/local-api.md`. Do not start it during ordinary build/test validation.
+
 In a published Windows archive, invoke `questionable-file-manager.exe` directly.
 The former `meta-quest-file-manager.exe` name is a deprecated release-only
 compatibility alias; new documentation, tests, and automation use the canonical
@@ -141,8 +153,11 @@ questionable-file-manager.exe files list --serial <quest-serial> --path /sdcard 
 questionable-file-manager.exe files pull --serial <quest-serial> --remote <remote-path> --output <local-path>
 questionable-file-manager.exe files push --serial <quest-serial> --file <local-path> --remote <remote-path>
 questionable-file-manager.exe apk list --serial <quest-serial> --json
+questionable-file-manager.exe apk inspect --file <path-to.apk> --json
 questionable-file-manager.exe apk export --serial <quest-serial> --package <package> --output <local-apk>
 questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
+questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
 questionable-file-manager.exe apk install-bundle --serial <quest-serial> --folder <apk-folder>
 questionable-file-manager.exe wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
 questionable-file-manager.exe wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
@@ -170,6 +185,11 @@ package set. ADB rejects mixed package names, versions, signatures, or missing
 required splits. Pass `--adb <path>` to select a particular ADB executable
 without changing global ADB state.
 
+The single-APK `install`, `launch`, and `observe` routes inspect the local
+artifact with Android SDK Build Tools and bind package/version/signer plus
+base-APK digest/size readback to the exact selected serial. See
+`docs/inspected-deployment.md`.
+
 The `--confirm-wifi-adb` flag records that an operator approved the exact
 Wi-Fi state change; agents must not add it without that approval. Parallel
 install commands exit nonzero when any target fails, but their JSON result
@@ -185,6 +205,7 @@ Use PowerShell 7.6 or newer through `pwsh` for maintained scripts.
 dotnet build QuestIonAbleFileManager.slnx --configuration Release
 dotnet test QuestIonAbleFileManager.slnx --configuration Release
 dotnet run --project src/QuestIonAbleFileManager.Cli -- --help
+dotnet test tests/QuestIonAbleFileManager.Core.Tests --configuration Release --filter "FullyQualifiedName~LocalApiTests"
 pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
