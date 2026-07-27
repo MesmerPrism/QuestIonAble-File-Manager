@@ -42,6 +42,7 @@ foreach ($path in @(
     'src\QuestIonAbleFileManager.Cli\QuestIonAbleFileManager.Cli.csproj',
     'src\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj',
     'src\QuestIonAbleFileManager.FleetKioskV2Provider\QuestIonAbleFileManager.FleetKioskV2Provider.csproj',
+    'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj',
     'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $path) -PathType Leaf)) {
@@ -54,6 +55,15 @@ Assert-Contains 'site\index.html' '<title>QuestIonAble File Manager · Mesmer Pr
 Assert-Contains 'site\index.html' 'https://mesmerprism.com/QuestIonAble-File-Manager/'
 Assert-Contains 'src\QuestIonAbleFileManager.Cli\QuestIonAbleFileManager.Cli.csproj' '<AssemblyName>questionable-file-manager</AssemblyName>'
 Assert-Contains 'src\QuestIonAbleFileManager.FleetKioskV2Provider\QuestIonAbleFileManager.FleetKioskV2Provider.csproj' '<AssemblyName>questionable-file-manager-kiosk-v2-provider</AssemblyName>'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj' '<AssemblyName>questionable-file-manager-awake-provider</AssemblyName>'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj' '../QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetAwakeProvider\Program.cs' 'QuestAwakeProviderSubprocessHost'
+Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' 'QuestIonAbleFileManager.FleetAwakeProvider.csproj'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetAwakeProvider\Program.cs' 'CliApplication'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetAwakeProvider\Program.cs' 'OperatorCommand'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj' 'QuestIonAbleFileManager.Cli'
+Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' '-p:PublishSingleFile=true'
+Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' '--self-contained true'
 Assert-Contains 'src\QuestIonAbleFileManager.FleetKioskV2Provider\QuestIonAbleFileManager.FleetKioskV2Provider.csproj' '../QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj'
 Assert-Contains 'src\QuestIonAbleFileManager.FleetKioskV2Provider\Program.cs' 'RustyKioskV2CatalogSubprocessHost'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' 'QuestIonAbleFileManager.FleetKioskV2Provider.csproj'
@@ -72,6 +82,13 @@ Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'MetaQuestFileManager.appin
 Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'meta-quest-file-manager-cli-win-x64.zip' = 'questionable-file-manager-cli-win-x64.zip'"
 Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-kiosk-v2-provider.exe'"
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-kiosk-v2-provider.exe'"
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' 'Test-FleetAwakeProviderArtifact.ps1'
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-awake-provider.exe'"
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-awake-provider.receipt.json'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-awake-provider.exe'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-awake-provider.receipt.json'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' 'fleet_awake_provider = [ordered]@{'
+Assert-Contains 'docs\release-workflow.md' '`questionable-file-manager-awake-provider.exe`'
 Assert-Contains 'docs\fleet-integration.md' '`questionable-file-manager-kiosk-v2-provider.exe`'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '-p:PublishSingleFile=true'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '--self-contained true'

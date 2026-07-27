@@ -716,7 +716,7 @@
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock VerticalAlignment="Center" Text="Duration (ms)" />
+                                        <TextBlock VerticalAlignment="Center" Text="Duration (ms, max 8h)" />
                                         <TextBox x:Name="KeepAwakeDurationBox" Grid.Column="1" Margin="8,0,0,0" Text="28800000" />
                                         <Button Grid.Column="2" Margin="10,0,0,0" Click="OnEnableKeepAwake" Content="Keep awake" />
                                         <Button Grid.Column="3" Margin="8,0,0,0" Style="{StaticResource SecondaryButton}" Click="OnDisableKeepAwake" Content="Restore normal" />

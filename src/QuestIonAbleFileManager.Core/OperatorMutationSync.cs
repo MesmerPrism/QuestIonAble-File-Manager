@@ -324,12 +324,25 @@ internal static class OperatorMutations
         var status = result.QuestControlStatus ??
             throw new InvalidOperationException("Keep-awake returned no effective-state readback.");
         var requested = command.Enabled == true;
-        return status.KeepAwakeActive == requested
+        var matches = requested
+            ? status.StayOn &&
+              string.Equals(status.Wakefulness, "Awake", StringComparison.OrdinalIgnoreCase) &&
+              (string.Equals(status.DisplayState, "ON", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status.DisplayState, "ON_SUSPEND", StringComparison.OrdinalIgnoreCase)) &&
+              string.Equals(status.ProximityState.Trim(), "CLOSE", StringComparison.OrdinalIgnoreCase) &&
+              status.ProximityHoldDurationMilliseconds == command.DurationMilliseconds &&
+              status.ProximityHoldRemainingMilliseconds is > 0
+            : !status.StayOn &&
+              status.AutoSleepDisabled != true &&
+              !string.Equals(status.ProximityState.Trim(), "CLOSE", StringComparison.OrdinalIgnoreCase);
+        return matches
             ? OperatorMutationObservation.Confirmed(
-                $"Keep-awake readback is {(status.KeepAwakeActive ? "active" : "inactive")}.")
+                requested
+                    ? "Stay-on, wake/display, and the exact bounded proximity hold are effective."
+                    : "Normal stay-on and proximity behavior is restored.")
             : OperatorMutationObservation.Pending(
-                $"Keep-awake currently reads {(status.KeepAwakeActive ? "active" : "inactive")}.",
-                "The requested power policy has not appeared in effective-state readback.");
+                "One or more independent power-policy readbacks do not match the request.",
+                "The requested power policy has not appeared in complete effective-state readback.");
     }
 
     private static OperatorMutationObservation ObservePerformance(

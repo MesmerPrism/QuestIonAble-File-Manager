@@ -285,6 +285,13 @@ route, ADB daemon lifecycle, Fleet scheduling, WPF automation, background
 service, installer, or Kiosk-staging substitution. Fleet remains the only
 owner of 10–100-device batching.
 
+The dedicated Quest awake provider is a separate contract from this v1
+file-transfer hook and from the Kiosk catalog provider. It has no Fleet target,
+policy, scheduling, or Manifold authority. Fleet supplies an already accepted
+typed request and an exact private serial binding; File Manager returns only
+independent effect-owner readbacks. See
+[Quest awake control](quest-awake-control.md).
+
 The v1 observation proves File Manager transport continuity; it does not prove
 that an ADB serial is a Rusty Fleet device identity. Push therefore remains
 unadvertised unless a separate owner supplies the current Quest-owned identity

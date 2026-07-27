@@ -45,8 +45,9 @@ action can be automated and tested.
 - list, upload, download, and delete files in Rusty Kiosk's bounded app-owned
   staging area, then optionally submit one base or base-and-split APK set to
   Android's wearer-confirmed PackageInstaller when ADB is unavailable;
-- show headset/controller batteries, keep awake or restore normal power, and
-  set or clear fixed Quest CPU/GPU levels;
+- show headset/controller batteries, apply Meta's bounded keep-awake hold for
+  one minute through eight hours or restore normal power, and set or clear
+  fixed Quest CPU/GPU levels;
 - track every PC mutation as sent, pending, then headset-confirmed (or failed/
   timed out) instead of treating process success as effective state;
 - optionally expose a disabled-by-default Rusty Fleet hook for one exact-device
@@ -56,6 +57,9 @@ action can be automated and tested.
   Rusty Kiosk's encrypted direct-operator v2 exchange using a File Manager-owned
   Windows credential profile, while remaining unavailable when no profile was
   explicitly enrolled;
+- optionally expose a dedicated hash-pinned Fleet awake provider for bounded
+  Meta holds, drift-only Windows watchdog repairs, a temporary device watchdog,
+  watchdog-only stop, and explicit normal-settings restore;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -147,6 +151,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- integration observe --se
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --request <operation-request.v1.json> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
 dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
+dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- integration quest-awake --json < <strict-request.json>
 ```
 
 The optional `questionable-file-manager-api` executable is inert unless
@@ -213,6 +218,15 @@ pinned provider stage for any native bundle extraction.
 The provider's strict status/exit mapping is `verified=0`, `failed=1`,
 `rejected=2`, and `unavailable=3`; Fleet checks both values and requires empty
 standard error.
+The separate Fleet awake provider is documented in
+[Quest awake control](docs/quest-awake-control.md). It owns only the
+exact-serial ADB effects and independent readbacks for bounded holds and
+watchdogs. Fleet owns targets, confirmation, Manifold authorization,
+scheduling, and the Windows loop. The published trust unit is
+`questionable-file-manager-awake-provider.exe`, not the general CLI or a
+framework-dependent build apphost. Canonical releases place that executable
+and its validation receipt beside the Kiosk provider at the top level and in
+both portable archives.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through
@@ -228,6 +242,7 @@ A base APK and its split APKs are submitted together as one session.
 ## Design And Safety
 
 - [Architecture](docs/architecture.md)
+- [Quest awake control](docs/quest-awake-control.md)
 - [ADB scope and safety](docs/adb-scope-and-safety.md)
 - [GUI and CLI operator parity](docs/operator-cli-parity.md)
 - [Wi-Fi ADB and parallel installation](docs/wifi-adb-and-parallel-install.md)

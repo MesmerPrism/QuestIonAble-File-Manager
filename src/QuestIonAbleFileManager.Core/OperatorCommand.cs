@@ -598,11 +598,11 @@ public static class OperatorCommands
     {
         RequireApproval(operatorConfirmed, "Quest keep-awake policy change");
         serial = AndroidInput.RequireSerial(serial);
-        if (durationMilliseconds is < 60_000 or > 86_400_000)
+        if (durationMilliseconds is < 60_000 or > QuestAwakeContract.MaximumHoldDurationMilliseconds)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(durationMilliseconds),
-                "Keep-awake duration must be between one minute and 24 hours.");
+                "Keep-awake duration must be between one minute and eight hours.");
         }
 
         return new OperatorCommand(

@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
 
-public sealed class AdbClient
+public sealed partial class AdbClient
 {
     private static readonly TimeSpan InspectionTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(20);
@@ -1410,29 +1410,33 @@ public sealed class AdbClient
         string serial,
         bool enabled,
         int durationMilliseconds = 28_800_000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? beforeMutation = null)
     {
         serial = AndroidInput.RequireSerial(serial);
-        if (durationMilliseconds is < 60_000 or > 86_400_000)
+        if (durationMilliseconds is < 60_000 or > QuestAwakeContract.MaximumHoldDurationMilliseconds)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(durationMilliseconds),
-                "Keep-awake duration must be between one minute and 24 hours.");
+                "Keep-awake duration must be between one minute and eight hours.");
         }
 
         var commands = new List<CommandResult>();
         if (enabled)
         {
+            beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
                 ["shell", "svc", "power", "stayon", "true"],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false)).EnsureSuccess("Enable Quest stay-awake"));
+            beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
                 ["shell", "input", "keyevent", "KEYCODE_WAKEUP"],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false)).EnsureSuccess("Wake Quest display"));
+            beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
                 [
@@ -1445,11 +1449,13 @@ public sealed class AdbClient
         }
         else
         {
+            beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
                 ["shell", "am", "broadcast", "-a", "com.oculus.vrpowermanager.automation_disable"],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false)).EnsureSuccess("Restore normal Quest proximity"));
+            beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
                 ["shell", "svc", "power", "stayon", "false"],

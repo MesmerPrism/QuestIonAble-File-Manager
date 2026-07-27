@@ -11,6 +11,10 @@ The optional Rusty Fleet subprocess hook is intentionally CLI-only in v1. It
 does not correspond to a WPF action: `integration capabilities`, `observe`,
 and `invoke` are a strict machine contract, not a hidden GUI route. They remain
 disabled by default and cannot invoke push, delete, overwrite, or fan-out.
+The dedicated Fleet awake provider is also machine-only, but it is a separate
+effect-owner executable rather than a hidden WPF or general CLI route. Fleet's
+preview/confirmation UI owns the managed operation; File Manager's ordinary
+WPF `Keep awake` button continues to map only to `device keep-awake`.
 
 The Windows release places these programs beside each other:
 
@@ -51,7 +55,7 @@ exact tool selection is part of the test.
 | Direct staging list/upload/download/delete | `kiosk-direct files ...` |
 | Direct attended APK install/receipt | `kiosk-direct install` / `kiosk-direct install-status` |
 | Refresh batteries/power/performance | `device status` |
-| Keep awake / restore normal | `device keep-awake` |
+| Bounded keep awake (one minute through eight hours) / restore normal | `device keep-awake` |
 | Set / clear CPU and GPU overrides | `device performance` |
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
@@ -79,7 +83,7 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' kiosk-direct command --endpoint http://<quest-ip>:39873 --pairing-code <code> --command launch-kiosk --confirm-kiosk-control --json
 & '.\questionable-file-manager.exe' kiosk-direct files upload --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <local-file> --json
 & '.\questionable-file-manager.exe' kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <base-apk> --confirm-local-install --json
-& '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --confirm-device-settings --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --duration-ms 28800000 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json --adb <path-to-adb>
 ```
 

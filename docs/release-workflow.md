@@ -19,8 +19,13 @@ Every Windows preview release contains:
   single-file provider for Fleet;
 - `questionable-file-manager-kiosk-v2-provider.receipt.json`: isolated-smoke
   result, byte length, and lowercase SHA-256 for the provider;
+- `questionable-file-manager-awake-provider.exe`: dedicated self-contained
+  single-file Quest awake effect-owner provider for Fleet;
+- `questionable-file-manager-awake-provider.receipt.json`: isolated rejection,
+  trust-unit shape, byte length, and lowercase SHA-256 for the awake provider;
 - `SHA256SUMS.txt`: checksums for every release asset;
-- `release-validation.json`: signature, timestamp, identity, and feed receipt.
+- `release-validation.json`: signature, timestamp, identity, feed, and both
+  dedicated Fleet-provider validation summaries.
 
 Releases from `0.4.0` also contain byte-identical former-name aliases for the
 setup, MSIX, App Installer, certificate, portable archive, and CLI archive.
@@ -42,6 +47,14 @@ rejects the ordinary framework-dependent build apphost as a provider trust
 unit. Every staged launch uses a new private
 `DOTNET_BUNDLE_EXTRACT_BASE_DIR`; native runtime extraction never shares a
 mutable cross-stage cache.
+
+They also include `questionable-file-manager-awake-provider.exe`, published
+directly from `QuestIonAbleFileManager.FleetAwakeProvider`, and its artifact
+receipt. The release gate requires the same isolated single-file trust-unit
+shape, strict former-bound rejection before ADB initialization, empty standard
+error, and failed isolated framework-dependent apphost control. The release
+validation receipt records both provider hashes and validation summaries
+separately.
 
 The WPF app, automation CLI, guided setup helper, MSIX package, and GitHub Pages
 site use the same folder mark. Its canonical source and multi-resolution ICO
@@ -106,10 +119,13 @@ Kiosk tag to an exact commit and verifies the bundle version, source pointer,
 all declared byte counts and SHA-256 values, and both APK signer digests. The
 public validation receipt records that Kiosk provenance alongside the Windows
 signatures and public release filenames, never local or CI-runner build paths.
-It also isolation-tests the exact dedicated Fleet provider executable with no
-unexpected sibling files, requiring the strict absent-profile response, empty
-standard error, 15 rejected broad/general argument shapes, and an unreachable
-general CLI dispatcher before either portable archive is created.
+It also isolation-tests both exact dedicated Fleet provider executables with no
+unexpected sibling files. The Kiosk provider must return the strict
+absent-profile response with 15 rejected broad/general argument shapes. The
+awake provider must reject the former 24-hour bound and nine broad or
+case-varied argument shapes before ADB discovery. Both require empty standard
+error, an unreachable general CLI dispatcher, and rejection of an isolated
+framework-dependent apphost before either portable archive is created.
 Existing release assets are not overwritten; any payload change requires a new
 semantic version. The consumer test stages a local HTTP feed with range
 support because the Windows deployment service does not consume workspace file

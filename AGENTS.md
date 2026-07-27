@@ -97,8 +97,29 @@ documented.
   exportable owner catalog, and owner grant receipt cross back to Fleet as
   bounded base64url evidence. Do not add v1 fallback, endpoint arguments,
   inherited-environment credentials, launch, mutation, or free-form errors.
-- Fleet may launch this provider only from the reviewed, self-contained,
-  single-file Windows artifact named
+- The separate Fleet awake-control subprocess owns only closed exact-serial
+  status, bounded hold, drift-only repair, temporary device-watchdog, stop,
+  and restore actions. Keep the hold bound at `60000..28800000` milliseconds
+  and watchdog polling at `1000..60000` milliseconds. A Windows watchdog is
+  Fleet-owned and calls `repairOnce`; the device watchdog is a fixed File
+  Manager-owned `/data/local/tmp` helper with generation, boot, process,
+  heartbeat, and repair-counter readback. It is not reboot-persistent.
+  Same-generation reuse requires the exact requested interval.
+  `stopWatchdogs` must leave power/proximity settings unchanged;
+  `restoreNormal` must prove the helper inactive and recheck request expiry
+  after the stop wait before restoring them. Receipts report
+  stay-on, proximity hold, wake/display, watchdog, and restore facts
+  independently and must not expose serials, controller identifiers, raw ADB
+  output, caller shell, paths, or process commands.
+- Fleet may launch awake control only through the self-contained, single-file
+  `questionable-file-manager-awake-provider.exe`, pinned by lowercase SHA-256
+  and staged with a per-launch private `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its
+  sole argument vector is exact case-sensitive
+  `integration quest-awake --json`. Invalid arguments and strict-request
+  failures must reject before ADB discovery. Never substitute the general CLI
+  or a framework-dependent apphost.
+- Fleet may launch the Kiosk v2 catalog provider only from the reviewed,
+  self-contained, single-file Windows artifact named
   `questionable-file-manager-kiosk-v2-provider.exe`, pinned by lowercase
   SHA-256. Publish it directly from
   `QuestIonAbleFileManager.FleetKioskV2Provider`; never rename or package the
@@ -210,6 +231,7 @@ pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
 pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
+pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
 ```
 
 The canonical folder mark and multi-resolution Windows icon live under
@@ -264,6 +286,8 @@ dotnet run --project src/QuestIonAbleFileManager.App
   install/export, Wi-Fi endpoint lifecycle, bounded fan-out, progress units,
   hashes, typed Kiosk hosting, and mutation reconciliation.
 - `QuestIonAbleFileManager.Cli` is the automation-equivalent operator surface.
+- `QuestIonAbleFileManager.FleetAwakeProvider` is the narrow Fleet effect-owner
+  artifact for Quest awake control; it is not a general CLI projection.
 - Fleet integration stays in the Core/CLI boundary described in
   `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
   one read-only target without a separate authority and UX review.
@@ -280,8 +304,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
 
 GitHub Pages is the human-facing download surface and GitHub Releases is the
 binary source of truth. The workflow publishes the signed guided setup, signed
-MSIX, App Installer feed, public CER, portable app/CLI archives, checksums, and
-a validation receipt. The build verifies the exact published Kiosk version and
+MSIX, App Installer feed, public CER, portable app/CLI archives, both dedicated
+Fleet provider executables and receipts, checksums, and a validation receipt.
+The build verifies the exact published Kiosk version and
 tag commit, every manifest byte count and SHA-256, both APK signer digests, and
 the source pointer before packaging; the receipt retains that provenance.
 Published assets are never overwritten—any change requires a new version.

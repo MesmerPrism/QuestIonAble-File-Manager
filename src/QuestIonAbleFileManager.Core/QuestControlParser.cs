@@ -29,6 +29,8 @@ public static partial class QuestControlParser
             ? parsedAutoSleep
             : (bool?)null;
         var keepAwake = stayOn || autoSleepDisabled == true;
+        var (holdDurationMilliseconds, holdRemainingMilliseconds) =
+            ParseLatestProximityHold(proximityOutput);
 
         return new QuestControlStatus(
             batteryLevel,
@@ -43,7 +45,9 @@ public static partial class QuestControlParser
             proximityState,
             cpuLevel.Trim(),
             gpuLevel.Trim(),
-            capturedAt);
+            capturedAt,
+            holdDurationMilliseconds,
+            holdRemainingMilliseconds);
     }
 
     public static IReadOnlyList<QuestControllerPower> ParseControllerPower(string output)
@@ -99,6 +103,37 @@ public static partial class QuestControlParser
                 : null;
     }
 
+    private static (int? DurationMilliseconds, int? RemainingMilliseconds)
+        ParseLatestProximityHold(string output)
+    {
+        var match = ProximityBroadcastRegex()
+            .Matches(output)
+            .Cast<Match>()
+            .LastOrDefault();
+        if (match is null ||
+            !string.Equals(match.Groups["action"].Value, "prox_close", StringComparison.OrdinalIgnoreCase) ||
+            !double.TryParse(
+                match.Groups["age"].Value,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var ageSeconds) ||
+            !int.TryParse(
+                match.Groups["duration"].Value,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var durationMilliseconds))
+        {
+            return (null, null);
+        }
+
+        var elapsedMilliseconds = (long)Math.Ceiling(Math.Max(0d, ageSeconds) * 1000d);
+        var remainingMilliseconds = (int)Math.Clamp(
+            (long)durationMilliseconds - elapsedMilliseconds,
+            0L,
+            int.MaxValue);
+        return (durationMilliseconds, remainingMilliseconds);
+    }
+
     private static string ParseBatteryState(int? state) => state switch
     {
         2 => "charging",
@@ -143,6 +178,11 @@ public static partial class QuestControlParser
 
     [GeneratedRegex(@"Virtual proximity state:\s*(?<value>[^\r\n]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ProximityStateRegex();
+
+    [GeneratedRegex(
+        @"^\s*\d+(?:\.\d+)?s\s+\((?<age>[\d.]+)s ago\)\s+-\s+received com\.oculus\.vrpowermanager\.(?<action>prox_close|automation_disable) broadcast:\s+duration=(?<duration>\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline)]
+    private static partial Regex ProximityBroadcastRegex();
 
     [GeneratedRegex(@"isAutosleepDisabled:\s*(?<value>true|false)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AutoSleepDisabledRegex();

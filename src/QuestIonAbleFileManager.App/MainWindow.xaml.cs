@@ -1292,9 +1292,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!int.TryParse(KeepAwakeDurationBox.Text, out var duration) || duration is < 60_000 or > 86_400_000)
+        if (!int.TryParse(KeepAwakeDurationBox.Text, out var duration) ||
+            duration is < QuestAwakeContract.MinimumHoldDurationMilliseconds
+                or > QuestAwakeContract.MaximumHoldDurationMilliseconds)
         {
-            ShowInputMessage("Keep-awake duration must be a whole number from 60000 through 86400000 milliseconds.");
+            ShowInputMessage("Keep-awake duration must be a whole number from 60000 through 28800000 milliseconds (eight hours).");
             return;
         }
 
@@ -1428,9 +1430,13 @@ public partial class MainWindow : Window
 
         HeadsetBatteryText.Text = $"Headset battery: {status.HeadsetBatteryLabel}";
         ControllerBatteryText.Text = $"Controllers: {status.ControllerBatteryLabel}";
+        var hold = status.ProximityHoldDurationMilliseconds is int duration &&
+                   status.ProximityHoldRemainingMilliseconds is int remaining
+            ? $"{duration} ms hold, {remaining} ms remaining"
+            : "no bounded hold observed";
         KeepAwakeStatusText.Text =
-            $"Keep awake: {(status.KeepAwakeActive ? "active" : "not active")}; " +
-            $"display {status.DisplayState}; proximity {status.ProximityState}";
+            $"Stay-on {(status.StayOn ? "active" : "inactive")}; " +
+            $"{status.Wakefulness}/{status.DisplayState}; proximity {status.ProximityState}; {hold}";
         PerformanceStatusText.Text =
             $"CPU/GPU: {DisplayPerformanceLevel(status.CpuLevel)} / {DisplayPerformanceLevel(status.GpuLevel)}";
     }

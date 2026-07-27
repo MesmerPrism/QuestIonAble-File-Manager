@@ -988,7 +988,11 @@ internal static class CliApplication
                     {
                         Console.WriteLine($"Headset battery: {result.HeadsetBatteryLabel}");
                         Console.WriteLine($"Controllers: {result.ControllerBatteryLabel}");
-                        Console.WriteLine($"Keep awake: {(result.KeepAwakeActive ? "active" : "not active")}");
+                        Console.WriteLine($"Stay on: {(result.StayOn ? "active" : "inactive")}");
+                        Console.WriteLine($"Wake/display: {result.Wakefulness} / {result.DisplayState}");
+                        Console.WriteLine(
+                            $"Proximity: {result.ProximityState}; " +
+                            $"hold {DisplayHold(result.ProximityHoldDurationMilliseconds, result.ProximityHoldRemainingMilliseconds)}");
                         Console.WriteLine($"CPU/GPU override: {DisplayOverride(result.CpuLevel)} / {DisplayOverride(result.GpuLevel)}");
                     }
 
@@ -1167,6 +1171,11 @@ internal static class CliApplication
 
     private static string DisplayOverride(string value) => string.IsNullOrWhiteSpace(value) ? "app controlled" : value;
 
+    private static string DisplayHold(int? durationMilliseconds, int? remainingMilliseconds) =>
+        durationMilliseconds is int duration && remainingMilliseconds is int remaining
+            ? $"{duration} ms requested, {remaining} ms remaining"
+            : "not observed";
+
     private static bool HasFlag(string[] arguments, string name) =>
         arguments.Any(argument => string.Equals(argument, name, StringComparison.OrdinalIgnoreCase));
 
@@ -1273,7 +1282,7 @@ internal static class CliApplication
               questionable-file-manager kiosk-direct install --endpoint <url> --pairing-code <code> --file <base.apk> [--file <split.apk> ...] --confirm-local-install [--json]
               questionable-file-manager kiosk-direct install-status --endpoint <url> --pairing-code <code> --request-id <id> [--json]
               questionable-file-manager device status --serial <serial> [--json]
-              questionable-file-manager device keep-awake --serial <serial> <--on|--off> [--duration-ms <n>] --confirm-device-settings
+              questionable-file-manager device keep-awake --serial <serial> <--on|--off> [--duration-ms <60000..28800000>] --confirm-device-settings
               questionable-file-manager device performance --serial <serial> [--cpu <0-5>] [--gpu <0-5>] [--clear] --confirm-device-settings
               questionable-file-manager integration capabilities --json [--contract-version 1.0]
               questionable-file-manager integration observe --serial <serial> --json

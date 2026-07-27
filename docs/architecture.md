@@ -26,6 +26,9 @@ general Quest runtime console or fleet manager.
 - Optional disabled-by-default Rusty Fleet interop for one exact serial,
   bounded shared-storage list/pull, durable status, and Core-only no-overwrite
   push when current Quest/Manifold authority is injected.
+- Optional dedicated Fleet awake effect-owner provider for exact-serial
+  bounded holds, drift-only repair, a temporary device watchdog, watchdog
+  stop, and explicit normal-settings restore.
 - Public CI, Pages, release archives, and boundary validation.
 
 ## Non-scope
@@ -87,6 +90,14 @@ For the optional Fleet adapter, File Manager owns the `adb-shared` mapping to
 operation staging, subprocess execution, and result evidence. Fleet owns
 device identity and every batch. A File Manager observation is transport
 evidence only and cannot be relabeled as Fleet identity proof.
+
+The separate Fleet awake provider owns only exact-serial ADB effects and fresh
+power/watchdog readback. Fleet owns immutable target selection, confirmation,
+Manifold authority, Windows watchdog scheduling, and per-target operation
+state. The provider never receives Fleet policy authority and never returns
+the private serial, controller identifiers, raw ADB output, or caller-defined
+shell. Stop-watchdog and restore-normal remain separate commands. See
+[Quest awake control](quest-awake-control.md).
 
 The shipped CLI has no push or cancellation authority. A Core host may
 advertise push only when it injects a verifier for the current Quest identity

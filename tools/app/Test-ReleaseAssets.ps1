@@ -16,6 +16,10 @@ $certificatePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.cer'
 $providerPath = Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.exe'
 $providerReceiptPath =
     Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json'
+$awakeProviderPath =
+    Join-Path $ReleaseDirectory 'questionable-file-manager-awake-provider.exe'
+$awakeProviderReceiptPath =
+    Join-Path $ReleaseDirectory 'questionable-file-manager-awake-provider.receipt.json'
 $receiptPath = Join-Path $ReleaseDirectory 'release-validation.json'
 $legacyAliases = [ordered]@{
     'MetaQuestFileManager-Setup.exe' = 'QuestIonAbleFileManager-Setup.exe'
@@ -32,7 +36,9 @@ foreach ($path in @(
     $appInstallerPath,
     $certificatePath,
     $providerPath,
-    $providerReceiptPath
+    $providerReceiptPath,
+    $awakeProviderPath,
+    $awakeProviderReceiptPath
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required release asset was not found: $path"
@@ -74,6 +80,47 @@ if ($providerReceipt.schema -cne
     $providerReceipt.smoke_status -cne 'unavailable' -or
     [int]$providerReceipt.stderr_bytes -ne 0) {
     throw 'Fleet Kiosk v2 provider artifact receipt does not match the validated executable.'
+}
+$awakeProviderReceipt =
+    Get-Content -Raw -LiteralPath $awakeProviderReceiptPath | ConvertFrom-Json
+$awakeProviderHash =
+    (Get-FileHash -LiteralPath $awakeProviderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$awakeProviderLength = (Get-Item -LiteralPath $awakeProviderPath).Length
+if ($awakeProviderReceipt.schema -cne
+        'questionable.file_manager.fleet_awake_provider_artifact_receipt.v1' -or
+    $awakeProviderReceipt.artifact_name -cne
+        'questionable-file-manager-awake-provider.exe' -or
+    $awakeProviderReceipt.source_project -cne
+        'QuestIonAbleFileManager.FleetAwakeProvider' -or
+    $awakeProviderReceipt.sha256 -cne $awakeProviderHash -or
+    [long]$awakeProviderReceipt.size_bytes -ne $awakeProviderLength -or
+    $awakeProviderReceipt.self_contained -ne $true -or
+    $awakeProviderReceipt.single_file -ne $true -or
+    [int]$awakeProviderReceipt.sibling_code_files -ne 0 -or
+    [int]$awakeProviderReceipt.isolated_file_count -ne 1 -or
+    $awakeProviderReceipt.bundle_extract_base -cne 'caller-private-per-launch' -or
+    [int]$awakeProviderReceipt.bundle_extract_file_count -lt 0 -or
+    [int]$awakeProviderReceipt.bundle_extract_file_count -gt 128 -or
+    [int]$awakeProviderReceipt.bundle_extract_directory_count -lt 0 -or
+    [int]$awakeProviderReceipt.bundle_extract_directory_count -gt 16 -or
+    [long]$awakeProviderReceipt.bundle_extract_bytes -lt 0 -or
+    [long]$awakeProviderReceipt.bundle_extract_bytes -gt 134217728 -or
+    [int]$awakeProviderReceipt.isolated_top_level_entries_after_run -ne 2 -or
+    $awakeProviderReceipt.ordinary_apphost_isolation_rejected -ne $true -or
+    $awakeProviderReceipt.general_cli_dispatch_unreachable -ne $true -or
+    [int]$awakeProviderReceipt.rejected_argument_shapes -lt 9 -or
+    $awakeProviderReceipt.strict_request_rejection -cne 'durationInvalid' -or
+    [int]$awakeProviderReceipt.former_duration_maximum_rejected_ms -ne 86400000 -or
+    [int]$awakeProviderReceipt.supported_duration_maximum_ms -ne 28800000 -or
+    [int]$awakeProviderReceipt.exit_codes.verified -ne 0 -or
+    [int]$awakeProviderReceipt.exit_codes.failed -ne 1 -or
+    [int]$awakeProviderReceipt.exit_codes.rejected -ne 2 -or
+    [int]$awakeProviderReceipt.exit_codes.pending -ne 3 -or
+    [int]$awakeProviderReceipt.exit_codes.cancelled -ne 4 -or
+    [int]$awakeProviderReceipt.smoke_exit_code -ne 2 -or
+    $awakeProviderReceipt.smoke_status -cne 'rejected' -or
+    [int]$awakeProviderReceipt.stderr_bytes -ne 0) {
+    throw 'Fleet awake provider artifact receipt does not match the validated executable.'
 }
 foreach ($entry in $legacyAliases.GetEnumerator()) {
     $legacyPath = Join-Path $ReleaseDirectory $entry.Key
@@ -138,6 +185,29 @@ finally {
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+foreach ($portableArchiveName in @(
+    'QuestIonAbleFileManager-win-x64.zip',
+    'questionable-file-manager-cli-win-x64.zip'
+)) {
+    $portableArchivePath = Join-Path $ReleaseDirectory $portableArchiveName
+    $portableArchive = [IO.Compression.ZipFile]::OpenRead($portableArchivePath)
+    try {
+        $portableEntries = @($portableArchive.Entries | ForEach-Object FullName)
+        foreach ($providerEntry in @(
+            'questionable-file-manager-kiosk-v2-provider.exe',
+            'questionable-file-manager-kiosk-v2-provider.receipt.json',
+            'questionable-file-manager-awake-provider.exe',
+            'questionable-file-manager-awake-provider.receipt.json'
+        )) {
+            if ($portableEntries -notcontains $providerEntry) {
+                throw "$portableArchiveName is missing required provider asset $providerEntry."
+            }
+        }
+    }
+    finally {
+        $portableArchive.Dispose()
+    }
+}
 $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
 try {
     $entries = @($archive.Entries | ForEach-Object FullName)
@@ -217,13 +287,41 @@ $receipt = [ordered]@{
         isolated_smoke_exit_code = 3
         stderr_bytes = 0
     }
+    fleet_awake_provider = [ordered]@{
+        artifact_name = 'questionable-file-manager-awake-provider.exe'
+        source_project = 'QuestIonAbleFileManager.FleetAwakeProvider'
+        sha256 = $awakeProviderHash
+        size_bytes = $awakeProviderLength
+        self_contained = $true
+        single_file = $true
+        bundle_extract_base = 'caller-private-per-launch'
+        bundle_extract_file_count = [int]$awakeProviderReceipt.bundle_extract_file_count
+        bundle_extract_directory_count = [int]$awakeProviderReceipt.bundle_extract_directory_count
+        bundle_extract_bytes = [long]$awakeProviderReceipt.bundle_extract_bytes
+        ordinary_apphost_isolation_rejected = $true
+        general_cli_dispatch_unreachable = $true
+        rejected_argument_shapes = [int]$awakeProviderReceipt.rejected_argument_shapes
+        supported_duration_maximum_ms = 28800000
+        exit_codes = [ordered]@{
+            verified = 0
+            failed = 1
+            rejected = 2
+            pending = 3
+            cancelled = 4
+        }
+        isolated_smoke_status = 'rejected'
+        isolated_smoke_exit_code = 2
+        stderr_bytes = 0
+    }
     required_assets = @(
         'QuestIonAbleFileManager-Setup.exe',
         'QuestIonAbleFileManager-win-x64.msix',
         'QuestIonAbleFileManager.appinstaller',
         'QuestIonAbleFileManager.cer',
         'questionable-file-manager-kiosk-v2-provider.exe',
-        'questionable-file-manager-kiosk-v2-provider.receipt.json'
+        'questionable-file-manager-kiosk-v2-provider.receipt.json',
+        'questionable-file-manager-awake-provider.exe',
+        'questionable-file-manager-awake-provider.receipt.json'
     )
     compatibility_aliases = $legacyAliases
 }
