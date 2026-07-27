@@ -141,6 +141,7 @@ public sealed record WifiAdbEnableResult(
     string Host,
     int Port,
     string Endpoint,
+    string DeviceIdentitySha256,
     CommandResult AddressProbe,
     CommandResult TcpIpCommand,
     WifiAdbConnectionResult Connection);

@@ -29,6 +29,9 @@ general Quest runtime console or fleet manager.
 - Optional dedicated Fleet awake effect-owner provider for exact-serial
   bounded holds, drift-only repair, a temporary device watchdog, watchdog
   stop, and explicit normal-settings restore.
+- Optional dedicated Fleet connectivity provider for File Manager-owned
+  private target resolution, fixed Kiosk Wi-Fi ADB setup requests, and a
+  separate exact-USB classic TCP/IP route.
 - Public CI, Pages, release archives, and boundary validation.
 
 ## Non-scope
@@ -69,10 +72,12 @@ that Core authority. The anchor detects stale-journal replacement but makes no
 claim against compromise of the same Windows user and secret. See
 `local-api.md`.
 
-Wi-Fi enablement is a sequenced transaction: read `wlan0` from one USB serial,
-run `tcpip` on that same serial, connect one validated endpoint, and verify its
-ready device row. Connection establishment is endpoint-scoped because no ADB
-serial exists before `connect`; all subsequent device work is serial-scoped.
+Wi-Fi enablement is a sequenced transaction: read one stable identity and
+`wlan0` from one USB serial, run `tcpip` on that same serial, connect one
+validated endpoint, verify its ready device row, and require the same identity
+through that exact endpoint. Connection establishment is endpoint-scoped
+because no ADB serial exists before `connect`; all subsequent device work is
+serial-scoped.
 Parallel installation owns only bounded orchestration. Android package-manager
 transactions remain independent per headset.
 
@@ -99,6 +104,22 @@ the private serial, controller identifiers, raw ADB output, or caller-defined
 shell. Stop-watchdog and restore-normal remain separate commands. See
 [Quest awake control](quest-awake-control.md).
 
+The separate Fleet connectivity provider resolves one Fleet device ID through
+File Manager's current-user secure profile. Kiosk remains the on-device
+privileged effect owner for modern Wireless Debugging settings and after-boot
+requests. File Manager separately owns the exact-USB classic `tcpip 5555`
+sequence. Fleet never supplies or receives the profile's serial, endpoint, or
+pairing code. The receipt keeps Kiosk setting, Meta wearer approval, listener
+discovery, and effect readback independent. Termux usability belongs to
+Fleet's separate signed observation state and is absent from this receipt. See
+[Quest connectivity provider](quest-connectivity-provider.md).
+The provider rejects duplicate request and operation IDs within one process,
+but its request has no cryptographic Manifold caller proof. Current-user
+Credential Manager does not isolate secrets from another same-user process;
+deployment uses a separate Windows identity when that caller boundary matters.
+Classic TCP/IP also binds the pre-mutation USB identity to fresh readback from
+the exact connected endpoint so a stale endpoint cannot be relabeled.
+
 The shipped CLI has no push or cancellation authority. A Core host may
 advertise push only when it injects a verifier for the current Quest identity
 and Manifold command, lease, provider epoch, and revocation barrier. The same
@@ -122,9 +143,11 @@ document and is not interleaved with transient progress events.
 `OperatorMutationReceipt` is the result contract for mutations. Its operation
 identity, desired state, observed state, transition history, and readback flag
 are shared by WPF and CLI. Dispatch records `sent`; the operation then remains
-`pending`; only command-specific evidence can produce `confirmed`. Wi-Fi prompt
-admission stays pending until a later Kiosk status reports enabled. Five-minute
-non-matches become timed out but remain reconcilable on later refresh.
+`pending`; only command-specific evidence can produce `confirmed`. A Wi-Fi
+prompt request remains pending even when Kiosk reports `adb_wifi_enabled`;
+that setting does not prove wearer acceptance, a current listener, or Termux
+loopback shell authority. Five-minute non-matches become timed out but remain
+reconcilable on later refresh.
 Direct commands use the same desired/effective-state matcher. Direct file
 mutations confirm only after signed byte/hash readback; local installs stay
 pending until the matching Android receipt reports installed or failed.
@@ -165,7 +188,7 @@ message. APK export additionally records local size and SHA-256.
 Wi-Fi routes retain the verified endpoint and device row. Parallel routes
 retain the deterministic APK path set, concurrency cap, and one command result
 or exception summary per target, including partial failures.
-The WPF footer shows active status for all operations, three owned Wi-Fi phases,
+The WPF footer shows active status for all operations, five owned Wi-Fi phases,
 and completed-target progress for fan-out. It does not invent byte or remaining-
 time percentages from ADB prose. The Rusty Kiosk tab additionally shows the
 latest PC/headset synchronization receipt rather than optimistic button state.
@@ -206,6 +229,11 @@ evidence local.
   expiry/revocation cancellation, serial pre/post checks, no-overwrite races,
   live/dead owner status, journal substitution rejection, and truthful
   destination/partial uncertainty.
+- Fleet connectivity-provider tests prove closed actions, strict request
+  admission before initialization, private profile binding, exact USB
+  scoping and stable identity continuity for classic TCP/IP, in-process replay
+  rejection, sanitized receipts, and independent Kiosk, wearer, and listener
+  facts plus the absence of foreign Termux claims.
 - CI builds the WPF app, runs the core tests, exercises CLI help, and scans the
   tracked public boundary.
 - Live Quest validation is a separate serial-scoped manual gate.
@@ -236,6 +264,7 @@ packages, private behavior, generated binaries, or broad runtime features.
 | Direct mode becomes raw device access | Restrict it to fixed Kiosk routes and one app-owned staging directory; keep general paths in explicit ADB tools. |
 | Optimistic local APK success | Require Android PackageInstaller receipt; keep wearer permission/confirmation as pending. |
 | Hidden Wi-Fi/daemon mutation | Require approval, scope `tcpip` to one USB serial, scope connect/disconnect to one endpoint, and never reset the ADB server. |
+| Kiosk setting is mistaken for usable ADB | Report setting, wearer approval, and listener discovery independently; admit Termux shell proof only in Fleet's signed observation state. |
 | Unbounded or ambiguous fan-out | Require two distinct Wi-Fi serials, cap concurrency at 16, and retain every target result. |
 | Misleading progress | Use only owned phase/target totals; show every other ADB operation as indeterminate. |
 | Misleading backup claim | State clearly that APK export excludes data and assets. |

@@ -142,6 +142,24 @@ Copy-Item -LiteralPath (
 Copy-Item -LiteralPath (
     Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.receipt.json') `
     -Destination $OutputDirectory -Force
+$connectivityProviderValidationDirectory =
+    Join-Path $repoRoot 'artifacts\fleet-connectivity-provider-release-validation'
+& (Join-Path $repoRoot 'tools\Test-FleetConnectivityProviderArtifact.ps1') `
+    -OutputDirectory $connectivityProviderValidationDirectory `
+    -Version $Version
+if ($LASTEXITCODE -ne 0) { throw 'Fleet connectivity provider artifact validation failed.' }
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.receipt.json') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $OutputDirectory -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.receipt.json') `
+    -Destination $OutputDirectory -Force
 Copy-Item -Path (Join-Path $appPublish '*') -Destination $combined -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $cliPublish 'questionable-file-manager.exe') -Destination $combined -Force
 Copy-Item -LiteralPath (Join-Path $cliPublish 'meta-quest-file-manager.exe') -Destination $combined -Force
@@ -156,6 +174,12 @@ Copy-Item -LiteralPath (
     -Destination $combined -Force
 Copy-Item -LiteralPath (
     Join-Path $cliPublish 'questionable-file-manager-awake-provider.receipt.json') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.receipt.json') `
     -Destination $combined -Force
 Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory 'QuestIonAbleFileManager-win-x64.zip')
 Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory 'questionable-file-manager-cli-win-x64.zip')
@@ -197,6 +221,7 @@ foreach ($entry in $compatibilityAliases.GetEnumerator()) {
     (Join-Path $cliPublish 'questionable-file-manager.exe'),
     (Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe'),
     (Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe'),
+    (Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe'),
     (Join-Path $OutputDirectory 'QuestIonAbleFileManager-Setup.exe')
 )
 if ($LASTEXITCODE -ne 0) { throw 'Brand asset validation failed.' }

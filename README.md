@@ -60,6 +60,9 @@ action can be automated and tested.
 - optionally expose a dedicated hash-pinned Fleet awake provider for bounded
   Meta holds, drift-only Windows watchdog repairs, a temporary device watchdog,
   watchdog-only stop, and explicit normal-settings restore;
+- optionally expose a dedicated hash-pinned Fleet connectivity provider that
+  resolves File Manager-owned private profiles, invokes only Kiosk's fixed
+  Wi-Fi ADB setup actions, or performs separate exact-USB classic TCP/IP setup;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -152,6 +155,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --req
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
 dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
 dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- integration quest-awake --json < <strict-request.json>
+dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- integration quest-connectivity --json < <strict-request.json>
 ```
 
 The optional `questionable-file-manager-api` executable is inert unless
@@ -227,6 +231,21 @@ scheduling, and the Windows loop. The published trust unit is
 framework-dependent build apphost. Canonical releases place that executable
 and its validation receipt beside the Kiosk provider at the top level and in
 both portable archives.
+The separate [Quest connectivity provider](docs/quest-connectivity-provider.md)
+resolves endpoint, Kiosk pairing material, and exact USB serial from a
+File Manager-owned current-user credential profile. Fleet supplies only its
+bounded device binding and current authority. Kiosk remains the on-device
+effect owner; the dedicated provider never accepts Meta system UI. Its receipt
+keeps request delivery, Kiosk setting, wearer approval, listener discovery,
+and effect readback independent, and never returns the private profile fields.
+Termux usability belongs only to Fleet's separate signed observation state.
+The classic `tcpip 5555` action remains separate from modern TLS Wireless
+Debugging and confirms that the network endpoint reports the same stable
+device identity as the selected USB transport. The provider rejects request
+and operation replay within one process. Its Credential Manager profile is
+current-user protection, not isolation from another process under that user;
+the current request has no cryptographic Manifold caller proof. Use a separate
+Windows identity when same-user callers are outside the trust boundary.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through
@@ -243,6 +262,7 @@ A base APK and its split APKs are submitted together as one session.
 
 - [Architecture](docs/architecture.md)
 - [Quest awake control](docs/quest-awake-control.md)
+- [Quest connectivity provider](docs/quest-connectivity-provider.md)
 - [ADB scope and safety](docs/adb-scope-and-safety.md)
 - [GUI and CLI operator parity](docs/operator-cli-parity.md)
 - [Wi-Fi ADB and parallel installation](docs/wifi-adb-and-parallel-install.md)

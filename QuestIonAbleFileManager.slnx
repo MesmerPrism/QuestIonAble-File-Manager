@@ -6,6 +6,7 @@
     <Project Path="src/QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj" />
     <Project Path="src/QuestIonAbleFileManager.FleetKioskV2Provider/QuestIonAbleFileManager.FleetKioskV2Provider.csproj" />
     <Project Path="src/QuestIonAbleFileManager.FleetAwakeProvider/QuestIonAbleFileManager.FleetAwakeProvider.csproj" />
+    <Project Path="src/QuestIonAbleFileManager.FleetConnectivityProvider/QuestIonAbleFileManager.FleetConnectivityProvider.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Setup/QuestIonAbleFileManager.Setup.csproj" />
   </Folder>
   <Folder Name="/tests/">

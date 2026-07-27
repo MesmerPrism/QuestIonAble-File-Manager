@@ -20,6 +20,10 @@ $awakeProviderPath =
     Join-Path $ReleaseDirectory 'questionable-file-manager-awake-provider.exe'
 $awakeProviderReceiptPath =
     Join-Path $ReleaseDirectory 'questionable-file-manager-awake-provider.receipt.json'
+$connectivityProviderPath =
+    Join-Path $ReleaseDirectory 'questionable-file-manager-connectivity-provider.exe'
+$connectivityProviderReceiptPath =
+    Join-Path $ReleaseDirectory 'questionable-file-manager-connectivity-provider.receipt.json'
 $receiptPath = Join-Path $ReleaseDirectory 'release-validation.json'
 $legacyAliases = [ordered]@{
     'MetaQuestFileManager-Setup.exe' = 'QuestIonAbleFileManager-Setup.exe'
@@ -38,7 +42,9 @@ foreach ($path in @(
     $providerPath,
     $providerReceiptPath,
     $awakeProviderPath,
-    $awakeProviderReceiptPath
+    $awakeProviderReceiptPath,
+    $connectivityProviderPath,
+    $connectivityProviderReceiptPath
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required release asset was not found: $path"
@@ -122,6 +128,52 @@ if ($awakeProviderReceipt.schema -cne
     [int]$awakeProviderReceipt.stderr_bytes -ne 0) {
     throw 'Fleet awake provider artifact receipt does not match the validated executable.'
 }
+$connectivityProviderReceipt =
+    Get-Content -Raw -LiteralPath $connectivityProviderReceiptPath | ConvertFrom-Json
+$connectivityProviderHash =
+    (Get-FileHash -LiteralPath $connectivityProviderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$connectivityProviderLength =
+    (Get-Item -LiteralPath $connectivityProviderPath).Length
+if ($connectivityProviderReceipt.schema -cne
+        'questionable.file_manager.fleet_connectivity_provider_artifact_receipt.v1' -or
+    $connectivityProviderReceipt.artifact_name -cne
+        'questionable-file-manager-connectivity-provider.exe' -or
+    $connectivityProviderReceipt.source_project -cne
+        'QuestIonAbleFileManager.FleetConnectivityProvider' -or
+    $connectivityProviderReceipt.sha256 -cne $connectivityProviderHash -or
+    [long]$connectivityProviderReceipt.size_bytes -ne $connectivityProviderLength -or
+    $connectivityProviderReceipt.self_contained -ne $true -or
+    $connectivityProviderReceipt.single_file -ne $true -or
+    [int]$connectivityProviderReceipt.sibling_code_files -ne 0 -or
+    [int]$connectivityProviderReceipt.isolated_file_count -ne 1 -or
+    $connectivityProviderReceipt.bundle_extract_base -cne 'caller-private-per-launch' -or
+    [int]$connectivityProviderReceipt.bundle_extract_file_count -lt 0 -or
+    [int]$connectivityProviderReceipt.bundle_extract_file_count -gt 128 -or
+    [int]$connectivityProviderReceipt.bundle_extract_directory_count -lt 0 -or
+    [int]$connectivityProviderReceipt.bundle_extract_directory_count -gt 16 -or
+    [int]$connectivityProviderReceipt.bundle_extract_launch_directories -ne 11 -or
+    [long]$connectivityProviderReceipt.bundle_extract_bytes -lt 0 -or
+    [long]$connectivityProviderReceipt.bundle_extract_bytes -gt 134217728 -or
+    [int]$connectivityProviderReceipt.isolated_top_level_entries_after_run -ne 2 -or
+    $connectivityProviderReceipt.ordinary_apphost_isolation_rejected -ne $true -or
+    $connectivityProviderReceipt.general_cli_dispatch_unreachable -ne $true -or
+    [int]$connectivityProviderReceipt.rejected_argument_shapes -lt 10 -or
+    $connectivityProviderReceipt.private_profile_required -ne $true -or
+    $connectivityProviderReceipt.request_schema -cne
+        'rusty.fleet.quest_wifi_adb_owner_invocation.v1' -or
+    $connectivityProviderReceipt.receipt_schema -cne
+        'questionable.file_manager.quest_wifi_adb_receipt.v1' -or
+    [int]$connectivityProviderReceipt.exit_codes.verified -ne 0 -or
+    [int]$connectivityProviderReceipt.exit_codes.failed -ne 1 -or
+    [int]$connectivityProviderReceipt.exit_codes.rejected -ne 2 -or
+    [int]$connectivityProviderReceipt.exit_codes.pending -ne 3 -or
+    [int]$connectivityProviderReceipt.exit_codes.cancelled -ne 4 -or
+    [int]$connectivityProviderReceipt.smoke_exit_code -ne 1 -or
+    $connectivityProviderReceipt.smoke_status -cne 'failed' -or
+    $connectivityProviderReceipt.smoke_error -cne 'providerProfileUnavailable' -or
+    [int]$connectivityProviderReceipt.stderr_bytes -ne 0) {
+    throw 'Fleet connectivity provider artifact receipt does not match the validated executable.'
+}
 foreach ($entry in $legacyAliases.GetEnumerator()) {
     $legacyPath = Join-Path $ReleaseDirectory $entry.Key
     $canonicalPath = Join-Path $ReleaseDirectory $entry.Value
@@ -197,7 +249,9 @@ foreach ($portableArchiveName in @(
             'questionable-file-manager-kiosk-v2-provider.exe',
             'questionable-file-manager-kiosk-v2-provider.receipt.json',
             'questionable-file-manager-awake-provider.exe',
-            'questionable-file-manager-awake-provider.receipt.json'
+            'questionable-file-manager-awake-provider.receipt.json',
+            'questionable-file-manager-connectivity-provider.exe',
+            'questionable-file-manager-connectivity-provider.receipt.json'
         )) {
             if ($portableEntries -notcontains $providerEntry) {
                 throw "$portableArchiveName is missing required provider asset $providerEntry."
@@ -313,6 +367,41 @@ $receipt = [ordered]@{
         isolated_smoke_exit_code = 2
         stderr_bytes = 0
     }
+    fleet_connectivity_provider = [ordered]@{
+        artifact_name = 'questionable-file-manager-connectivity-provider.exe'
+        source_project = 'QuestIonAbleFileManager.FleetConnectivityProvider'
+        sha256 = $connectivityProviderHash
+        size_bytes = $connectivityProviderLength
+        self_contained = $true
+        single_file = $true
+        bundle_extract_base = 'caller-private-per-launch'
+        bundle_extract_file_count =
+            [int]$connectivityProviderReceipt.bundle_extract_file_count
+        bundle_extract_directory_count =
+            [int]$connectivityProviderReceipt.bundle_extract_directory_count
+        bundle_extract_launch_directories =
+            [int]$connectivityProviderReceipt.bundle_extract_launch_directories
+        bundle_extract_bytes =
+            [long]$connectivityProviderReceipt.bundle_extract_bytes
+        ordinary_apphost_isolation_rejected = $true
+        general_cli_dispatch_unreachable = $true
+        rejected_argument_shapes =
+            [int]$connectivityProviderReceipt.rejected_argument_shapes
+        private_profile_required = $true
+        request_schema = 'rusty.fleet.quest_wifi_adb_owner_invocation.v1'
+        receipt_schema = 'questionable.file_manager.quest_wifi_adb_receipt.v1'
+        exit_codes = [ordered]@{
+            verified = 0
+            failed = 1
+            rejected = 2
+            pending = 3
+            cancelled = 4
+        }
+        isolated_smoke_status = 'failed'
+        isolated_smoke_error = 'providerProfileUnavailable'
+        isolated_smoke_exit_code = 1
+        stderr_bytes = 0
+    }
     required_assets = @(
         'QuestIonAbleFileManager-Setup.exe',
         'QuestIonAbleFileManager-win-x64.msix',
@@ -321,7 +410,9 @@ $receipt = [ordered]@{
         'questionable-file-manager-kiosk-v2-provider.exe',
         'questionable-file-manager-kiosk-v2-provider.receipt.json',
         'questionable-file-manager-awake-provider.exe',
-        'questionable-file-manager-awake-provider.receipt.json'
+        'questionable-file-manager-awake-provider.receipt.json',
+        'questionable-file-manager-connectivity-provider.exe',
+        'questionable-file-manager-connectivity-provider.receipt.json'
     )
     compatibility_aliases = $legacyAliases
 }

@@ -419,7 +419,7 @@ public partial class MainWindow : Window
         var confirmation = MessageBox.Show(
             this,
             $"Enable Wi-Fi ADB on the selected USB headset using TCP port {port}?\n\n" +
-            "The app will read its Wi-Fi address, change its debugging transport, and connect from this PC.",
+            "The app will bind its device identity, read its Wi-Fi address, change its debugging transport, connect from this PC, and verify the same headset.",
             "Confirm Wi-Fi ADB change",
             MessageBoxButton.OKCancel,
             MessageBoxImage.Warning);

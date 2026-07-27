@@ -63,11 +63,13 @@ Every target receives a result even when another target fails.
 Wi-Fi ADB still requires Developer Mode and prior in-headset authorization.
 The reviewed enable route starts from one selected, ready USB headset:
 
-1. inspect `ip route` on that serial and select the non-loopback `wlan0` IPv4
+1. read one stable nonempty identity on that serial;
+2. inspect `ip route` on that serial and select the non-loopback `wlan0` IPv4
    source address;
-2. run `tcpip <port>` on that same serial;
-3. connect only the validated `<quest-ip>:<port>` endpoint;
-4. require that exact endpoint to appear ready in device discovery.
+3. run `tcpip <port>` on that same serial;
+4. connect only the validated `<quest-ip>:<port>` endpoint;
+5. require that exact endpoint to appear ready in device discovery;
+6. read the same identity property through that endpoint and require equality.
 
 The WPF app asks for confirmation before enable, connect, and disconnect. The
 CLI requires `--confirm-wifi-adb`, which an agent may use only after operator

@@ -292,6 +292,20 @@ typed request and an exact private serial binding; File Manager returns only
 independent effect-owner readbacks. See
 [Quest awake control](quest-awake-control.md).
 
+The dedicated Quest connectivity provider is also separate. Fleet supplies an
+already-authorized typed action plus logical device binding; File Manager
+resolves its own exact USB serial and Kiosk direct profile, then returns only
+sanitized setting/listener facts. Kiosk remains the on-device privileged
+effect owner and Termux usability remains Fleet-owned signed observation
+state. See
+[Quest connectivity provider](quest-connectivity-provider.md).
+The provider consumes each request and operation ID once per process, but this
+is not cryptographic Fleet/Manifold caller authentication or durable replay
+state. Its current-user credential profile is readable to another process
+running as that Windows user. Production isolation must therefore use a
+separate Windows identity until a one-use signed launch capability is part of
+the cross-repository contract.
+
 The v1 observation proves File Manager transport continuity; it does not prove
 that an ADB serial is a Rusty Fleet device identity. Push therefore remains
 unadvertised unless a separate owner supplies the current Quest-owned identity
@@ -314,6 +328,13 @@ replay. Repository
 build, test, CLI help, public-boundary, branding, and asset checks remain the
 normal source gates. Live headset validation is separate and is not implied by
 these host tests.
+
+The connectivity-provider suite additionally covers strict closed actions,
+private profile binding, exact serial-scoped classic setup, setting versus
+Meta-prompt/listener separation, absence of Termux claims, sanitized failures,
+in-process replay rejection, stable USB/network identity continuity, and
+isolated single-file artifact validation with a fresh extraction directory per
+launch.
 
 ## Encrypted Kiosk v2 catalog provider
 

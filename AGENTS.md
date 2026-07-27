@@ -54,8 +54,10 @@ documented.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes
-  `tcpip` to one ready USB serial, and connects one validated endpoint. Never
-  reset or restart the ADB server as part of this workflow.
+  `tcpip` to one ready USB serial, connects one validated endpoint, and
+  requires one stable identity to match before USB mutation and after exact
+  network-endpoint connection. Never reset or restart the ADB server as part
+  of this workflow.
 - Parallel installation requires at least two distinct ready Wi-Fi ADB
   serials, uses a bounded 1–16 concurrency limit, sends one serial-scoped
   install transaction per headset, and preserves per-target partial failures.
@@ -111,6 +113,22 @@ documented.
   stay-on, proximity hold, wake/display, watchdog, and restore facts
   independently and must not expose serials, controller identifiers, raw ADB
   output, caller shell, paths, or process commands.
+- The separate Fleet connectivity subprocess owns only the closed `status`,
+  `request_wireless_adb`, after-boot preference enable/disable,
+  `disable_wireless_adb`, and classic USB `tcpip 5555` actions. It resolves
+  endpoint, Kiosk pairing code, and exact USB serial from a File Manager-owned
+  current-user credential profile keyed by Fleet device ID; Fleet never
+  supplies or receives those values. Kiosk remains the privileged effect
+  owner and Meta prompts remain wearer decisions. Keep request delivery,
+  Kiosk setting, after-boot preference, wearer approval, and listener
+  discovery independent. A Kiosk setting never proves listener usability.
+  Termux proof belongs to Fleet's separate signed observation state and must
+  not appear in this File Manager-owned receipt. Reject duplicate request IDs
+  and operation IDs within the provider process before effect dispatch.
+  Current-user Credential Manager is not same-user process isolation and the
+  request carries no cryptographic Manifold proof; do not claim otherwise.
+  Deploy under an isolated Windows identity when same-user callers are not
+  trusted.
 - Fleet may launch awake control only through the self-contained, single-file
   `questionable-file-manager-awake-provider.exe`, pinned by lowercase SHA-256
   and staged with a per-launch private `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its
@@ -118,6 +136,13 @@ documented.
   `integration quest-awake --json`. Invalid arguments and strict-request
   failures must reject before ADB discovery. Never substitute the general CLI
   or a framework-dependent apphost.
+- Fleet may launch Wi-Fi ADB connectivity only through the self-contained,
+  single-file `questionable-file-manager-connectivity-provider.exe`, pinned by
+  lowercase SHA-256 and staged with a per-launch private
+  `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its sole argument vector is exact
+  case-sensitive `integration quest-connectivity --json`. Invalid arguments
+  and strict-request failures must reject before profile or ADB initialization.
+  Never substitute the general CLI or a framework-dependent apphost.
 - Fleet may launch the Kiosk v2 catalog provider only from the reviewed,
   self-contained, single-file Windows artifact named
   `questionable-file-manager-kiosk-v2-provider.exe`, pinned by lowercase
@@ -136,8 +161,9 @@ documented.
   new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` for each pinned provider stage so
   any native single-file extraction remains inside that stage's trust boundary;
   it never reuses a shared extraction directory.
-- Meta permission prompts remain wearer decisions. Showing a Wi-Fi ADB prompt
-  is `pending`; it becomes `confirmed` only when Kiosk reports Wi-Fi ADB enabled.
+- Meta permission prompts remain wearer decisions. A Kiosk
+  `wifi_adb_enabled` readback proves only that setting; it does not prove
+  wearer acceptance, a current listener, or Termux loopback shell authority.
 
 ## Agent CLI Workflow
 
@@ -232,6 +258,7 @@ pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
 pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
 pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
+pwsh -NoProfile -File ./tools/Test-FleetConnectivityProviderArtifact.ps1
 ```
 
 The canonical folder mark and multi-resolution Windows icon live under
@@ -288,6 +315,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
 - `QuestIonAbleFileManager.Cli` is the automation-equivalent operator surface.
 - `QuestIonAbleFileManager.FleetAwakeProvider` is the narrow Fleet effect-owner
   artifact for Quest awake control; it is not a general CLI projection.
+- `QuestIonAbleFileManager.FleetConnectivityProvider` is the narrow Fleet
+  execution artifact for Kiosk-owned wireless requests and exact-USB classic
+  TCP/IP setup; it is not a general CLI projection.
 - Fleet integration stays in the Core/CLI boundary described in
   `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
   one read-only target without a separate authority and UX review.
@@ -304,7 +334,7 @@ dotnet run --project src/QuestIonAbleFileManager.App
 
 GitHub Pages is the human-facing download surface and GitHub Releases is the
 binary source of truth. The workflow publishes the signed guided setup, signed
-MSIX, App Installer feed, public CER, portable app/CLI archives, both dedicated
+MSIX, App Installer feed, public CER, portable app/CLI archives, three dedicated
 Fleet provider executables and receipts, checksums, and a validation receipt.
 The build verifies the exact published Kiosk version and
 tag commit, every manifest byte count and SHA-256, both APK signer digests, and

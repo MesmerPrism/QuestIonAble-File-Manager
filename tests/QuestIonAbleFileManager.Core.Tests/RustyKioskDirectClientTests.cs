@@ -2,6 +2,7 @@ using QuestIonAbleFileManager.Core;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
@@ -74,6 +75,83 @@ public sealed class RustyKioskDirectClientTests
         await Assert.ThrowsAsync<InvalidDataException>(() => client.GetStatusAsync());
     }
 
+    [Fact]
+    public async Task InvokeKiosk_WaitsForExactCompletedResult()
+    {
+        var handler = new KioskInvokeHandler(incompletePolls: 1);
+        var client = CreateInvokeClient(handler);
+
+        var result = await client.InvokeKioskAsync(
+            RustyKioskCommand.Status,
+            timeout: TimeSpan.FromSeconds(1));
+
+        Assert.True(result.Completed);
+        Assert.Equal(RustyKioskCommand.Status, result.Command);
+        Assert.Equal(2, handler.ResultPollCount);
+    }
+
+    [Fact]
+    public async Task InvokeKiosk_RejectsCrossedLogicalRequestResult()
+    {
+        var client = CreateInvokeClient(new KioskInvokeHandler(
+            resultRequestIdOverride: "kiosk_other_active_0001"));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.InvokeKioskAsync(RustyKioskCommand.Status));
+
+        Assert.Contains("different request", exception.Message);
+    }
+
+    [Fact]
+    public async Task InvokeKiosk_RejectsStaleLogicalRequestResult()
+    {
+        var client = CreateInvokeClient(new KioskInvokeHandler(
+            resultRequestIdOverride: "kiosk_stale_0001"));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.InvokeKioskAsync(
+                RustyKioskCommand.RequestWifiAdb));
+
+        Assert.Contains("different request", exception.Message);
+    }
+
+    [Fact]
+    public async Task InvokeKiosk_RejectsWrongTypedCommandResult()
+    {
+        var client = CreateInvokeClient(new KioskInvokeHandler(
+            resultCommandOverride: RustyKioskCommand.Reload.ToWireName()));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.InvokeKioskAsync(RustyKioskCommand.Status));
+
+        Assert.Contains("different typed command", exception.Message);
+    }
+
+    [Fact]
+    public async Task InvokeKiosk_NeverReturnsAcceptedIncompleteResult()
+    {
+        var handler = new KioskInvokeHandler(incompletePolls: int.MaxValue);
+        var client = CreateInvokeClient(handler);
+
+        await Assert.ThrowsAsync<TimeoutException>(
+            () => client.InvokeKioskAsync(
+                RustyKioskCommand.Status,
+                timeout: TimeSpan.FromMilliseconds(10)));
+
+        Assert.True(handler.ResultPollCount >= 1);
+    }
+
+    private static RustyKioskDirectClient CreateInvokeClient(
+        HttpMessageHandler handler)
+    {
+        const string code = "0123-4567-89AB-CDEF-0123-4567-89";
+        return new RustyKioskDirectClient(
+            RustyKioskDirectEndpoint.Parse(
+                "http://192.0.2.1:39873",
+                code),
+            new HttpClient(handler));
+    }
+
     private sealed class SignedResponseHandler(
         string pairingCode,
         bool tamperBodyAfterSigning) : HttpMessageHandler
@@ -103,5 +181,120 @@ public sealed class RustyKioskDirectClientTests
                 RustyKioskDirectAuth.SignResponse(pairingCode, requestId, 200, sha));
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class KioskInvokeHandler(
+        string? resultRequestIdOverride = null,
+        string? resultCommandOverride = null,
+        int incompletePolls = 0) : HttpMessageHandler
+    {
+        private const string PairingCode =
+            "0123-4567-89AB-CDEF-0123-4567-89";
+        private string? _logicalRequestId;
+        private string? _logicalCommand;
+        private int _resultPollCount;
+
+        public int ResultPollCount =>
+            Volatile.Read(ref _resultPollCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var transportRequestId = request.Headers
+                .GetValues("X-Rusty-Request-Id")
+                .Single();
+            byte[] body;
+            if (request.Method == HttpMethod.Post &&
+                request.RequestUri?.AbsolutePath == "/v1/kiosk/invoke")
+            {
+                var requestBytes = await request.Content!
+                    .ReadAsByteArrayAsync(cancellationToken);
+                using var document = JsonDocument.Parse(requestBytes);
+                _logicalRequestId = document.RootElement
+                    .GetProperty("request_id")
+                    .GetString();
+                _logicalCommand = document.RootElement
+                    .GetProperty("command")
+                    .GetString();
+                body = JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    accepted = true,
+                    message = "accepted"
+                });
+            }
+            else
+            {
+                var poll = Interlocked.Increment(ref _resultPollCount);
+                body = BuildResult(
+                    resultRequestIdOverride ?? _logicalRequestId ??
+                        throw new InvalidOperationException(
+                            "Invoke request was not observed."),
+                    resultCommandOverride ?? _logicalCommand ??
+                        throw new InvalidOperationException(
+                            "Invoke command was not observed."),
+                    poll > incompletePolls);
+            }
+
+            var sha = Convert.ToHexString(SHA256.HashData(body))
+                .ToLowerInvariant();
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(body)
+            };
+            response.Headers.TryAddWithoutValidation(
+                "X-Rusty-Request-Id",
+                transportRequestId);
+            response.Headers.TryAddWithoutValidation(
+                "X-Rusty-Content-Sha256",
+                sha);
+            response.Headers.TryAddWithoutValidation(
+                "X-Rusty-Signature",
+                RustyKioskDirectAuth.SignResponse(
+                    PairingCode,
+                    transportRequestId,
+                    200,
+                    sha));
+            return response;
+        }
+
+        private static byte[] BuildResult(
+            string requestId,
+            string command,
+            bool completed) =>
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = RustyKioskContract.ResultSchema,
+                request_id = requestId,
+                command,
+                accepted = true,
+                completed,
+                message = completed ? "complete" : "pending",
+                state = new
+                {
+                    installed_count = 0,
+                    not_installed_count = 0,
+                    visible_count = 0,
+                    visible_entries_truncated = false,
+                    entries = Array.Empty<object>(),
+                    search = "",
+                    tag_filter = (string?)null,
+                    selected_key = (string?)null,
+                    selected_name = (string?)null,
+                    selected_package = (string?)null,
+                    selected_installed = false,
+                    selected_launchable = false,
+                    wifi_adb_enabled = false,
+                    setup_helper_installed = true,
+                    setup_helper_ready = true,
+                    request_wifi_adb_after_boot = false,
+                    accessibility_enabled = false,
+                    guard_armed = false,
+                    operation_in_progress =
+                        completed ? null : "request-pending",
+                    status_line = completed ? "complete" : "pending",
+                    tag_file_path = RustyKioskContract.TagFilePath
+                }
+            });
     }
 }

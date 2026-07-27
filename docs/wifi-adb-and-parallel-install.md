@@ -3,9 +3,10 @@
 ## Decision
 
 Support the established TCP/IP ADB workflow as an explicit operator action:
-read the Wi-Fi address from one USB-authorized headset, switch that headset's
-ADB transport to a selected TCP port, connect the exact endpoint, and verify
-that it appears ready in `adb devices -l`. Also support connecting and
+bind one stable identity from the USB-authorized headset, read its Wi-Fi
+address, switch that headset's ADB transport to a selected TCP port, connect
+the exact endpoint, verify that it appears ready in `adb devices -l`, and
+require the same identity through that endpoint. Also support connecting and
 disconnecting a previously enabled endpoint without resetting the ADB server.
 
 Install fan-out is a bounded set of independent, serial-scoped ADB requests.
@@ -44,15 +45,21 @@ argument construction, bounded execution, and per-target results.
 The enable route performs these operations in order:
 
 ```text
+adb -s <usb-serial> shell getprop <stable-identity-property>
 adb -s <usb-serial> shell ip route
 adb -s <usb-serial> tcpip <port>
 adb connect <quest-ip>:<port>
 adb devices -l
+adb -s <quest-ip>:<port> shell getprop <same-stable-identity-property>
 ```
 
-The first two operations are serial-scoped to the selected USB headset.
+The first three operations are serial-scoped to the selected USB headset.
 `connect` and `disconnect` cannot use `-s` because they establish or remove the
 endpoint itself; they are instead scoped to one validated `<host>:<port>`.
+The final identity read is scoped to that exact endpoint and must equal the
+pre-mutation USB readback. Empty, `unknown`, malformed, mismatched, and stale
+endpoint identities fail closed. Machine-readable local output retains only
+the lowercase SHA-256 identity digest.
 Installation always returns to serial scope:
 
 ```text
@@ -139,8 +146,9 @@ real addresses, serials, APKs, or logs to the repository.
   interfaces.
 - Contract tests require explicit approval and compare every WPF command with
   its exact CLI argument vector.
-- Fake-runner tests prove enablement reads the address before `tcpip`, connects
-  the exact endpoint, and verifies discovery.
+- Fake-runner tests prove enablement binds identity and reads the address
+  before `tcpip`, connects the exact endpoint, verifies discovery, and rejects
+  identity mismatch or a ready stale endpoint.
 - Concurrency tests prove the configured cap is respected.
 - Partial-failure tests prove successful and failed targets are both retained.
 - Bundle fan-out tests prove every target receives the complete deterministic
@@ -157,6 +165,7 @@ The first approved two-headset run passed; see the
 | --- | --- |
 | Wrong USB headset | Require the selected ready USB serial and show it in the confirmation. |
 | Wrong network endpoint | Validate one IPv4/hostname plus port, then require the exact endpoint to appear ready. |
+| Ready endpoint belongs to another headset | Require the same stable identity before USB mutation and after exact-endpoint connection; expose only its digest. |
 | Hidden global ADB mutation | Exclude daemon lifecycle commands; connect and disconnect one endpoint only. |
 | Unbounded fan-out | Require an explicit 1–16 limit and use a semaphore around each install. |
 | Duplicate install on one headset | Reject duplicate serials before running ADB. |

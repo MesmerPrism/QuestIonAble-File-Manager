@@ -65,11 +65,13 @@ operator confirmation.
 
 The optional direct surface is `rusty.kiosk.direct_operator.v1` on port 39873.
 It accepts expiring HMAC-SHA-256 envelopes, retains replay IDs, verifies request
-bodies, and signs every authenticated response. It has no raw shell, arbitrary
-intent/component, protected-data path, or device-settings endpoint. HTTP v1 is
-authenticated and integrity-protected but not encrypted; use a trusted network
-or private Windows hotspot. This is a single-headset local link, not fleet
-management.
+bodies, and signs every authenticated response. The Windows client additionally
+requires the completed result's logical request ID and typed command to match
+the exact invocation; stale, crossed, wrong-command, and incomplete results
+cannot be returned as accepted. It has no raw shell, arbitrary intent/component,
+protected-data path, or device-settings endpoint. HTTP v1 is authenticated and
+integrity-protected but not encrypted; use a trusted network or private Windows
+hotspot. This is a single-headset local link, not fleet management.
 
 ## Sent, Pending, Confirmed
 

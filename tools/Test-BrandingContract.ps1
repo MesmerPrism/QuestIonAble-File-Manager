@@ -43,6 +43,7 @@ foreach ($path in @(
     'src\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj',
     'src\QuestIonAbleFileManager.FleetKioskV2Provider\QuestIonAbleFileManager.FleetKioskV2Provider.csproj',
     'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj',
+    'src\QuestIonAbleFileManager.FleetConnectivityProvider\QuestIonAbleFileManager.FleetConnectivityProvider.csproj',
     'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj'
 )) {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $path) -PathType Leaf)) {
@@ -64,6 +65,15 @@ Assert-NotContains 'src\QuestIonAbleFileManager.FleetAwakeProvider\Program.cs' '
 Assert-NotContains 'src\QuestIonAbleFileManager.FleetAwakeProvider\QuestIonAbleFileManager.FleetAwakeProvider.csproj' 'QuestIonAbleFileManager.Cli'
 Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' '-p:PublishSingleFile=true'
 Assert-Contains 'tools\Test-FleetAwakeProviderArtifact.ps1' '--self-contained true'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\QuestIonAbleFileManager.FleetConnectivityProvider.csproj' '<AssemblyName>questionable-file-manager-connectivity-provider</AssemblyName>'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\QuestIonAbleFileManager.FleetConnectivityProvider.csproj' '../QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj'
+Assert-Contains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\Program.cs' 'QuestConnectivityProviderSubprocessHost'
+Assert-Contains 'tools\Test-FleetConnectivityProviderArtifact.ps1' 'QuestIonAbleFileManager.FleetConnectivityProvider.csproj'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\Program.cs' 'CliApplication'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\Program.cs' 'OperatorCommand'
+Assert-NotContains 'src\QuestIonAbleFileManager.FleetConnectivityProvider\QuestIonAbleFileManager.FleetConnectivityProvider.csproj' 'QuestIonAbleFileManager.Cli'
+Assert-Contains 'tools\Test-FleetConnectivityProviderArtifact.ps1' '-p:PublishSingleFile=true'
+Assert-Contains 'tools\Test-FleetConnectivityProviderArtifact.ps1' '--self-contained true'
 Assert-Contains 'src\QuestIonAbleFileManager.FleetKioskV2Provider\QuestIonAbleFileManager.FleetKioskV2Provider.csproj' '../QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj'
 Assert-Contains 'src\QuestIonAbleFileManager.FleetKioskV2Provider\Program.cs' 'RustyKioskV2CatalogSubprocessHost'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' 'QuestIonAbleFileManager.FleetKioskV2Provider.csproj'
@@ -89,6 +99,13 @@ Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-a
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-awake-provider.receipt.json'"
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' 'fleet_awake_provider = [ordered]@{'
 Assert-Contains 'docs\release-workflow.md' '`questionable-file-manager-awake-provider.exe`'
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' 'Test-FleetConnectivityProviderArtifact.ps1'
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-connectivity-provider.exe'"
+Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-connectivity-provider.receipt.json'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-connectivity-provider.exe'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-connectivity-provider.receipt.json'"
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' 'fleet_connectivity_provider = [ordered]@{'
+Assert-Contains 'docs\release-workflow.md' '`questionable-file-manager-connectivity-provider.exe`'
 Assert-Contains 'docs\fleet-integration.md' '`questionable-file-manager-kiosk-v2-provider.exe`'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '-p:PublishSingleFile=true'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '--self-contained true'

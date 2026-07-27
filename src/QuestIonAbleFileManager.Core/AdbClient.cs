@@ -778,10 +778,19 @@ public sealed partial class AdbClient
         port = AndroidInput.RequireTcpPort(port);
 
         progress?.Report(new OperatorProgress(
+            "wifi-usb-identity",
+            "Binding the selected USB headset identity…",
+            0,
+            5));
+        var usbIdentity = await ReadStableDeviceIdentityAsync(
+            usbSerial,
+            cancellationToken).ConfigureAwait(false);
+
+        progress?.Report(new OperatorProgress(
             "wifi-address",
             "Reading the headset Wi-Fi address…",
-            0,
-            3));
+            1,
+            5));
         var addressProbe = await RunForDeviceAsync(
             usbSerial,
             new[] { "shell", "ip route" },
@@ -793,8 +802,8 @@ public sealed partial class AdbClient
         progress?.Report(new OperatorProgress(
             "wifi-enable",
             "Enabling Wi-Fi ADB on the selected headset…",
-            1,
-            3));
+            2,
+            5));
         var tcpIpCommand = await RunForDeviceAsync(
             usbSerial,
             new[] { "tcpip", port.ToString(System.Globalization.CultureInfo.InvariantCulture) },
@@ -805,22 +814,90 @@ public sealed partial class AdbClient
         progress?.Report(new OperatorProgress(
             "wifi-connect",
             "Connecting to the headset over Wi-Fi…",
-            2,
-            3));
+            3,
+            5));
         var connection = await ConnectWifiAdbAsync(host, port, cancellationToken).ConfigureAwait(false);
+        progress?.Report(new OperatorProgress(
+            "wifi-network-identity",
+            "Verifying the connected endpoint is the selected headset…",
+            4,
+            5));
+        var networkIdentity = await ReadStableDeviceIdentityPropertyAsync(
+            connection.Endpoint,
+            usbIdentity.Property,
+            cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(
+                usbIdentity.Value,
+                networkIdentity,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The connected Wi-Fi ADB endpoint did not match the selected USB headset identity.");
+        }
+        var identitySha256 = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(usbIdentity.Value)))
+            .ToLowerInvariant();
         progress?.Report(new OperatorProgress(
             "wifi-ready",
             "Wi-Fi ADB is connected and ready.",
-            3,
-            3));
+            5,
+            5));
         return new WifiAdbEnableResult(
             usbSerial,
             host,
             port,
             connection.Endpoint,
+            identitySha256,
             addressProbe,
             tcpIpCommand,
             connection);
+    }
+
+    private async Task<(string Property, string Value)>
+        ReadStableDeviceIdentityAsync(
+            string serial,
+            CancellationToken cancellationToken)
+    {
+        foreach (var property in new[] { "ro.serialno", "ro.boot.serialno" })
+        {
+            var value = await ReadStableDeviceIdentityPropertyAsync(
+                serial,
+                property,
+                cancellationToken).ConfigureAwait(false);
+            if (value.Length != 0)
+                return (property, value);
+        }
+
+        throw new InvalidOperationException(
+            "The selected USB headset did not expose a stable device identity.");
+    }
+
+    private async Task<string> ReadStableDeviceIdentityPropertyAsync(
+        string serial,
+        string property,
+        CancellationToken cancellationToken)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var result = await RunForDeviceAsync(
+            serial,
+            new[] { "shell", "getprop", property },
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        result.EnsureSuccess("Read the headset stable device identity");
+        var value = result.StandardOutput.Trim();
+        if (value.Length == 0 ||
+            string.Equals(value, "unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+        if (value.Length > 256 ||
+            value.Any(static character =>
+                char.IsControl(character) || char.IsWhiteSpace(character)))
+        {
+            throw new InvalidDataException(
+                "The headset returned an invalid stable device identity.");
+        }
+        return value;
     }
 
     public async Task<WifiAdbConnectionResult> ConnectWifiAdbAsync(

@@ -23,8 +23,12 @@ Every Windows preview release contains:
   single-file Quest awake effect-owner provider for Fleet;
 - `questionable-file-manager-awake-provider.receipt.json`: isolated rejection,
   trust-unit shape, byte length, and lowercase SHA-256 for the awake provider;
+- `questionable-file-manager-connectivity-provider.exe`: dedicated
+  self-contained single-file Quest connectivity execution provider for Fleet;
+- `questionable-file-manager-connectivity-provider.receipt.json`: isolated
+  absent-profile smoke, trust-unit shape, byte length, and lowercase SHA-256;
 - `SHA256SUMS.txt`: checksums for every release asset;
-- `release-validation.json`: signature, timestamp, identity, feed, and both
+- `release-validation.json`: signature, timestamp, identity, feed, and all
   dedicated Fleet-provider validation summaries.
 
 Releases from `0.4.0` also contain byte-identical former-name aliases for the
@@ -53,8 +57,18 @@ directly from `QuestIonAbleFileManager.FleetAwakeProvider`, and its artifact
 receipt. The release gate requires the same isolated single-file trust-unit
 shape, strict former-bound rejection before ADB initialization, empty standard
 error, and failed isolated framework-dependent apphost control. The release
-validation receipt records both provider hashes and validation summaries
+validation receipt records the provider hashes and validation summaries
 separately.
+
+They also include `questionable-file-manager-connectivity-provider.exe`,
+published directly from
+`QuestIonAbleFileManager.FleetConnectivityProvider`, and its artifact receipt.
+Its isolated gate accepts only `integration quest-connectivity --json`, fails
+closed when the File Manager-owned current-user profile is absent, rejects
+broad CLI shapes before initialization, and proves the framework-dependent
+apphost cannot substitute for the pinned single-file trust unit. The release
+validation receipt records its hash separately from the awake and Kiosk
+catalog providers.
 
 The WPF app, automation CLI, guided setup helper, MSIX package, and GitHub Pages
 site use the same folder mark. Its canonical source and multi-resolution ICO
