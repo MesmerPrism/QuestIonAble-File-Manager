@@ -115,6 +115,13 @@ state and stable reason codes. Import returns only `created` or `replaced`
 with the device ID and sanitized state. Replacement requires
 `--replace-existing`; revocation requires `--confirm-profile-revoke`. Neither
 route touches a headset, connects ADB, or infers listener health.
+Successful writes are confirmed only after exact Credential Manager byte
+readback and profile parsing. If that verification fails, a create removes the
+just-written record and a replacement restores the retained prior exact record.
+The retained and readback buffers are then zeroed. Errors report only a stable
+reason and `rollback_state=confirmed`; if cleanup or restoration cannot itself
+be verified, the route fails closed with `profileWriteRollbackFailed` and
+`rollback_state=uncertain`.
 
 Missing, malformed, mismatched, non-USB, non-HTTP, or wrong-port stored
 profiles fail closed before an effect owner is called. Profile bytes and

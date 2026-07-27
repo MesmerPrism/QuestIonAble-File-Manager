@@ -122,11 +122,12 @@ internal static class CliApplication
             WriteFleetJson(new
             {
                 schema = errorSchema,
-                status = "rejected",
+                status = exception.Status,
                 reason_code = exception.Code,
+                rollback_state = exception.RollbackState,
                 message = exception.Message
             });
-            return 2;
+            return exception.Status == "rejected" ? 2 : 1;
         }
         catch (ArgumentException)
         {

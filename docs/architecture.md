@@ -137,6 +137,10 @@ controls for every outcome. A create-only request must receive an
 existing-record response before a distinct replacement confirmation is
 offered. Profile lifecycle receipts expose no serial,
 endpoint, pairing code, Credential Manager target, or inferred connectivity.
+An exact post-write readback and parse is the commit point. Failed create
+verification deletes and confirms absence; failed replacement verification
+restores and confirms the retained exact prior blob. An unverified rollback is
+reported as uncertain rather than relabeled as a successful mutation.
 
 `ProviderCapabilityDiscoveryProjection` owns only the strict DTO projection of
 those three existing provider registries. Awake and connectivity action lists

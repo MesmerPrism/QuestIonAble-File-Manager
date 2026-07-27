@@ -144,13 +144,21 @@ public static class QuestConnectivityProfileWriteWorkflow
 
 public sealed class QuestConnectivityProfileManagementException : Exception
 {
-    public QuestConnectivityProfileManagementException(string code, string message)
+    public QuestConnectivityProfileManagementException(
+        string code,
+        string message,
+        string rollbackState = "not_applicable",
+        string status = "rejected")
         : base(message)
     {
         Code = code;
+        RollbackState = rollbackState;
+        Status = status;
     }
 
     public string Code { get; }
+    public string RollbackState { get; }
+    public string Status { get; }
 }
 
 public interface IQuestConnectivityCredentialStore
@@ -280,6 +288,7 @@ public sealed class QuestConnectivityProfileManager
         byte[]? input = null;
         QuestConnectivityEnrollment? enrollment = null;
         byte[]? credential = null;
+        byte[]? existing = null;
         try
         {
             input = command.ConnectivityProfileInputKind switch
@@ -316,10 +325,9 @@ public sealed class QuestConnectivityProfileManager
             }
 
             enrollment = QuestConnectivityEnrollment.Parse(input);
-            var existing = _store.Read(enrollment.Target);
+            existing = _store.Read(enrollment.Target);
             if (existing is not null)
             {
-                CryptographicOperations.ZeroMemory(existing);
                 if (!command.ReplaceExisting)
                 {
                     throw Rejected(
@@ -329,28 +337,34 @@ public sealed class QuestConnectivityProfileManager
             }
 
             credential = enrollment.SerializeCredential();
-            _store.Write(enrollment.Target, credential);
-            var readback = _store.Read(enrollment.Target);
             try
             {
-                if (readback is null ||
-                    !CryptographicOperations.FixedTimeEquals(
-                        credential,
-                        readback))
-                {
-                    throw Rejected(
-                        "profileWriteReadbackFailed",
-                        "Credential Manager did not confirm the exact connectivity profile write.");
-                }
-                using var parsed =
-                    WindowsCredentialQuestConnectivityProviderProfileStore.ParseProfile(
-                        enrollment.DeviceId,
-                        readback);
+                _store.Write(enrollment.Target, credential);
+                VerifyWrite(
+                    enrollment.Target,
+                    enrollment.DeviceId,
+                    credential);
             }
-            finally
+            catch (Exception exception) when (
+                exception is not OperationCanceledException and
+                not OutOfMemoryException)
             {
-                if (readback is not null)
-                    CryptographicOperations.ZeroMemory(readback);
+                var rollbackConfirmed = TryRollback(
+                    enrollment.Target,
+                    existing);
+                if (!rollbackConfirmed)
+                {
+                    throw Failed(
+                        "profileWriteRollbackFailed",
+                        "Connectivity profile verification failed and the prior Credential Manager state could not be confirmed.",
+                        rollbackState: "uncertain");
+                }
+                throw Failed(
+                    "profileWriteVerificationFailedRolledBack",
+                    existing is null
+                        ? "Connectivity profile verification failed; the new record was removed."
+                        : "Connectivity profile verification failed; the prior exact record was restored.",
+                    rollbackState: "confirmed");
             }
             return new(
                 QuestConnectivityProfileManagementContract.MutationSchema,
@@ -367,6 +381,8 @@ public sealed class QuestConnectivityProfileManager
                 CryptographicOperations.ZeroMemory(input);
             if (credential is not null)
                 CryptographicOperations.ZeroMemory(credential);
+            if (existing is not null)
+                CryptographicOperations.ZeroMemory(existing);
         }
     }
 
@@ -406,9 +422,73 @@ public sealed class QuestConnectivityProfileManager
         return value;
     }
 
+    private void VerifyWrite(
+        string target,
+        string deviceId,
+        ReadOnlySpan<byte> expected)
+    {
+        byte[]? readback = null;
+        try
+        {
+            readback = _store.Read(target);
+            if (readback is null ||
+                !CryptographicOperations.FixedTimeEquals(expected, readback))
+            {
+                throw Rejected(
+                    "profileWriteReadbackFailed",
+                    "Credential Manager did not confirm the exact connectivity profile write.");
+            }
+            using var parsed =
+                WindowsCredentialQuestConnectivityProviderProfileStore.ParseProfile(
+                    deviceId,
+                    readback);
+        }
+        finally
+        {
+            if (readback is not null)
+                CryptographicOperations.ZeroMemory(readback);
+        }
+    }
+
+    private bool TryRollback(string target, ReadOnlySpan<byte> existing)
+    {
+        byte[]? readback = null;
+        try
+        {
+            if (existing.IsEmpty)
+            {
+                _store.Delete(target);
+                readback = _store.Read(target);
+                return readback is null;
+            }
+
+            _store.Write(target, existing);
+            readback = _store.Read(target);
+            return readback is not null &&
+                   CryptographicOperations.FixedTimeEquals(existing, readback);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (readback is not null)
+                CryptographicOperations.ZeroMemory(readback);
+        }
+    }
+
     internal static QuestConnectivityProfileManagementException Rejected(
         string code,
-        string message) => new(code, message);
+        string message,
+        string rollbackState = "not_applicable") =>
+        new(code, message, rollbackState);
+
+    internal static QuestConnectivityProfileManagementException Failed(
+        string code,
+        string message,
+        string rollbackState) =>
+        new(code, message, rollbackState, status: "failed");
 }
 
 internal sealed class QuestConnectivityEnrollment : IDisposable

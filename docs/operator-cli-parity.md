@@ -162,7 +162,9 @@ Credential Manager writer, secrets never enter CLI arguments or receipts,
 write/replacement/revocation confirmations fail closed, and WPF convenience
 enrollment uses the same standard-input command without a temporary file.
 Mock-store tests cover create, replace, invalid stored state, revoke, duplicate
-and unknown JSON fields, target binding, input ambiguity, and size bounds.
+and unknown JSON fields, target binding, input ambiguity, size bounds,
+post-write create cleanup, prior-record restoration, rollback failure, and
+owned-buffer zeroization.
 
 Direct-link acceptance uses shared Kotlin/C# HMAC vectors, rejects response-ID,
 digest, and signature mismatches, and keeps Android install receipts pending

@@ -152,6 +152,109 @@ public sealed class QuestConnectivityProfileManagementTests
     }
 
     [Fact]
+    public async Task CreateVerificationFailureDeletesJustWrittenCredential()
+    {
+        var store = new FaultingCredentialStore();
+        var input = new TrackingInputReader(Enrollment());
+        var manager = new QuestConnectivityProfileManager(store, input);
+
+        var exception =
+            await Assert.ThrowsAsync<QuestConnectivityProfileManagementException>(
+                () => manager.ImportAsync(
+                    OperatorCommands.ImportQuestConnectivityProfileStdin(
+                        operatorConfirmed: true),
+                    new MemoryStream(Enrollment()),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            "profileWriteVerificationFailedRolledBack",
+            exception.Code);
+        Assert.Equal("failed", exception.Status);
+        Assert.Equal("confirmed", exception.RollbackState);
+        Assert.False(store.Values.ContainsKey(Target));
+        Assert.Equal(1, store.WriteCount);
+        Assert.Equal(1, store.DeleteCount);
+        Assert.All(
+            store.ReturnedBuffers,
+            static bytes => Assert.All(bytes, static value => Assert.Equal(0, value)));
+        Assert.All(
+            input.LastReturned!,
+            static value => Assert.Equal(0, value));
+    }
+
+    [Fact]
+    public async Task ReplaceVerificationFailureRestoresPriorExactCredential()
+    {
+        var prior = ProfileCredential();
+        var store = new FaultingCredentialStore();
+        store.Values[Target] = prior.ToArray();
+        var input = new TrackingInputReader(Enrollment());
+        var manager = new QuestConnectivityProfileManager(store, input);
+
+        var exception =
+            await Assert.ThrowsAsync<QuestConnectivityProfileManagementException>(
+                () => manager.ImportAsync(
+                    OperatorCommands.ImportQuestConnectivityProfileStdin(
+                        replaceExisting: true,
+                        operatorConfirmed: true),
+                    new MemoryStream(Enrollment()),
+                    CancellationToken.None));
+
+        Assert.Equal(
+            "profileWriteVerificationFailedRolledBack",
+            exception.Code);
+        Assert.Equal("failed", exception.Status);
+        Assert.Equal("confirmed", exception.RollbackState);
+        Assert.Equal(prior, store.Values[Target]);
+        Assert.Equal(2, store.WriteCount);
+        Assert.Equal(0, store.DeleteCount);
+        Assert.All(
+            store.ReturnedBuffers,
+            static bytes => Assert.All(bytes, static value => Assert.Equal(0, value)));
+        Assert.All(
+            input.LastReturned!,
+            static value => Assert.Equal(0, value));
+        CryptographicOperations.ZeroMemory(prior);
+    }
+
+    [Fact]
+    public async Task RollbackFailureReportsSanitizedUncertainStateAndZeroesOwnedReads()
+    {
+        var store = new FaultingCredentialStore
+        {
+            FailRollback = true
+        };
+        var input = new TrackingInputReader(Enrollment());
+        var manager = new QuestConnectivityProfileManager(store, input);
+
+        var exception =
+            await Assert.ThrowsAsync<QuestConnectivityProfileManagementException>(
+                () => manager.ImportAsync(
+                    OperatorCommands.ImportQuestConnectivityProfileStdin(
+                        operatorConfirmed: true),
+                    new MemoryStream(Enrollment()),
+                    CancellationToken.None));
+
+        Assert.Equal("profileWriteRollbackFailed", exception.Code);
+        Assert.Equal("failed", exception.Status);
+        Assert.Equal("uncertain", exception.RollbackState);
+        Assert.DoesNotContain(
+            "QUEST-USB-123",
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            PairingCode,
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.All(
+            store.ReturnedBuffers,
+            static bytes => Assert.All(bytes, static value => Assert.Equal(0, value)));
+        Assert.All(
+            input.LastReturned!,
+            static value => Assert.Equal(0, value));
+    }
+
+    [Fact]
     public async Task WpfWorkflowCreatesFirstAndRequiresDistinctReplacementConfirmation()
     {
         var store = new MemoryCredentialStore();
@@ -505,6 +608,17 @@ public sealed class QuestConnectivityProfileManagementTests
           }
           """);
 
+    private static byte[] ProfileCredential() => Encoding.UTF8.GetBytes(
+        $$"""
+          {
+            "schema": "{{QuestConnectivityProfileManagementContract.ProfileSchema}}",
+            "device_id": "{{DeviceId}}",
+            "usb_serial": "PRIOR-QUEST-USB",
+            "endpoint": "http://192.168.137.41:39873/",
+            "pairing_code": "BCDE-FGHJ-KMNP-QRST"
+          }
+          """);
+
     private static string FindRepositoryRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -551,6 +665,28 @@ public sealed class QuestConnectivityProfileManagementTests
         }
     }
 
+    private sealed class TrackingInputReader(byte[] value) :
+        IQuestConnectivityPrivateInputReader
+    {
+        public byte[]? LastReturned { get; private set; }
+
+        public Task<byte[]> ReadFileAsync(
+            string path,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(Track());
+
+        public Task<byte[]> ReadStreamAsync(
+            Stream stream,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(Track());
+
+        private byte[] Track()
+        {
+            LastReturned = value.ToArray();
+            return LastReturned;
+        }
+    }
+
     private sealed class MemoryCredentialStore : IQuestConnectivityCredentialStore
     {
         public Dictionary<string, byte[]> Values { get; } =
@@ -570,5 +706,58 @@ public sealed class QuestConnectivityProfileManagementTests
         }
 
         public bool Delete(string target) => Values.Remove(target);
+    }
+
+    private sealed class FaultingCredentialStore :
+        IQuestConnectivityCredentialStore
+    {
+        private bool _verificationFaultPending;
+
+        public Dictionary<string, byte[]> Values { get; } =
+            new(StringComparer.Ordinal);
+        public List<byte[]> ReturnedBuffers { get; } = [];
+        public int WriteCount { get; private set; }
+        public int DeleteCount { get; private set; }
+        public bool FailRollback { get; init; }
+
+        public IReadOnlyList<string> ListTargets() => Values.Keys.ToArray();
+
+        public byte[]? Read(string target)
+        {
+            byte[]? result;
+            if (_verificationFaultPending)
+            {
+                _verificationFaultPending = false;
+                result = Encoding.UTF8.GetBytes(
+                    """{"schema":"corrupt-post-write-readback"}""");
+            }
+            else
+            {
+                result = Values.TryGetValue(target, out var value)
+                    ? value.ToArray()
+                    : null;
+            }
+            if (result is not null)
+                ReturnedBuffers.Add(result);
+            return result;
+        }
+
+        public void Write(string target, ReadOnlySpan<byte> credential)
+        {
+            WriteCount++;
+            if (WriteCount > 1 && FailRollback)
+                throw new InvalidOperationException("Injected rollback write failure.");
+            Values[target] = credential.ToArray();
+            if (WriteCount == 1)
+                _verificationFaultPending = true;
+        }
+
+        public bool Delete(string target)
+        {
+            DeleteCount++;
+            if (FailRollback)
+                throw new InvalidOperationException("Injected rollback delete failure.");
+            return Values.Remove(target);
+        }
     }
 }
