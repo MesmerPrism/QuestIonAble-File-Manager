@@ -141,10 +141,12 @@ its existing broad and case-varied negatives before ADB discovery. Awake,
 connectivity, and Kiosk provider gates additionally require the exact
 `--describe-json` route to exit while stdin remains open, with poisoned backend
 settings, empty standard error, exact registry actions, and no authority or
-target claim. Mixed, extra, and case-varied description shapes reject. All
-three require an unreachable general CLI dispatcher and rejection of an
-isolated framework-dependent apphost before either portable archive is
-created.
+target claim. Each gate also requires the descriptor's provider version,
+derived from immutable Core build metadata, to equal the semantic version
+passed to that artifact's publish. Mixed, extra, and case-varied description
+shapes reject. All three require an unreachable general CLI dispatcher and
+rejection of an isolated framework-dependent apphost before either portable
+archive is created.
 Existing release assets are not overwritten; any payload change requires a new
 semantic version. The consumer test stages a local HTTP feed with range
 support because the Windows deployment service does not consume workspace file

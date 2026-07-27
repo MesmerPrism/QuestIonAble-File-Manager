@@ -190,6 +190,7 @@ try {
             'rusty.quest.workflow.provider_capability_discovery.v1' -or
         $descriptionDocument.provider.id -cne
             'questionable-file-manager.quest-connectivity-provider' -or
+        $descriptionDocument.provider.version -cne $Version -or
         $descriptionDocument.authorizes_execution -ne $false -or
         $descriptionDocument.target_specific -ne $false -or
         ($descriptionActions -join "`n") -cne
@@ -351,6 +352,7 @@ try {
         description_route = '--describe-json'
         description_schema =
             'rusty.quest.workflow.provider_capability_discovery.v1'
+        description_provider_version = $descriptionDocument.provider.version
         description_action_count = $descriptionActions.Count
         description_stdin_unread = $true
         description_authorizes_execution = $false

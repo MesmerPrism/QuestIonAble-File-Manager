@@ -12,6 +12,50 @@ public sealed class ProviderCapabilityDiscoveryTests
             System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.RoundtripKind);
 
+    [Theory]
+    [InlineData("0.0.0")]
+    [InlineData("0.1.0-dev")]
+    [InlineData("12.34.56-alpha.1")]
+    public void ProviderVersionParser_AcceptsSharedSchemaSemVer(
+        string version) =>
+        Assert.Equal(
+            version,
+            ProviderCapabilityDiscoveryVersion.Parse(version));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" 1.2.3")]
+    [InlineData("1.2")]
+    [InlineData("1.2.3-BETA")]
+    [InlineData("1.2.3-alpha.BETA")]
+    [InlineData("1.2.3+build")]
+    [InlineData("v1.2.3")]
+    public void ProviderVersionParser_RejectsIncompatibleMetadata(
+        string? version) =>
+        Assert.Throws<InvalidOperationException>(
+            () => ProviderCapabilityDiscoveryVersion.Parse(version));
+
+    [Fact]
+    public void ProviderVersionParser_RejectsMetadataBeyondSharedLimit() =>
+        Assert.Throws<InvalidOperationException>(
+            () => ProviderCapabilityDiscoveryVersion.Parse(
+                "1.2.3-" + new string('a', 59)));
+
+    [Fact]
+    public void ProviderVersion_ComesFromStrictCoreAssemblyMetadata()
+    {
+        var version = ProviderCapabilityDiscoveryContract.ProviderVersion;
+
+        Assert.Equal(
+            ProviderCapabilityDiscoveryVersion.FromAssembly(
+                typeof(ProviderCapabilityDiscoveryContract).Assembly),
+            version);
+        Assert.Equal(
+            version,
+            ProviderCapabilityDiscoveryVersion.Parse(version));
+    }
+
     [Fact]
     public void Projections_AreClosedFreshAndRegistryDerived()
     {

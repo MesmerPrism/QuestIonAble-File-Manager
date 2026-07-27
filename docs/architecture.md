@@ -136,6 +136,9 @@ File Manager-owned classic TCP/IP capability records so discovery does not
 move effect ownership. The descriptor is fresh for five minutes, target-free,
 and explicitly non-authorizing. It carries no invocation, path, endpoint,
 credential, profile value, target, backend status, or execution receipt.
+Provider version is read from a dedicated immutable Core assembly metadata
+value generated from `$(Version)`, then checked against the shared contract's
+strict lowercase semantic-version grammar before any descriptor is emitted.
 
 The Fleet installer handoff owns only release-consumer verification: a pinned
 descriptor RSA key and channel, strict signed payload, exact installer

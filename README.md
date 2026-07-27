@@ -252,6 +252,10 @@ provider factories, profiles, ADB, targets, backends, or state are used.
 Actions are projected from the awake and connectivity registries and Kiosk's
 single catalog-summary scope. The five-minute descriptor contains no target,
 path, executable location, endpoint, credential, invocation, or authority.
+Its provider version comes from immutable Core assembly metadata generated
+from the build's `Version`; metadata outside the shared lowercase semantic-
+version grammar fails closed. Each provider artifact gate requires the
+reported version to equal the version supplied to its publish.
 `descriptor-available` describes only the local typed surface; it does not
 prove a usable backend, approval, activation, or owner-effective result.
 Mixed, case-varied, or extra description arguments fail closed.

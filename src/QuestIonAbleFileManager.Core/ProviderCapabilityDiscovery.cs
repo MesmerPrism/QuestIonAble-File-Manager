@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
 
@@ -7,12 +9,15 @@ public static class ProviderCapabilityDiscoveryContract
 {
     public const string Schema =
         "rusty.quest.workflow.provider_capability_discovery.v1";
-    public const string ProviderVersion = "0.1.0";
     public const string Placement = "windows-host-process";
     public const string DescriptorAvailable = "descriptor-available";
     public const string DescriptionAuthentication = "none";
     public const int MaximumAgeSeconds = 300;
     public const string DescribeArgument = "--describe-json";
+
+    public static string ProviderVersion =>
+        ProviderCapabilityDiscoveryVersion.FromAssembly(
+            typeof(ProviderCapabilityDiscoveryContract).Assembly);
 
     public static bool HasExactDescribeArguments(
         IReadOnlyList<string> arguments) =>
@@ -21,6 +26,51 @@ public static class ProviderCapabilityDiscoveryContract
             arguments[0],
             DescribeArgument,
             StringComparison.Ordinal);
+}
+
+internal static class ProviderCapabilityDiscoveryVersion
+{
+    internal const string MetadataKey =
+        "QuestIonAbleFileManager.ProviderCapabilityDiscoveryVersion";
+
+    private static readonly Regex SharedSchemaSemVer = new(
+        "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.-]+)?$",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+    internal static string FromAssembly(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        var values = assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Where(attribute => string.Equals(
+                attribute.Key,
+                MetadataKey,
+                StringComparison.Ordinal))
+            .Select(static attribute => attribute.Value)
+            .ToArray();
+        if (values.Length != 1)
+        {
+            throw new InvalidOperationException(
+                "Provider discovery requires exactly one immutable " +
+                $"'{MetadataKey}' assembly metadata value.");
+        }
+
+        return Parse(values[0]);
+    }
+
+    internal static string Parse(string? value)
+    {
+        if (string.IsNullOrEmpty(value) ||
+            value.Length > 64 ||
+            !SharedSchemaSemVer.IsMatch(value))
+        {
+            throw new InvalidOperationException(
+                "Provider discovery assembly version metadata is not a " +
+                "strict lowercase shared-schema semantic version.");
+        }
+
+        return value;
+    }
 }
 
 public sealed record ProviderCapabilityDiscoveryDescriptor(
