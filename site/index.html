@@ -39,6 +39,7 @@
         <a href="#setup">Set up</a>
         <a href="#use">First use</a>
         <a href="#kiosk">Rusty Kiosk</a>
+        <a href="#fleet">Rusty Fleet</a>
         <a href="#help">Help</a>
         <a href="https://github.com/MesmerPrism/QuestIonAble-File-Manager">Source</a>
       </nav>
@@ -190,6 +191,20 @@
         </figure>
       </div>
       <p class="sample-note">The screenshots above are deterministic app renders with sample device and app data; they contain no headset identifiers or device captures.</p>
+    </section>
+
+    <section id="fleet" class="section" aria-labelledby="fleet-title">
+      <div class="section-heading">
+        <h2 id="fleet-title">Optional: prepare for Rusty Fleet</h2>
+        <p>Rusty Fleet is the separate multi-headset dashboard for monitoring, policy, and bounded operations. File Manager remains the owner of its local file and ADB-backed utilities.</p>
+      </div>
+      <div class="kiosk-intro">
+        <div>
+          <p>The Fleet integration is still a development preview, and there is no public Fleet installer to download yet. A future signed File Manager release can verify one exact signed Fleet release and open Fleet's own guided installer; it will not silently install Fleet or turn File Manager into the fleet controller.</p>
+          <p>Provider discovery describes which narrow owner-defined actions an installed component understands. It does not prove that a provider is installed, healthy, authorized, connected to a headset, or permitted to execute anything.</p>
+        </div>
+        <a class="action-link" href="https://mesmerprism.com/Rusty-Fleet/">Read the Rusty Fleet onboarding guide</a>
+      </div>
     </section>
 
     <section class="section" aria-labelledby="advanced-title">
