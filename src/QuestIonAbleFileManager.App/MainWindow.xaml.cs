@@ -1,6 +1,7 @@
 using System.IO;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -149,6 +150,234 @@ public partial class MainWindow : Window
                 StatusText.Text = "Fleet guided installer handoff completed.";
             },
             "Verifying the Fleet release and opening its guided installer…");
+    }
+
+    private void OnChooseConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a protected Fleet connectivity profile",
+            Filter = "JSON profile (*.json)|*.json",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true)
+            ConnectivityProfilePathBox.Text = dialog.FileName;
+    }
+
+    private async void OnImportConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        if (string.IsNullOrWhiteSpace(ConnectivityProfilePathBox.Text))
+        {
+            ShowInputMessage("Choose one protected connectivity profile JSON file first.");
+            return;
+        }
+
+        var replacing = ReplaceConnectivityProfileBox.IsChecked == true;
+        var confirmation = replacing
+            ? "Validate this private file and replace the existing File Manager-owned " +
+              "connectivity profile with the same Fleet device ID?"
+            : "Validate this private file and create a File Manager-owned connectivity profile?";
+        if (MessageBox.Show(
+                this,
+                confirmation + "\n\nThe private serial, endpoint, and pairing code remain in " +
+                "the current Windows user's Credential Manager and are not displayed or sent to Fleet.",
+                replacing ? "Confirm connectivity profile replacement" : "Confirm connectivity profile creation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                var command = OperatorCommands.ImportQuestConnectivityProfileFile(
+                    ConnectivityProfilePathBox.Text,
+                    replaceExisting: replacing,
+                    operatorConfirmed: true);
+                var execution = await ExecuteOperatorAsync(command);
+                var receipt = execution.ConnectivityProfileMutation ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile import did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                ConnectivityProfilePathBox.Clear();
+                ReplaceConnectivityProfileBox.IsChecked = false;
+                await RefreshConnectivityProfilesAsync(receipt.DeviceId);
+            },
+            "Validating and storing the private connectivity profile…");
+    }
+
+    private async void OnRefreshConnectivityProfiles(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            () => RefreshConnectivityProfilesAsync(),
+            "Refreshing private connectivity profile IDs…");
+
+    private async void OnCheckConnectivityProfileStatus(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (ConnectivityProfilesBox.SelectedItem is not QuestConnectivityProfileListEntry selected)
+        {
+            ShowInputMessage("Select one Fleet device ID to check.");
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.QuestConnectivityProfileStatus(
+                        selected.DeviceId));
+                var receipt = execution.ConnectivityProfileStatus ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile status did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+            },
+            "Checking the selected private connectivity profile…");
+    }
+
+    private async void OnSaveEnteredKioskLinkForFleet(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        byte[]? privateDocument = null;
+        try
+        {
+            var usbDevice = RequireReadyUsbDevice();
+            privateDocument = QuestConnectivityProfileEnrollmentDocument.Create(
+                ConnectivityFleetDeviceIdBox.Text,
+                usbDevice.Serial,
+                KioskDirectEndpointBox.Text,
+                KioskDirectPairingCodeBox.Password);
+            var deviceId = ConnectivityFleetDeviceIdBox.Text;
+
+            await RunBusyAsync(
+                async () =>
+                {
+                    bool Confirm(QuestConnectivityProfileWriteStage stage)
+                    {
+                        var replacing = stage == QuestConnectivityProfileWriteStage.Replace;
+                        var message = replacing
+                            ? $"A connectivity profile already exists for {deviceId}. " +
+                              "Replace that exact File Manager-owned record?\n\nNo write " +
+                              "has occurred yet. The private fields will remain hidden."
+                            : $"Create the File Manager-owned connectivity profile for {deviceId}?\n\n" +
+                              "The exact selected USB serial and entered Kiosk endpoint/pairing " +
+                              "code will be validated in memory and stored in the current Windows " +
+                              "user's Credential Manager. This request will not replace an " +
+                              "existing profile without a second confirmation.";
+                        return MessageBox.Show(
+                            this,
+                            message,
+                            replacing
+                                ? "Confirm connectivity profile replacement"
+                                : "Confirm new connectivity profile",
+                            MessageBoxButton.OKCancel,
+                            MessageBoxImage.Warning) == MessageBoxResult.OK;
+                    }
+
+                    var receipt = await QuestConnectivityProfileWriteWorkflow.ExecuteAsync(
+                        Confirm,
+                        async replace =>
+                        {
+                            await using var privateInput = new MemoryStream(
+                                privateDocument,
+                                writable: false);
+                            var execution = await ExecuteOperatorAsync(
+                                OperatorCommands.ImportQuestConnectivityProfileStdin(
+                                    replaceExisting: replace,
+                                    operatorConfirmed: true),
+                                privateInput);
+                            return execution.ConnectivityProfileMutation ??
+                                throw new InvalidOperationException(
+                                    "Connectivity profile import did not return a receipt.");
+                        });
+                    if (receipt is null)
+                    {
+                        ConnectivityProfileStatusText.Text =
+                            $"{deviceId}: no profile write performed.";
+                        return;
+                    }
+                    ConnectivityProfileStatusText.Text =
+                        $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                    await RefreshConnectivityProfilesAsync(receipt.DeviceId);
+                },
+                "Validating and storing the entered Kiosk direct link…");
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            QuestConnectivityProfileManagementException or
+            InvalidOperationException)
+        {
+            ShowInputMessage(exception.Message);
+        }
+        finally
+        {
+            if (privateDocument is not null)
+                CryptographicOperations.ZeroMemory(privateDocument);
+            KioskDirectEndpointBox.Clear();
+            KioskDirectPairingCodeBox.Clear();
+        }
+    }
+
+    private async Task RefreshConnectivityProfilesAsync(string? preferredDeviceId = null)
+    {
+        preferredDeviceId ??=
+            (ConnectivityProfilesBox.SelectedItem as QuestConnectivityProfileListEntry)?.DeviceId;
+        var execution = await ExecuteOperatorAsync(
+            OperatorCommands.ListQuestConnectivityProfiles());
+        var receipt = execution.ConnectivityProfileList ??
+            throw new InvalidOperationException(
+                "Connectivity profile list did not return a receipt.");
+        ConnectivityProfilesBox.ItemsSource = receipt.Profiles;
+        ConnectivityProfilesBox.SelectedItem = receipt.Profiles.FirstOrDefault(profile =>
+            string.Equals(profile.DeviceId, preferredDeviceId, StringComparison.Ordinal)) ??
+            receipt.Profiles.FirstOrDefault();
+        ConnectivityProfileStatusText.Text = receipt.Profiles.Count == 0
+            ? "No File Manager-owned Fleet connectivity profiles are enrolled."
+            : $"{receipt.Profiles.Count} connectivity profile ID" +
+              $"{(receipt.Profiles.Count == 1 ? string.Empty : "s")} found; " +
+              $"{receipt.Profiles.Count(profile => profile.State == "invalid")} invalid.";
+    }
+
+    private async void OnRevokeConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        if (ConnectivityProfilesBox.SelectedItem is not QuestConnectivityProfileListEntry selected)
+        {
+            ShowInputMessage("Select one Fleet device ID to revoke.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Revoke the File Manager-owned connectivity profile for {selected.DeviceId}?\n\n" +
+                "This removes the private Credential Manager record. It does not change the " +
+                "headset or disconnect ADB.",
+                "Confirm connectivity profile revocation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.RevokeQuestConnectivityProfile(
+                        selected.DeviceId,
+                        operatorConfirmed: true));
+                var receipt = execution.ConnectivityProfileMutation ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile revocation did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                await RefreshConnectivityProfilesAsync();
+            },
+            "Revoking the private connectivity profile…");
     }
 
     private void OnDeviceSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
@@ -770,7 +999,7 @@ public partial class MainWindow : Window
         {
             endpoint = RustyKioskDirectEndpoint.Parse(
                 KioskDirectEndpointBox.Text,
-                KioskDirectPairingCodeBox.Text);
+                KioskDirectPairingCodeBox.Password);
         }
         catch (ArgumentException exception)
         {
@@ -1660,9 +1889,14 @@ public partial class MainWindow : Window
 
     private OperatorCommandExecutor RequireOperator() => _operator;
 
-    private async Task<OperatorExecutionResult> ExecuteOperatorAsync(OperatorCommand command)
+    private async Task<OperatorExecutionResult> ExecuteOperatorAsync(
+        OperatorCommand command,
+        Stream? privateInput = null)
     {
-        var execution = await RequireOperator().ExecuteAsync(command, progress: _activeProgress);
+        var execution = await RequireOperator().ExecuteAsync(
+            command,
+            progress: _activeProgress,
+            privateInput: privateInput);
         if (execution.MutationReceipt is { } receipt)
         {
             _lastMutationReceipt = receipt;

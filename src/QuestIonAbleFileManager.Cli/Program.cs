@@ -46,6 +46,10 @@ internal static class CliApplication
             {
                 return await RunFleetAsync(arguments);
             }
+            if (command == "connectivity-profile")
+            {
+                return await RunConnectivityProfileAsync(arguments);
+            }
 
             var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
             var executor = new OperatorCommandExecutor(client);
@@ -72,6 +76,79 @@ internal static class CliApplication
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunConnectivityProfileAsync(string[] arguments)
+    {
+        var errorSchema = arguments.Length > 1
+            ? arguments[1] switch
+            {
+                "status" => QuestConnectivityProfileManagementContract.StatusSchema,
+                "list" => QuestConnectivityProfileManagementContract.ListSchema,
+                _ => QuestConnectivityProfileManagementContract.MutationSchema
+            }
+            : QuestConnectivityProfileManagementContract.MutationSchema;
+        try
+        {
+            var command = OperatorCommands.ParseConnectivityProfileCliArguments(arguments);
+            var executor = new OperatorCommandExecutor(
+                client: null,
+                new FleetInstallerHandoff(null),
+                QuestConnectivityProfileManager.CreateWindows());
+            await using var stdin = command.ConnectivityProfileInputKind ==
+                                    QuestConnectivityProfileInputKind.StandardInput
+                ? Console.OpenStandardInput()
+                : null;
+            var result = await executor.ExecuteAsync(
+                command,
+                privateInput: stdin).ConfigureAwait(false);
+            WriteFleetJson<object?>(command.Kind switch
+            {
+                OperatorCommandKind.ConnectivityProfileStatus =>
+                    result.ConnectivityProfileStatus,
+                OperatorCommandKind.ConnectivityProfileList =>
+                    result.ConnectivityProfileList,
+                OperatorCommandKind.ConnectivityProfileImport or
+                    OperatorCommandKind.ConnectivityProfileRevoke =>
+                    result.ConnectivityProfileMutation,
+                _ => null
+            });
+            return 0;
+        }
+        catch (QuestConnectivityProfileManagementException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "rejected",
+                reason_code = exception.Code,
+                message = exception.Message
+            });
+            return 2;
+        }
+        catch (ArgumentException)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "rejected",
+                reason_code = "profileCommandInvalid",
+                message =
+                    "Use one exact connectivity-profile route; private values belong only in --file or --stdin JSON."
+            });
+            return 2;
+        }
+        catch
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                reason_code = "profileInternalError",
+                message = "Connectivity profile management failed without exposing private details."
+            });
             return 1;
         }
     }
@@ -1380,6 +1457,11 @@ internal static class CliApplication
               questionable-file-manager integration status --operation <operation-id> --json
               questionable-file-manager fleet status --json
               questionable-file-manager fleet install --confirm-fleet-install --json
+              questionable-file-manager connectivity-profile status --device-id <fleet-device-id> --json
+              questionable-file-manager connectivity-profile list --json
+              questionable-file-manager connectivity-profile import --file <private-profile.json> --confirm-profile-write [--replace-existing] --json
+              questionable-file-manager connectivity-profile import --stdin --confirm-profile-write [--replace-existing] --json
+              questionable-file-manager connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
               questionable-file-manager-kiosk-v2-provider integration kiosk-v2-catalog --json < <strict-request.json>
 
             Install options:
@@ -1406,6 +1488,11 @@ internal static class CliApplication
             Android records one wearer decision for the app installation session.
             Keep-awake, proximity, and CPU/GPU changes require explicit confirmation and
             report effective readback; --clear restores app-controlled performance levels.
+            Connectivity profiles are File Manager-owned current-user Credential Manager
+            records. Status/list return only Fleet device IDs and sanitized state. Import
+            accepts one strict private JSON document from a protected local file or standard
+            input; serials, endpoints, and pairing codes are never command-line arguments
+            or output. Replacement and revocation require their explicit confirmation flags.
             Split APK packages are refused by the single-APK export command.
             Fleet integration is optional and disabled by default. The normal executable
             exposes one exact-device read-only list or staged pull under adb-shared.

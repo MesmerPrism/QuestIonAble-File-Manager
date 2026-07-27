@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Net;
+using System.Net.Sockets;
 
 namespace QuestIonAbleFileManager.Core;
 
@@ -61,10 +63,25 @@ public sealed class QuestConnectivityProviderProfile : IDisposable
             !string.IsNullOrEmpty(Endpoint.Query) ||
             !string.IsNullOrEmpty(Endpoint.Fragment) ||
             Endpoint.Port != 39873 ||
-            Endpoint.AbsolutePath != "/")
+            Endpoint.AbsolutePath != "/" ||
+            !IsPrivateIpv4(Endpoint.Host))
         {
             throw QuestConnectivityProviderException.Unavailable("providerProfileInvalid");
         }
+    }
+
+    private static bool IsPrivateIpv4(string host)
+    {
+        if (!IPAddress.TryParse(host, out var address) ||
+            address.AddressFamily != AddressFamily.InterNetwork)
+        {
+            return false;
+        }
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10 ||
+               (bytes[0] == 169 && bytes[1] == 254) ||
+               (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) ||
+               (bytes[0] == 192 && bytes[1] == 168);
     }
 }
 
@@ -81,7 +98,6 @@ public interface IQuestConnectivityProviderProfileStore
 public sealed class WindowsCredentialQuestConnectivityProviderProfileStore :
     IQuestConnectivityProviderProfileStore
 {
-    private const string TargetPrefix = "QuestIonAbleFileManager/QuestConnectivity/";
     private const uint GenericCredential = 1;
 
     public QuestConnectivityProviderProfile Open(string deviceId)
@@ -94,7 +110,7 @@ public sealed class WindowsCredentialQuestConnectivityProviderProfileStore :
         }
 
         if (!CredRead(
-                TargetPrefix + deviceId,
+                QuestConnectivityProfileManagementContract.TargetPrefix + deviceId,
                 GenericCredential,
                 0,
                 out var credentialPointer))

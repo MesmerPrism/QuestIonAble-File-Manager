@@ -10,8 +10,35 @@ public sealed class OperatorCommandTests
     {
         var localPath = Path.GetFullPath(Path.Combine("Test Data", "example file.txt"));
         var apkPath = Path.GetFullPath(Path.Combine("Test Data", "example app.apk"));
+        var privateProfilePath = Path.GetFullPath(
+            Path.Combine("Private Data", "quest connectivity.json"));
         var commands = new (OperatorCommand Command, string[] Expected)[]
         {
+            (OperatorCommands.QuestConnectivityProfileStatus("fleet-device-1"),
+                ["connectivity-profile", "status", "--device-id", "fleet-device-1", "--json"]),
+            (OperatorCommands.ListQuestConnectivityProfiles(),
+                ["connectivity-profile", "list", "--json"]),
+            (OperatorCommands.ImportQuestConnectivityProfileFile(
+                    privateProfilePath,
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "import", "--file", privateProfilePath,
+                    "--confirm-profile-write", "--json"
+                ]),
+            (OperatorCommands.ImportQuestConnectivityProfileStdin(
+                    replaceExisting: true,
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "import", "--stdin",
+                    "--confirm-profile-write", "--replace-existing", "--json"
+                ]),
+            (OperatorCommands.RevokeQuestConnectivityProfile(
+                    "fleet-device-1",
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "revoke", "--device-id", "fleet-device-1",
+                    "--confirm-profile-revoke", "--json"
+                ]),
             (OperatorCommands.FleetInstallStatus(),
                 ["fleet", "status", "--json"]),
             (OperatorCommands.FleetInstall(operatorConfirmed: true),
@@ -63,6 +90,61 @@ public sealed class OperatorCommandTests
         {
             Assert.Equal(expected, command.CliArguments);
         }
+    }
+
+    [Fact]
+    public void ConnectivityProfileFactoriesAndParserRequireExactPrivateRoutes()
+    {
+        var privatePath = Path.GetFullPath(Path.Combine("Private Data", "profile.json"));
+        var vectors = new[]
+        {
+            OperatorCommands.QuestConnectivityProfileStatus("fleet-device-1"),
+            OperatorCommands.ListQuestConnectivityProfiles(),
+            OperatorCommands.ImportQuestConnectivityProfileFile(
+                privatePath,
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileFile(
+                privatePath,
+                replaceExisting: true,
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileStdin(
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileStdin(
+                replaceExisting: true,
+                operatorConfirmed: true),
+            OperatorCommands.RevokeQuestConnectivityProfile(
+                "fleet-device-1",
+                operatorConfirmed: true)
+        };
+
+        foreach (var expected in vectors)
+        {
+            var parsed = OperatorCommands.ParseConnectivityProfileCliArguments(
+                expected.CliArguments);
+            Assert.Equal(expected.Kind, parsed.Kind);
+            Assert.Equal(expected.CliArguments, parsed.CliArguments);
+        }
+
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.ImportQuestConnectivityProfileFile(privatePath));
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.ImportQuestConnectivityProfileStdin());
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.RevokeQuestConnectivityProfile("fleet-device-1"));
+        Assert.Throws<ArgumentException>(
+            () => OperatorCommands.ParseConnectivityProfileCliArguments(
+                [
+                    "connectivity-profile", "import",
+                    "--device-id", "fleet-device-1",
+                    "--pairing-code", "<private>",
+                    "--confirm-profile-write", "--json"
+                ]));
+        Assert.Throws<ArgumentException>(
+            () => OperatorCommands.ParseConnectivityProfileCliArguments(
+                [
+                    "connectivity-profile", "import", "--stdin", "--file", privatePath,
+                    "--confirm-profile-write", "--json"
+                ]));
     }
 
     [Fact]

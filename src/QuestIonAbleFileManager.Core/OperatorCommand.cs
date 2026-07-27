@@ -5,6 +5,10 @@ namespace QuestIonAbleFileManager.Core;
 
 public enum OperatorCommandKind
 {
+    ConnectivityProfileStatus,
+    ConnectivityProfileList,
+    ConnectivityProfileImport,
+    ConnectivityProfileRevoke,
     DiscoverDevices,
     ListFiles,
     PullFile,
@@ -34,6 +38,13 @@ public enum OperatorCommandKind
     FleetInstall
 }
 
+public enum QuestConnectivityProfileInputKind
+{
+    None,
+    PrivateFile,
+    StandardInput
+}
+
 public sealed class OperatorCommand
 {
     internal OperatorCommand(
@@ -58,7 +69,11 @@ public sealed class OperatorCommand
         int durationMilliseconds = 28_800_000,
         int? cpuLevel = null,
         int? gpuLevel = null,
-        bool clearPerformance = false)
+        bool clearPerformance = false,
+        string? connectivityDeviceId = null,
+        QuestConnectivityProfileInputKind connectivityProfileInputKind =
+            QuestConnectivityProfileInputKind.None,
+        bool replaceExisting = false)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -84,6 +99,9 @@ public sealed class OperatorCommand
         CpuLevel = cpuLevel;
         GpuLevel = gpuLevel;
         ClearPerformance = clearPerformance;
+        ConnectivityDeviceId = connectivityDeviceId;
+        ConnectivityProfileInputKind = connectivityProfileInputKind;
+        ReplaceExisting = replaceExisting;
     }
 
     public OperatorCommandKind Kind { get; }
@@ -130,6 +148,12 @@ public sealed class OperatorCommand
 
     public bool ClearPerformance { get; }
 
+    public string? ConnectivityDeviceId { get; }
+
+    public QuestConnectivityProfileInputKind ConnectivityProfileInputKind { get; }
+
+    public bool ReplaceExisting { get; }
+
     public string ToPowerShellCommand(
         string cliExecutable = ".\\questionable-file-manager.exe",
         string? adbPath = null)
@@ -149,6 +173,152 @@ public sealed class OperatorCommand
 
 public static class OperatorCommands
 {
+    public static OperatorCommand ParseConnectivityProfileCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.SequenceEqual(
+                ["connectivity-profile", "list", "--json"],
+                StringComparer.Ordinal))
+        {
+            return ListQuestConnectivityProfiles();
+        }
+
+        if (arguments.Count == 5 &&
+            arguments[0] == "connectivity-profile" &&
+            arguments[1] == "status" &&
+            arguments[2] == "--device-id" &&
+            arguments[4] == "--json")
+        {
+            return QuestConnectivityProfileStatus(arguments[3]);
+        }
+
+        if (arguments.Count == 6 &&
+            arguments[0] == "connectivity-profile" &&
+            arguments[1] == "revoke" &&
+            arguments[2] == "--device-id" &&
+            arguments[4] == "--confirm-profile-revoke" &&
+            arguments[5] == "--json")
+        {
+            return RevokeQuestConnectivityProfile(
+                arguments[3],
+                operatorConfirmed: true);
+        }
+
+        var importingFile = arguments.Count is 6 or 7 &&
+                            arguments[0] == "connectivity-profile" &&
+                            arguments[1] == "import" &&
+                            arguments[2] == "--file" &&
+                            arguments[4] == "--confirm-profile-write";
+        if (importingFile &&
+            ((arguments.Count == 6 && arguments[5] == "--json") ||
+             (arguments.Count == 7 &&
+              arguments[5] == "--replace-existing" &&
+              arguments[6] == "--json")))
+        {
+            return ImportQuestConnectivityProfileFile(
+                arguments[3],
+                replaceExisting: arguments.Count == 7,
+                operatorConfirmed: true);
+        }
+
+        var importingStdin = arguments.Count is 5 or 6 &&
+                             arguments[0] == "connectivity-profile" &&
+                             arguments[1] == "import" &&
+                             arguments[2] == "--stdin" &&
+                             arguments[3] == "--confirm-profile-write";
+        if (importingStdin &&
+            ((arguments.Count == 5 && arguments[4] == "--json") ||
+             (arguments.Count == 6 &&
+              arguments[4] == "--replace-existing" &&
+              arguments[5] == "--json")))
+        {
+            return ImportQuestConnectivityProfileStdin(
+                replaceExisting: arguments.Count == 6,
+                operatorConfirmed: true);
+        }
+
+        throw new ArgumentException(
+            "Use an exact connectivity-profile status, list, import, or revoke command. " +
+            "Secrets are accepted only through --file or --stdin.",
+            nameof(arguments));
+    }
+
+    public static OperatorCommand QuestConnectivityProfileStatus(string deviceId)
+    {
+        deviceId = RequireConnectivityDeviceId(deviceId);
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileStatus,
+            ["connectivity-profile", "status", "--device-id", deviceId, "--json"],
+            connectivityDeviceId: deviceId);
+    }
+
+    public static OperatorCommand ListQuestConnectivityProfiles() =>
+        new(
+            OperatorCommandKind.ConnectivityProfileList,
+            ["connectivity-profile", "list", "--json"]);
+
+    public static OperatorCommand ImportQuestConnectivityProfileFile(
+        string privateJsonPath,
+        bool replaceExisting = false,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile write");
+        ArgumentException.ThrowIfNullOrWhiteSpace(privateJsonPath);
+        var fullPath = Path.GetFullPath(privateJsonPath);
+        var arguments = new List<string>
+        {
+            "connectivity-profile", "import", "--file", fullPath,
+            "--confirm-profile-write"
+        };
+        if (replaceExisting)
+            arguments.Add("--replace-existing");
+        arguments.Add("--json");
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileImport,
+            arguments,
+            localPath: fullPath,
+            operatorConfirmed: true,
+            connectivityProfileInputKind: QuestConnectivityProfileInputKind.PrivateFile,
+            replaceExisting: replaceExisting);
+    }
+
+    public static OperatorCommand ImportQuestConnectivityProfileStdin(
+        bool replaceExisting = false,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile write");
+        var arguments = new List<string>
+        {
+            "connectivity-profile", "import", "--stdin", "--confirm-profile-write"
+        };
+        if (replaceExisting)
+            arguments.Add("--replace-existing");
+        arguments.Add("--json");
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileImport,
+            arguments,
+            operatorConfirmed: true,
+            connectivityProfileInputKind: QuestConnectivityProfileInputKind.StandardInput,
+            replaceExisting: replaceExisting);
+    }
+
+    public static OperatorCommand RevokeQuestConnectivityProfile(
+        string deviceId,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile revocation");
+        deviceId = RequireConnectivityDeviceId(deviceId);
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileRevoke,
+            [
+                "connectivity-profile", "revoke", "--device-id", deviceId,
+                "--confirm-profile-revoke", "--json"
+            ],
+            operatorConfirmed: true,
+            connectivityDeviceId: deviceId);
+    }
+
     public static OperatorCommand ParseFleetCliArguments(
         IReadOnlyList<string> arguments)
     {
@@ -788,6 +958,18 @@ public static class OperatorCommands
             throw new ArgumentOutOfRangeException(parameterName, "Quest CPU/GPU level must be between 0 and 5.");
         }
     }
+
+    private static string RequireConnectivityDeviceId(string value)
+    {
+        if (!QuestConnectivityProfileManagementContract.IsDeviceId(value))
+        {
+            throw new ArgumentException(
+                "Fleet device ID must be a lowercase 1–256 character identifier.",
+                nameof(value));
+        }
+
+        return value;
+    }
 }
 
 public sealed record OperatorExecutionResult(
@@ -814,38 +996,51 @@ public sealed record OperatorExecutionResult(
     QuestPerformanceResult? QuestPerformanceResult = null,
     FleetInstallerStatusReceipt? FleetInstallerStatus = null,
     FleetInstallerHandoffReceipt? FleetInstallerHandoff = null,
+    QuestConnectivityProfileStatusReceipt? ConnectivityProfileStatus = null,
+    QuestConnectivityProfileListReceipt? ConnectivityProfileList = null,
+    QuestConnectivityProfileMutationReceipt? ConnectivityProfileMutation = null,
     OperatorMutationReceipt? MutationReceipt = null);
 
 public sealed class OperatorCommandExecutor
 {
     private readonly AdbClient? _client;
     private readonly FleetInstallerHandoff _fleetInstaller;
+    private readonly QuestConnectivityProfileManager _connectivityProfiles;
 
     public OperatorCommandExecutor(AdbClient client)
         : this(
             client ?? throw new ArgumentNullException(nameof(client)),
-            new FleetInstallerHandoff(null))
+            new FleetInstallerHandoff(null),
+            QuestConnectivityProfileManager.CreateWindows())
     {
     }
 
     public OperatorCommandExecutor(
         AdbClient? client,
-        FleetInstallerHandoff fleetInstaller)
+        FleetInstallerHandoff fleetInstaller,
+        QuestConnectivityProfileManager? connectivityProfiles = null)
     {
         _client = client;
         _fleetInstaller = fleetInstaller ??
             throw new ArgumentNullException(nameof(fleetInstaller));
+        _connectivityProfiles = connectivityProfiles ??
+            QuestConnectivityProfileManager.CreateWindows();
     }
 
     public async Task<OperatorExecutionResult> ExecuteAsync(
         OperatorCommand command,
         CancellationToken cancellationToken = default,
-        IProgress<OperatorProgress>? progress = null)
+        IProgress<OperatorProgress>? progress = null,
+        Stream? privateInput = null)
     {
         ArgumentNullException.ThrowIfNull(command);
         if (!OperatorMutations.RequiresHeadsetStateChange(command))
         {
-            return await ExecuteCoreAsync(command, cancellationToken, progress).ConfigureAwait(false);
+            return await ExecuteCoreAsync(
+                command,
+                cancellationToken,
+                progress,
+                privateInput).ConfigureAwait(false);
         }
 
         var tracker = new OperatorMutationTracker(command, progress);
@@ -853,7 +1048,11 @@ public sealed class OperatorCommandExecutor
         tracker.Pending();
         try
         {
-            var result = await ExecuteCoreAsync(command, cancellationToken, progress).ConfigureAwait(false);
+            var result = await ExecuteCoreAsync(
+                command,
+                cancellationToken,
+                progress,
+                privateInput).ConfigureAwait(false);
             var receipt = tracker.Complete(OperatorMutations.Observe(command, result));
             return result with { MutationReceipt = receipt };
         }
@@ -867,13 +1066,50 @@ public sealed class OperatorCommandExecutor
     private async Task<OperatorExecutionResult> ExecuteCoreAsync(
         OperatorCommand command,
         CancellationToken cancellationToken,
-        IProgress<OperatorProgress>? progress)
+        IProgress<OperatorProgress>? progress,
+        Stream? privateInput)
     {
         progress?.Report(new OperatorProgress(
             command.Kind.ToString(),
             StartingMessage(command.Kind),
             0,
             0));
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileStatus)
+        {
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileStatus: _connectivityProfiles.GetStatus(
+                    Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId))));
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileList)
+        {
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileList: _connectivityProfiles.List());
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileImport)
+        {
+            if (!command.OperatorConfirmed)
+                throw new InvalidOperationException(
+                    "Connectivity profile write requires explicit operator confirmation.");
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileMutation: await _connectivityProfiles.ImportAsync(
+                    command,
+                    privateInput,
+                    cancellationToken).ConfigureAwait(false));
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileRevoke)
+        {
+            if (!command.OperatorConfirmed)
+                throw new InvalidOperationException(
+                    "Connectivity profile revocation requires explicit operator confirmation.");
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileMutation: _connectivityProfiles.Revoke(
+                    Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId)),
+                    command.OperatorConfirmed));
+        }
         if (command.Kind == OperatorCommandKind.FleetInstallStatus)
         {
             return new OperatorExecutionResult(
@@ -1198,6 +1434,10 @@ public sealed class OperatorCommandExecutor
 
     private static string StartingMessage(OperatorCommandKind kind) => kind switch
     {
+        OperatorCommandKind.ConnectivityProfileStatus => "Checking the private connectivity profile…",
+        OperatorCommandKind.ConnectivityProfileList => "Listing private connectivity profile IDs…",
+        OperatorCommandKind.ConnectivityProfileImport => "Validating and storing the private connectivity profile…",
+        OperatorCommandKind.ConnectivityProfileRevoke => "Revoking the private connectivity profile…",
         OperatorCommandKind.DiscoverDevices => "Looking for authorized headsets…",
         OperatorCommandKind.ListFiles => "Listing the device folder…",
         OperatorCommandKind.PullFile => "Copying the selected file from the headset…",

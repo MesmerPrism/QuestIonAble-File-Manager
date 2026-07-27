@@ -11,7 +11,7 @@ public sealed class QuestConnectivityProviderTests
     private const string Serial = "QUEST123";
     private const string PairingCode = "7K3M-P9TX-2Q8D-V4JW";
     private static readonly Uri Endpoint =
-        new("http://192.0.2.42:39873/");
+        new("http://192.168.137.42:39873/");
     private static readonly DateTimeOffset ContractNow =
         DateTimeOffset.FromUnixTimeMilliseconds(1_900_000_000_000);
     private static readonly JsonSerializerOptions Json = new()
@@ -52,7 +52,7 @@ public sealed class QuestConnectivityProviderTests
               "schema":"questionable.file_manager.quest_connectivity_profile.v1",
               "device_id":"quest-device-1",
               "usb_serial":"QUEST123",
-              "endpoint":"http://192.0.2.42:39873/",
+              "endpoint":"http://192.168.137.42:39873/",
               "pairing_code":"7K3M-P9TX-2Q8D-V4JW"
             }
             """);
