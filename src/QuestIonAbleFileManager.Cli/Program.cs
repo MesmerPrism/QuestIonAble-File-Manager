@@ -17,6 +17,11 @@ internal static class CliApplication
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    private static readonly JsonSerializerOptions FleetJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = true
+    };
 
     public static async Task<int> RunAsync(string[] arguments)
     {
@@ -36,6 +41,10 @@ internal static class CliApplication
             if (command == "integration")
             {
                 return await RunIntegrationAsync(arguments);
+            }
+            if (command == "fleet")
+            {
+                return await RunFleetAsync(arguments);
             }
 
             var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
@@ -64,6 +73,84 @@ internal static class CliApplication
         {
             Console.Error.WriteLine($"Error: {exception.Message}");
             return 1;
+        }
+    }
+
+    private static async Task<int> RunFleetAsync(string[] arguments)
+    {
+        var errorSchema = arguments.Length > 1 &&
+                          string.Equals(arguments[1], "status", StringComparison.Ordinal)
+            ? FleetInstallerContract.StatusSchema
+            : FleetInstallerContract.HandoffSchema;
+        using var cancellationSource = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellationSource.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            var command = OperatorCommands.ParseFleetCliArguments(arguments);
+
+            var executor = new OperatorCommandExecutor(
+                client: null,
+                FleetInstallerHandoff.FromEnvironment());
+            var result = await executor.ExecuteAsync(
+                command,
+                cancellationSource.Token).ConfigureAwait(false);
+            WriteFleetJson<object?>(command.Kind == OperatorCommandKind.FleetInstallStatus
+                ? result.FleetInstallerStatus
+                : result.FleetInstallerHandoff);
+            return 0;
+        }
+        catch (FleetInstallerException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                error = exception.Code,
+                message = exception.Message
+            });
+            return 2;
+        }
+        catch (ArgumentException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "rejected",
+                error = "fleet_command_invalid",
+                message = exception.Message
+            });
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "cancelled",
+                error = "fleet_installer_cancelled",
+                message = "The Fleet installer handoff was cancelled."
+            });
+            return 1;
+        }
+        catch
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                error = "fleet_installer_internal_error",
+                message = "The Fleet installer handoff failed without exposing local details."
+            });
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
         }
     }
 
@@ -1182,6 +1269,9 @@ internal static class CliApplication
     private static void WriteJson<T>(T value) =>
         Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
 
+    private static void WriteFleetJson<T>(T value) =>
+        Console.WriteLine(JsonSerializer.Serialize(value, FleetJsonOptions));
+
     private static void WriteIntegrationJson(FleetIntegrationResponse value) =>
         Console.WriteLine(JsonSerializer.Serialize(value, IntegrationJsonOptions));
 
@@ -1288,6 +1378,8 @@ internal static class CliApplication
               questionable-file-manager integration observe --serial <serial> --json
               questionable-file-manager integration invoke --request <operation-request.v1.json> --json
               questionable-file-manager integration status --operation <operation-id> --json
+              questionable-file-manager fleet status --json
+              questionable-file-manager fleet install --confirm-fleet-install --json
               questionable-file-manager-kiosk-v2-provider integration kiosk-v2-catalog --json < <strict-request.json>
 
             Install options:
@@ -1328,6 +1420,13 @@ internal static class CliApplication
             code, key, decrypted transport material, launch scope, or Manifold barrier.
             Fleet uses only the hash-pinned self-contained release artifact named
             questionable-file-manager-kiosk-v2-provider.exe, never a dotnet-build apphost.
+            The optional fleet routes are a distribution bootstrap only. Configuration
+            selects one HTTPS GitHub release/Pages descriptor (or an explicitly enabled
+            local fixture) and pins both its descriptor key and Windows installer signer.
+            File Manager verifies the signed, hash-bound descriptor and exact
+            RustyFleet-Setup.exe, then invokes only Fleet's fixed plan and guided setup
+            entrypoints. It accepts no URL, program, argument, credential, device, ADB,
+            hotspot, or elevation option and reports only sanitized handoff metadata.
             """);
     }
 }

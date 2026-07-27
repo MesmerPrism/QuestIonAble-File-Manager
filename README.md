@@ -63,6 +63,9 @@ action can be automated and tested.
 - optionally expose a dedicated hash-pinned Fleet connectivity provider that
   resolves File Manager-owned private profiles, invokes only Kiosk's fixed
   Wi-Fi ADB setup actions, or performs separate exact-USB classic TCP/IP setup;
+- optionally verify one configured signed Rusty Fleet Windows release and open
+  Fleet's own guided installer, without giving File Manager Fleet device,
+  connectivity, hotspot, credential, policy, or hidden-elevation authority;
 - expose the same typed routes through a Windows WPF app and CLI;
 - keep the automation-oriented CLI out of the non-technical WPF interface;
 - publish a signed MSIX, App Installer update feed, guided setup helper, and
@@ -153,6 +156,8 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- integration capabilities
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration observe --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration invoke --request <operation-request.v1.json> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- integration status --operation <operation-id> --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- fleet status --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- fleet install --confirm-fleet-install --json
 dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- integration kiosk-v2-catalog --json < <strict-request.json>
 dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- integration quest-awake --json < <strict-request.json>
 dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- integration quest-connectivity --json < <strict-request.json>
@@ -184,6 +189,15 @@ Wi-Fi state changes require an explicit confirmation in the WPF app or the
 Kiosk setup/control and device settings use their own confirmation flags.
 Mutation JSON contains desired and observed state plus its transition history.
 A Meta permission prompt can legitimately remain pending until wearer response.
+The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
+distribution bootstrap, available in the WPF **Get Fleet** tab and the exact
+`fleet status` / `fleet install` CLI routes even when ADB is absent. It accepts
+no runtime URL or executable argument. Core verifies the configured signed
+release descriptor, exact `RustyFleet-Setup.exe` size and SHA-256, Windows
+signer, and Fleet's non-mutating plan before opening the visible Fleet-owned
+installer. Receipts expose release evidence but no source URL, local path,
+credential, process argument, or device data. Fleet remains the authority for
+all fleet/device/connectivity behavior.
 The optional [Rusty Fleet integration](docs/fleet-integration.md) is disabled
 until the operator configures an approved staging root. Its shipped v1 CLI
 routes are single-device and read-only: bounded list, staged pull, and durable
@@ -270,6 +284,7 @@ A base APK and its split APKs are submitted together as one session.
 - [Progress reporting contract](docs/progress-reporting.md)
 - [Rusty Kiosk integration and synchronization](docs/rusty-kiosk-integration.md)
 - [Optional Rusty Fleet integration](docs/fleet-integration.md)
+- [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)
 - [Dedicated local API](docs/local-api.md)
 - [Release workflow](docs/release-workflow.md)

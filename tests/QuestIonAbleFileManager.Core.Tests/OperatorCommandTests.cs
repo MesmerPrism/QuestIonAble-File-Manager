@@ -12,6 +12,10 @@ public sealed class OperatorCommandTests
         var apkPath = Path.GetFullPath(Path.Combine("Test Data", "example app.apk"));
         var commands = new (OperatorCommand Command, string[] Expected)[]
         {
+            (OperatorCommands.FleetInstallStatus(),
+                ["fleet", "status", "--json"]),
+            (OperatorCommands.FleetInstall(operatorConfirmed: true),
+                ["fleet", "install", "--confirm-fleet-install", "--json"]),
             (OperatorCommands.DiscoverDevices(), ["devices"]),
             (OperatorCommands.ListFiles("QUEST123", "/sdcard/My Files"),
                 ["files", "list", "--serial", "QUEST123", "--path", "/sdcard/My Files"]),

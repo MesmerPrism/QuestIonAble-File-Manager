@@ -29,7 +29,9 @@ public enum OperatorCommandKind
     PushRustyKioskTags,
     ReadQuestControls,
     SetQuestKeepAwake,
-    SetQuestPerformance
+    SetQuestPerformance,
+    FleetInstallStatus,
+    FleetInstall
 }
 
 public sealed class OperatorCommand
@@ -147,6 +149,42 @@ public sealed class OperatorCommand
 
 public static class OperatorCommands
 {
+    public static OperatorCommand ParseFleetCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.SequenceEqual(
+                ["fleet", "status", "--json"],
+                StringComparer.Ordinal))
+        {
+            return FleetInstallStatus();
+        }
+        if (arguments.SequenceEqual(
+                ["fleet", "install", "--confirm-fleet-install", "--json"],
+                StringComparer.Ordinal))
+        {
+            return FleetInstall(operatorConfirmed: true);
+        }
+        throw new ArgumentException(
+            "Use exactly 'fleet status --json' or " +
+            "'fleet install --confirm-fleet-install --json'.",
+            nameof(arguments));
+    }
+
+    public static OperatorCommand FleetInstallStatus() =>
+        new(
+            OperatorCommandKind.FleetInstallStatus,
+            ["fleet", "status", "--json"]);
+
+    public static OperatorCommand FleetInstall(bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Fleet guided installation");
+        return new OperatorCommand(
+            OperatorCommandKind.FleetInstall,
+            ["fleet", "install", "--confirm-fleet-install", "--json"],
+            operatorConfirmed: true);
+    }
+
     public static OperatorCommand DiscoverDevices() =>
         new(OperatorCommandKind.DiscoverDevices, ["devices"]);
 
@@ -774,11 +812,30 @@ public sealed record OperatorExecutionResult(
     QuestControlStatus? QuestControlStatus = null,
     QuestKeepAwakeResult? QuestKeepAwakeResult = null,
     QuestPerformanceResult? QuestPerformanceResult = null,
+    FleetInstallerStatusReceipt? FleetInstallerStatus = null,
+    FleetInstallerHandoffReceipt? FleetInstallerHandoff = null,
     OperatorMutationReceipt? MutationReceipt = null);
 
-public sealed class OperatorCommandExecutor(AdbClient client)
+public sealed class OperatorCommandExecutor
 {
-    private readonly AdbClient _client = client ?? throw new ArgumentNullException(nameof(client));
+    private readonly AdbClient? _client;
+    private readonly FleetInstallerHandoff _fleetInstaller;
+
+    public OperatorCommandExecutor(AdbClient client)
+        : this(
+            client ?? throw new ArgumentNullException(nameof(client)),
+            new FleetInstallerHandoff(null))
+    {
+    }
+
+    public OperatorCommandExecutor(
+        AdbClient? client,
+        FleetInstallerHandoff fleetInstaller)
+    {
+        _client = client;
+        _fleetInstaller = fleetInstaller ??
+            throw new ArgumentNullException(nameof(fleetInstaller));
+    }
 
     public async Task<OperatorExecutionResult> ExecuteAsync(
         OperatorCommand command,
@@ -817,17 +874,42 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             StartingMessage(command.Kind),
             0,
             0));
+        if (command.Kind == OperatorCommandKind.FleetInstallStatus)
+        {
+            return new OperatorExecutionResult(
+                command,
+                FleetInstallerStatus: await _fleetInstaller
+                    .GetStatusAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        if (command.Kind == OperatorCommandKind.FleetInstall)
+        {
+            if (!command.OperatorConfirmed)
+            {
+                throw new InvalidOperationException(
+                    "Fleet guided installation requires explicit operator confirmation.");
+            }
+            return new OperatorExecutionResult(
+                command,
+                FleetInstallerHandoff: await _fleetInstaller
+                    .InstallAsync(cancellationToken, progress)
+                    .ConfigureAwait(false));
+        }
+
+        var client = _client ??
+            throw new InvalidOperationException(
+                "This operator command requires a configured ADB client.");
         switch (command.Kind)
         {
             case OperatorCommandKind.DiscoverDevices:
                 return new OperatorExecutionResult(
                     command,
-                    Devices: await _client.GetDevicesAsync(cancellationToken).ConfigureAwait(false));
+                    Devices: await client.GetDevicesAsync(cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.ListFiles:
                 return new OperatorExecutionResult(
                     command,
-                    RemoteEntries: await _client.ListRemoteDirectoryAsync(
+                    RemoteEntries: await client.ListRemoteDirectoryAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
                         cancellationToken).ConfigureAwait(false));
@@ -835,7 +917,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PullFile:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PullFileAsync(
+                    CommandResult: await client.PullFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
@@ -844,7 +926,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PushFile:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PushFileAsync(
+                    CommandResult: await client.PushFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
@@ -853,14 +935,14 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ListPackages:
                 return new OperatorExecutionResult(
                     command,
-                    Packages: await _client.GetThirdPartyPackageNamesAsync(
+                    Packages: await client.GetThirdPartyPackageNamesAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.ExportApk:
                 return new OperatorExecutionResult(
                     command,
-                    ApkExportResult: await _client.ExportSingleApkAsync(
+                    ApkExportResult: await client.ExportSingleApkAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
@@ -870,13 +952,13 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InspectApk:
                 return new OperatorExecutionResult(
                     command,
-                    ApkArtifactInspection: await _client.InspectApkAsync(
+                    ApkArtifactInspection: await client.InspectApkAsync(
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InstallApk:
                 {
-                    var install = await _client.InstallInspectedApkAsync(
+                    var install = await client.InstallInspectedApkAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.InstallOptions,
@@ -891,7 +973,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.LaunchInspectedApp:
                 return new OperatorExecutionResult(
                     command,
-                    ResolvedAppLaunchResult: await _client.LaunchInspectedAppAsync(
+                    ResolvedAppLaunchResult: await client.LaunchInspectedAppAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
@@ -899,7 +981,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ObserveInspectedApp:
                 return new OperatorExecutionResult(
                     command,
-                    AppRuntimeObservation: await _client.ObserveInspectedAppAsync(
+                    AppRuntimeObservation: await client.ObserveInspectedAppAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
@@ -908,7 +990,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 {
                     var bundle = command.ApkBundle ??
                         throw new InvalidOperationException("The operator command is missing its APK bundle.");
-                    var result = await _client.InstallApkBundleAsync(
+                    var result = await client.InstallApkBundleAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         bundle.ApkPaths,
                         command.InstallOptions,
@@ -923,7 +1005,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    WifiAdbEnableResult: await _client.EnableWifiAdbAndConnectAsync(
+                    WifiAdbEnableResult: await client.EnableWifiAdbAndConnectAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.WifiPort,
                         cancellationToken,
@@ -933,7 +1015,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    WifiAdbConnectionResult: await _client.ConnectWifiAdbAsync(
+                    WifiAdbConnectionResult: await client.ConnectWifiAdbAsync(
                         Require(command.WifiHost, nameof(command.WifiHost)),
                         command.WifiPort,
                         cancellationToken,
@@ -943,7 +1025,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.DisconnectWifiAdbAsync(
+                    CommandResult: await client.DisconnectWifiAdbAsync(
                         Require(command.WifiHost, nameof(command.WifiHost)),
                         command.WifiPort,
                         cancellationToken,
@@ -952,7 +1034,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InstallApkMany:
                 return new OperatorExecutionResult(
                     command,
-                    ParallelApkInstallResult: await _client.InstallApkOnManyWifiDevicesAsync(
+                    ParallelApkInstallResult: await client.InstallApkOnManyWifiDevicesAsync(
                         Require(command.Serials, nameof(command.Serials)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.InstallOptions,
@@ -966,7 +1048,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                         throw new InvalidOperationException("The operator command is missing its APK bundle.");
                     return new OperatorExecutionResult(
                         command,
-                        ParallelApkInstallResult: await _client.InstallApkBundleOnManyWifiDevicesAsync(
+                        ParallelApkInstallResult: await client.InstallApkBundleOnManyWifiDevicesAsync(
                             Require(command.Serials, nameof(command.Serials)),
                             bundle.ApkPaths,
                             command.InstallOptions,
@@ -978,7 +1060,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InstallRustyKiosk:
                 return new OperatorExecutionResult(
                     command,
-                    RustyKioskInstallResult: await _client.InstallRustyKioskAsync(
+                    RustyKioskInstallResult: await client.InstallRustyKioskAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.RustyKioskBundle ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk bundle."),
@@ -988,11 +1070,11 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InspectRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var status = await _client.GetRustyKioskInstallationStatusAsync(
+                    var status = await client.GetRustyKioskInstallationStatusAsync(
                         serial,
                         cancellationToken).ConfigureAwait(false);
                     var operatorResult = status.HostOperatorAvailable
-                        ? await _client.InvokeRustyKioskAsync(
+                        ? await client.InvokeRustyKioskAsync(
                             serial,
                             RustyKioskCommand.Status,
                             cancellationToken: cancellationToken).ConfigureAwait(false)
@@ -1006,14 +1088,14 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ProvisionRustyKiosk:
                 return new OperatorExecutionResult(
                     command,
-                    RustyKioskProvisionResult: await _client.ProvisionRustyKioskAsync(
+                    RustyKioskProvisionResult: await client.ProvisionRustyKioskAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InvokeRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var result = await _client.InvokeRustyKioskAsync(
+                    var result = await client.InvokeRustyKioskAsync(
                         serial,
                         command.RustyKioskCommand ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk action."),
@@ -1022,7 +1104,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                     return new OperatorExecutionResult(
                         command,
                         RustyKioskOperatorResult: result,
-                        RustyKioskInstallationStatus: await _client.GetRustyKioskInstallationStatusAsync(
+                        RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
                             cancellationToken).ConfigureAwait(false));
                 }
@@ -1030,7 +1112,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PullRustyKioskTags:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PullRustyKioskTagFileAsync(
+                    CommandResult: await client.PullRustyKioskTagFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
@@ -1038,11 +1120,11 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PushRustyKioskTags:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var transfer = await _client.PushRustyKioskTagFileAsync(
+                    var transfer = await client.PushRustyKioskTagFileAsync(
                         serial,
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false);
-                    var hotload = await _client.InvokeRustyKioskAsync(
+                    var hotload = await client.InvokeRustyKioskAsync(
                         serial,
                         RustyKioskCommand.Reload,
                         cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1050,7 +1132,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                         command,
                         CommandResult: transfer,
                         RustyKioskOperatorResult: hotload,
-                        RustyKioskInstallationStatus: await _client.GetRustyKioskInstallationStatusAsync(
+                        RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
                             cancellationToken).ConfigureAwait(false));
                 }
@@ -1058,13 +1140,13 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ReadQuestControls:
                 return new OperatorExecutionResult(
                     command,
-                    QuestControlStatus: await _client.GetQuestControlStatusAsync(
+                    QuestControlStatus: await client.GetQuestControlStatusAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.SetQuestKeepAwake:
                 {
-                    var keepAwake = await _client.SetQuestKeepAwakeAsync(
+                    var keepAwake = await client.SetQuestKeepAwakeAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.Enabled ??
                             throw new InvalidOperationException("The operator command is missing its keep-awake choice."),
@@ -1078,7 +1160,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
 
             case OperatorCommandKind.SetQuestPerformance:
                 {
-                    var performance = await _client.SetQuestPerformanceLevelsAsync(
+                    var performance = await client.SetQuestPerformanceLevelsAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.CpuLevel,
                         command.GpuLevel,
@@ -1138,6 +1220,8 @@ public sealed class OperatorCommandExecutor(AdbClient client)
         OperatorCommandKind.ReadQuestControls => "Reading Quest power and performance status…",
         OperatorCommandKind.SetQuestKeepAwake => "Changing Quest keep-awake policy…",
         OperatorCommandKind.SetQuestPerformance => "Changing Quest CPU/GPU overrides…",
+        OperatorCommandKind.FleetInstallStatus => "Checking the trusted Fleet installer release…",
+        OperatorCommandKind.FleetInstall => "Verifying and opening the Fleet guided installer…",
         _ => "Working…"
     };
 }

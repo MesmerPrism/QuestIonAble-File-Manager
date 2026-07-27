@@ -13,7 +13,8 @@ namespace QuestIonAbleFileManager.App;
 public partial class MainWindow : Window
 {
     private readonly AdbClient? _client;
-    private readonly OperatorCommandExecutor? _operator;
+    private readonly OperatorCommandExecutor _operator;
+    private readonly string? _fleetConfigurationError;
     private readonly ObservableCollection<WifiInstallTargetChoice> _wifiInstallTargets = [];
     private RustyKioskBundle? _rustyKioskBundle;
     private RustyKioskInstallationStatus? _rustyKioskInstallation;
@@ -39,18 +40,41 @@ public partial class MainWindow : Window
         KioskTagFilterBox.SelectedIndex = 0;
         SetRustyKioskBundle(RustyKioskBundleLocator.TryFind());
 
+        FleetInstallerHandoff fleetInstaller;
+        try
+        {
+            fleetInstaller = FleetInstallerHandoff.FromEnvironment();
+        }
+        catch (FleetInstallerException exception)
+        {
+            _fleetConfigurationError = exception.Message;
+            fleetInstaller = new FleetInstallerHandoff(null);
+        }
+        catch
+        {
+            _fleetConfigurationError =
+                "The optional Fleet installer configuration is incomplete or invalid.";
+            fleetInstaller = new FleetInstallerHandoff(null);
+        }
+
         var adbPath = AdbLocator.Find();
         if (adbPath is null)
         {
             AdbPathText.Text = "ADB not found";
             StatusText.Text = "ADB is unavailable. Rusty Kiosk's direct link can still be used after headset setup.";
             RefreshDevicesButton.IsEnabled = false;
-            return;
         }
-
-        _client = new AdbClient(adbPath);
-        _operator = new OperatorCommandExecutor(_client);
-        AdbPathText.Text = $"ADB: {adbPath}";
+        else
+        {
+            _client = new AdbClient(adbPath);
+            AdbPathText.Text = $"ADB: {adbPath}";
+        }
+        _operator = new OperatorCommandExecutor(_client, fleetInstaller);
+        if (_fleetConfigurationError is not null)
+        {
+            FleetInstallerStatusText.Text =
+                $"Fleet installer configuration is invalid: {_fleetConfigurationError}";
+        }
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs eventArgs)
@@ -63,6 +87,69 @@ public partial class MainWindow : Window
 
     private async void OnRefreshDevices(object sender, RoutedEventArgs eventArgs) =>
         await RunBusyAsync(() => RefreshDevicesAsync(), "Refreshing devices…");
+
+    private async void OnRefreshFleetInstaller(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () =>
+            {
+                if (_fleetConfigurationError is not null)
+                {
+                    throw new FleetInstallerException(
+                        "fleet_installer_configuration_invalid",
+                        _fleetConfigurationError);
+                }
+
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.FleetInstallStatus());
+                var status = execution.FleetInstallerStatus ??
+                    throw new InvalidOperationException(
+                        "Fleet installer status did not return a receipt.");
+                FleetInstallerStatusText.Text = status.Configured
+                    ? $"Trusted release: {status.Product} {status.Version} ({status.Channel}); " +
+                      $"status: {status.Status}; last handoff: {status.LastOutcome ?? "none"}."
+                    : "Fleet installer handoff is optional and is not configured.";
+                StatusText.Text = "Fleet installer status checked.";
+            },
+            "Checking the trusted Fleet installer release…");
+
+    private async void OnInstallFleet(object sender, RoutedEventArgs eventArgs)
+    {
+        if (MessageBox.Show(
+                this,
+                "Verify and open the Fleet-owned guided installer?\n\n" +
+                "File Manager will accept only the configured signed release, verify its " +
+                "exact size, hash, and Windows signer, check Fleet's plan, and then open " +
+                "the visible installer. File Manager does not configure devices or Wi-Fi.",
+                "Confirm Rusty Fleet installation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                if (_fleetConfigurationError is not null)
+                {
+                    throw new FleetInstallerException(
+                        "fleet_installer_configuration_invalid",
+                        _fleetConfigurationError);
+                }
+
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.FleetInstall(operatorConfirmed: true));
+                var receipt = execution.FleetInstallerHandoff ??
+                    throw new InvalidOperationException(
+                        "Fleet installer handoff did not return a receipt.");
+                FleetInstallerStatusText.Text =
+                    $"Verified Fleet {receipt.Version} ({receipt.Channel}); " +
+                    $"guided installer exit code: {receipt.GuidedInstallerExitCode}; " +
+                    $"private staging cleaned: {receipt.CleanupCompleted}.";
+                StatusText.Text = "Fleet guided installer handoff completed.";
+            },
+            "Verifying the Fleet release and opening its guided installer…");
+    }
 
     private void OnDeviceSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
@@ -1571,9 +1658,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private OperatorCommandExecutor RequireOperator() =>
-        _operator ?? throw new InvalidOperationException(
-            "ADB was not found. Install Android Platform Tools or configure QUESTIONABLE_FILE_MANAGER_ADB.");
+    private OperatorCommandExecutor RequireOperator() => _operator;
 
     private async Task<OperatorExecutionResult> ExecuteOperatorAsync(OperatorCommand command)
     {
@@ -1698,7 +1783,7 @@ public partial class MainWindow : Window
             OperationProgressBar.ToolTip = null;
             OperationProgressBar.Visibility = Visibility.Collapsed;
             Mouse.OverrideCursor = null;
-            MainTabs.IsEnabled = _client is not null;
+            MainTabs.IsEnabled = true;
             RefreshDevicesButton.IsEnabled = _client is not null;
             _busy = false;
         }

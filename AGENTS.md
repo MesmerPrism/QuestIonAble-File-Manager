@@ -14,7 +14,10 @@ controls, an optional disabled-by-default single-device Rusty Fleet hook whose
 shipped CLI stays read-only and whose Core push requires injected current
 Quest/Manifold authority, an optional summary-only encrypted Kiosk v2 catalog
 provider whose endpoint and credential remain File Manager-owned, and Windows
-delivery. Rusty Kiosk remains a separate AGPL-licensed
+delivery. It also owns an optional distribution-only handoff that verifies one
+configured signed Rusty Fleet Windows release and opens Fleet's own guided
+installer; this is not Fleet runtime, device, connectivity, or policy
+authority. Rusty Kiosk remains a separate AGPL-licensed
 Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
@@ -143,6 +146,22 @@ documented.
   case-sensitive `integration quest-connectivity --json`. Invalid arguments
   and strict-request failures must reject before profile or ADB initialization.
   Never substitute the general CLI or a framework-dependent apphost.
+- The optional Fleet installer handoff is distribution bootstrap only. It
+  accepts no caller URL, program, argument, credential, device, ADB, hotspot,
+  or elevation choice. Configuration selects one reviewed HTTPS Rusty Fleet
+  GitHub Release/Pages descriptor, or an explicitly enabled local fixture, and
+  pins the descriptor RSA SPKI SHA-256, channel, and Windows signer-certificate
+  SHA-256. Core strictly verifies schema, product, three-part version, freshness,
+  exact asset name/size/SHA-256/protocol, RSA-PSS signature, Authenticode, and
+  the Fleet-owned `--plan --json` result before starting the exact installer
+  with no arguments. Keep staging local, non-reparse, retained against
+  substitution, create-new, and cleaned by handle. Persist replay and
+  strictly-monotonic-version state with write-through before guided launch.
+  Status and handoff receipts must never contain
+  source URLs, local paths, process arguments, credentials, or device data.
+  File Manager must not download another bootstrapper, configure Fleet,
+  perform hidden elevation, or claim that Fleet installation succeeded merely
+  because the handoff began. See `docs/fleet-installer-handoff.md`.
 - Fleet may launch the Kiosk v2 catalog provider only from the reviewed,
   self-contained, single-file Windows artifact named
   `questionable-file-manager-kiosk-v2-provider.exe`, pinned by lowercase
@@ -222,6 +241,8 @@ questionable-file-manager.exe integration capabilities --json
 questionable-file-manager.exe integration observe --serial <quest-serial> --json
 questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
 questionable-file-manager.exe integration status --operation <operation-id> --json
+questionable-file-manager.exe fleet status --json
+questionable-file-manager.exe fleet install --confirm-fleet-install --json
 ```
 
 The WPF buttons map to those routes exactly. Both install actions accept
@@ -313,6 +334,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
   install/export, Wi-Fi endpoint lifecycle, bounded fan-out, progress units,
   hashes, typed Kiosk hosting, and mutation reconciliation.
 - `QuestIonAbleFileManager.Cli` is the automation-equivalent operator surface.
+- Core's optional Fleet installer handoff is a distribution consumer, not a
+  Fleet provider or device-control route. The WPF “Get Fleet” tab and exact
+  `fleet` CLI routes share its typed `OperatorCommand`.
 - `QuestIonAbleFileManager.FleetAwakeProvider` is the narrow Fleet effect-owner
   artifact for Quest awake control; it is not a general CLI projection.
 - `QuestIonAbleFileManager.FleetConnectivityProvider` is the narrow Fleet

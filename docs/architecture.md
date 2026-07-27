@@ -32,6 +32,8 @@ general Quest runtime console or fleet manager.
 - Optional dedicated Fleet connectivity provider for File Manager-owned
   private target resolution, fixed Kiosk Wi-Fi ADB setup requests, and a
   separate exact-USB classic TCP/IP route.
+- Optional distribution-only verification and handoff of one configured,
+  signed Rusty Fleet Windows guided installer release.
 - Public CI, Pages, release archives, and boundary validation.
 
 ## Non-scope
@@ -45,6 +47,9 @@ general Quest runtime console or fleet manager.
   orchestration.
 - Fleet target scheduling, Fleet identity inference, multi-target file
   operations, or mutation based only on caller-supplied Fleet fields.
+- Fleet installation semantics, runtime configuration, device enrollment,
+  connectivity, hotspot control, credential exchange, or arbitrary
+  bootstrapper execution.
 - Bundled Android tools, APK catalogs, private packages, or live evidence.
 - Android and Apple host applications in the first release.
 
@@ -120,6 +125,15 @@ deployment uses a separate Windows identity when that caller boundary matters.
 Classic TCP/IP also binds the pre-mutation USB identity to fresh readback from
 the exact connected endpoint so a stale endpoint cannot be relabeled.
 
+The Fleet installer handoff owns only release-consumer verification: a pinned
+descriptor RSA key and channel, strict signed payload, exact installer
+size/hash/name/protocol, pinned Authenticode signer, a private retained stage,
+replay/downgrade state, and Fleet's fixed non-mutating plan contract. Fleet's
+guided installer owns installation behavior and any visible Windows consent.
+Neither the WPF nor CLI can choose a source, executable, argument vector,
+credential, device, ADB action, network action, or elevation mode. See
+[Fleet installer handoff](fleet-installer-handoff.md).
+
 The shipped CLI has no push or cancellation authority. A Core host may
 advertise push only when it injects a verifier for the current Quest identity
 and Manifold command, lease, provider epoch, and revocation barrier. The same
@@ -156,6 +170,12 @@ The CLI is the contract surface for agents and future GUI, Android-host, and
 Apple-host adapters. Any new GUI action must first have an equivalent typed
 command, CLI route, optional PowerShell rendering for tests/docs, and parity
 test. Automation details stay out of the non-technical WPF interface.
+
+`FleetInstallerHandoff` is the exception to ADB dependence, not to typed-route
+parity: `FleetInstallStatus` and confirmed `FleetInstall` are immutable
+`OperatorCommand` values shared by WPF and CLI. Its receipts are deliberately
+sanitized and contain release identity/evidence only—never URLs, paths,
+credentials, process arguments, or device state.
 
 Fleet interop uses strict `questionable.file_manager.integration.*.v1` JSON
 over the CLI subprocess. Capability discovery is side-effect free. Observe

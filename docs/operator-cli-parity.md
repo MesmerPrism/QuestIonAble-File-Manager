@@ -15,6 +15,10 @@ The dedicated Fleet awake provider is also machine-only, but it is a separate
 effect-owner executable rather than a hidden WPF or general CLI route. Fleet's
 preview/confirmation UI owns the managed operation; File Manager's ordinary
 WPF `Keep awake` button continues to map only to `device keep-awake`.
+The distribution-only **Get Fleet** tab is different: its two buttons are
+ordinary typed operator routes with exact CLI equivalents. They verify and
+handoff one configured Fleet installer release; they do not project any Fleet
+runtime or device capability.
 
 The Windows release places these programs beside each other:
 
@@ -57,6 +61,8 @@ exact tool selection is part of the test.
 | Refresh batteries/power/performance | `device status` |
 | Bounded keep awake (one minute through eight hours) / restore normal | `device keep-awake` |
 | Set / clear CPU and GPU overrides | `device performance` |
+| Check the configured trusted Fleet installer | `fleet status --json` |
+| Verify and open Fleet's guided installer | `fleet install --confirm-fleet-install --json` |
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
@@ -85,6 +91,8 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <base-apk> --confirm-local-install --json
 & '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --duration-ms 28800000 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' fleet status --json
+& '.\questionable-file-manager.exe' fleet install --confirm-fleet-install --json
 ```
 
 PowerShell rendering single-quotes paths when required and doubles embedded
@@ -122,6 +130,13 @@ Wi-Fi and parallel acceptance additionally proves address inspection occurs
 before `tcpip`, no daemon lifecycle command is emitted, each install remains
 serial-scoped, concurrency is bounded, duplicate targets are rejected, and
 partial failures remain visible.
+
+Fleet installer parity additionally proves the CLI accepts only the two exact
+argument vectors above, install requires the same explicit confirmation as the
+WPF dialog, and neither route initializes ADB. Offline contract tests cover
+strict/duplicate JSON, signatures and signer pins, product/channel/asset
+binding, size and digest, freshness, replay/downgrade, redirects, process
+timeouts, private-stage cleanup, and reparse rejection.
 
 Direct-link acceptance uses shared Kotlin/C# HMAC vectors, rejects response-ID,
 digest, and signature mismatches, and keeps Android install receipts pending
