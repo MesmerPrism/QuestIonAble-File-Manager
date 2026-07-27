@@ -283,6 +283,13 @@ and operation replay within one process. Its Credential Manager profile is
 current-user protection, not isolation from another process under that user;
 the current request has no cryptographic Manifold caller proof. Use a separate
 Windows identity when same-user callers are outside the trust boundary.
+File Manager owns the complete profile lifecycle through exact typed
+`connectivity-profile` status, list, private import, replacement, and revoke
+commands plus accessible controls in **Get Fleet**. Private fields are accepted
+only from one protected JSON file, bounded standard input, or the WPF's
+in-memory binding of the selected USB headset and already-entered Kiosk direct
+link. Receipts contain only the Fleet device ID, sanitized state, and stable
+reason code; no profile route contacts a headset or claims Wi-Fi usability.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
 network or a private Windows hotspot. The pairing code can be supplied through

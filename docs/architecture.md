@@ -126,6 +126,17 @@ Credential Manager does not isolate secrets from another same-user process;
 deployment uses a separate Windows identity when that caller boundary matters.
 Classic TCP/IP also binds the pre-mutation USB identity to fresh readback from
 the exact connected endpoint so a stale endpoint cannot be relabeled.
+The ordinary File Manager process, never the dedicated provider, owns profile
+status, sanitized inventory, strict private enrollment/replacement, and
+explicit revocation. CLI file/stdin and WPF controls share the same typed Core
+commands and credential-store abstraction. The WPF may bind its selected exact
+USB device and already-entered Kiosk direct link through the standard-input
+route entirely in memory; it does not persist those fields in ordinary
+settings or a temporary file, and clears the transient endpoint/password
+controls for every outcome. A create-only request must receive an
+existing-record response before a distinct replacement confirmation is
+offered. Profile lifecycle receipts expose no serial,
+endpoint, pairing code, Credential Manager target, or inferred connectivity.
 
 `ProviderCapabilityDiscoveryProjection` owns only the strict DTO projection of
 those three existing provider registries. Awake and connectivity action lists

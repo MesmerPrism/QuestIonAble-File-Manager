@@ -18,6 +18,10 @@ delivery. The three dedicated provider artifacts may describe their existing
 typed registries through the shared short-lived, target-free, explicitly
 non-authorizing discovery contract; description is not backend health,
 activation, target resolution, or execution authority. It also owns an
+explicit current-user Credential Manager lifecycle for Fleet connectivity
+profiles: sanitized status/list, strict private file/stdin or in-memory WPF
+enrollment, confirmed replacement, and confirmed revocation. This owner route
+does not contact a headset or broaden the dedicated provider. It also owns an
 optional distribution-only handoff that verifies one
 configured signed Rusty Fleet Windows release and opens Fleet's own guided
 installer; this is not Fleet runtime, device, connectivity, or policy
@@ -255,6 +259,11 @@ questionable-file-manager.exe integration invoke --request <operation-request.v1
 questionable-file-manager.exe integration status --operation <operation-id> --json
 questionable-file-manager.exe fleet status --json
 questionable-file-manager.exe fleet install --confirm-fleet-install --json
+questionable-file-manager.exe connectivity-profile status --device-id <fleet-device-id> --json
+questionable-file-manager.exe connectivity-profile list --json
+questionable-file-manager.exe connectivity-profile import --file <private-profile.json> --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile import --stdin --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
 ```
 
 The WPF buttons map to those routes exactly. Both install actions accept

@@ -19,6 +19,15 @@ The distribution-only **Get Fleet** tab is different: its two buttons are
 ordinary typed operator routes with exact CLI equivalents. They verify and
 handoff one configured Fleet installer release; they do not project any Fleet
 runtime or device capability.
+That tab also owns File Manager's private Quest connectivity-profile
+lifecycle. Its status/list/import/revoke controls and the CLI use the same
+`OperatorCommand` dispatcher without initializing ADB. The convenience action
+that binds the selected USB headset to the already-entered Kiosk direct link
+uses the exact CLI standard-input vector and passes the private document to the
+shared executor only in memory. It first uses the create-only vector; an
+existing record triggers a distinct replacement confirmation before a second
+command carrying `--replace-existing`. Its password input and endpoint are
+transient and cleared for every outcome.
 
 The Windows release places these programs beside each other:
 
@@ -63,6 +72,10 @@ exact tool selection is part of the test.
 | Set / clear CPU and GPU overrides | `device performance` |
 | Check the configured trusted Fleet installer | `fleet status --json` |
 | Verify and open Fleet's guided installer | `fleet install --confirm-fleet-install --json` |
+| List / check File Manager-owned Fleet connectivity profiles | `connectivity-profile list --json` / `connectivity-profile status --device-id <fleet-device-id> --json` |
+| Import one protected connectivity profile file | `connectivity-profile import --file <private-profile.json> --confirm-profile-write [--replace-existing] --json` |
+| Save selected USB + entered Kiosk direct link for Fleet | in-memory equivalent of `connectivity-profile import --stdin --confirm-profile-write --replace-existing --json` |
+| Revoke selected connectivity profile | `connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json` |
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
@@ -93,6 +106,11 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' fleet status --json
 & '.\questionable-file-manager.exe' fleet install --confirm-fleet-install --json
+& '.\questionable-file-manager.exe' connectivity-profile status --device-id <fleet-device-id> --json
+& '.\questionable-file-manager.exe' connectivity-profile list --json
+& '.\questionable-file-manager.exe' connectivity-profile import --file <private-profile.json> --confirm-profile-write --json
+Get-Content -Raw -LiteralPath <private-profile.json> | & '.\questionable-file-manager.exe' connectivity-profile import --stdin --confirm-profile-write --replace-existing --json
+& '.\questionable-file-manager.exe' connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
 ```
 
 PowerShell rendering single-quotes paths when required and doubles embedded
@@ -137,6 +155,14 @@ WPF dialog, and neither route initializes ADB. Offline contract tests cover
 strict/duplicate JSON, signatures and signer pins, product/channel/asset
 binding, size and digest, freshness, replay/downgrade, redirects, process
 timeouts, private-stage cleanup, and reparse rejection.
+
+Connectivity-profile parity proves status/list receipts contain only IDs and
+sanitized state, both import sources reach the same strict parser and
+Credential Manager writer, secrets never enter CLI arguments or receipts,
+write/replacement/revocation confirmations fail closed, and WPF convenience
+enrollment uses the same standard-input command without a temporary file.
+Mock-store tests cover create, replace, invalid stored state, revoke, duplicate
+and unknown JSON fields, target binding, input ambiguity, and size bounds.
 
 Direct-link acceptance uses shared Kotlin/C# HMAC vectors, rejects response-ID,
 digest, and signature mismatches, and keeps Android install receipts pending

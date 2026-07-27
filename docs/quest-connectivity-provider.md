@@ -60,10 +60,65 @@ The credential blob is strict UTF-8 JSON:
 }
 ```
 
-The dedicated provider has no profile write or enrollment route. Missing,
-malformed, mismatched, non-USB, non-HTTP, or wrong-port profiles fail closed
-before an effect owner is called. Profile bytes and pairing characters are
-cleared from the provider's owned buffers after use.
+The dedicated provider has no profile write or enrollment route. File
+Manager's ordinary owner UI and CLI manage the record through the same typed
+Core operator commands:
+
+```text
+connectivity-profile status --device-id <fleet-device-id> --json
+connectivity-profile list --json
+connectivity-profile import --file <private-profile.json> --confirm-profile-write [--replace-existing] --json
+connectivity-profile import --stdin --confirm-profile-write [--replace-existing] --json
+connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
+```
+
+The import document is a separate strict owner envelope:
+
+```json
+{
+  "schema": "questionable.file_manager.quest_connectivity_profile_enrollment.v1",
+  "target": "QuestIonAbleFileManager/QuestConnectivity/<fleet-device-id>",
+  "device_id": "<fleet-device-id>",
+  "usb_serial": "<usb-serial>",
+  "endpoint": "http://<quest-ip>:39873/",
+  "pairing_code": "<kiosk-pairing-code>"
+}
+```
+
+The target prefix and suffix must exactly match the lowercase canonical device
+ID; case variants are rejected instead of becoming Credential Manager
+collisions. Unknown or
+duplicate fields, invalid IDs, non-USB serials, non-HTTP Kiosk endpoints,
+non-local IPv4 addresses, wrong ports, and malformed pairing codes reject
+before Credential Manager is called. Import accepts private values only from one file or standard input;
+they are never accepted as CLI arguments. File input is limited to 4 KiB and
+must be one local absolute, single-link regular file with a private ACL and no
+alternate data stream or reparse component. The file handle remains open while
+its bounded contents and stable length are read. File Manager opens the final
+component without following a reparse point, then verifies type, hard-link
+count, resolved path, owner, and DACL by the retained handle. Standard input is
+also capped at 4 KiB.
+
+The **Get Fleet** tab can consume the exact USB headset selected in File
+Manager plus the endpoint and pairing code already entered in the **Rusty
+Kiosk** tab. It builds the same standard-input enrollment document only in
+memory, requires explicit confirmation, clears its owned document bytes, and
+writes no temporary JSON. The pairing code is a transient password field; the
+endpoint and code are cleared after success, cancellation, rejection, or
+storage failure. Creation is attempted without replacement authority. Only an
+existing-record response opens a second device-ID-only replacement prompt.
+The file picker remains available when enrollment material comes from another
+trusted provisioning step.
+
+Status and list return only device IDs with `enrolled`, `absent`, or `invalid`
+state and stable reason codes. Import returns only `created` or `replaced`
+with the device ID and sanitized state. Replacement requires
+`--replace-existing`; revocation requires `--confirm-profile-revoke`. Neither
+route touches a headset, connects ADB, or infers listener health.
+
+Missing, malformed, mismatched, non-USB, non-HTTP, or wrong-port stored
+profiles fail closed before an effect owner is called. Profile bytes and
+pairing characters are cleared from the provider's owned buffers after use.
 
 Windows Credential Manager protects the profile at the current-user boundary,
 not from other processes running as that same Windows user. Such a process can
