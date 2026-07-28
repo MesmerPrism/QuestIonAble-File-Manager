@@ -246,6 +246,31 @@ rollback error-1177 cases cover missing, moved, and changed destination states
 and prove exact classification plus preservation of the original backup and
 any remaining rollback candidate.
 
+When exact Fleet A/B release artifacts are staged, run the external lifecycle
+gate before publication:
+
+```powershell
+pwsh -NoProfile -File `
+  ./tools/Test-FleetInstallerHandoffLifecycle.ps1 `
+  -InputPath <private-lifecycle-input.json> `
+  -QfmSetupExecutablePath `
+    ./artifacts/release/QuestIonAbleFileManager-Setup.exe
+```
+
+Each release directory named by the private input must contain the exact Fleet
+Setup executable, Setup build receipt, v2 descriptor, v2 descriptor receipt,
+and descriptor SPKI asset. The input supplies independently reviewed SPKI and
+Setup-certificate pins; the runner never treats staged metadata as independent
+trust. It emits the path-free
+`questionable.file_manager.fleet_installer_lifecycle_receipt.v1` receipt after
+status/plan verification, same-signer A-to-B update, side-by-side retention,
+exact pointer rollback readback, replay/downgrade rejection, cancellation,
+interrupted recovery, adversarial staging checks, and cleanup. Pass the same
+input to `Invoke-ReleaseBuild.ps1` through
+`-FleetInstallerLifecycleInputPath` to bind the gate to the signed QFM Setup
+artifact. Until real reviewed production values exist, keep the checked-in
+eight-field release configuration empty and use only signed synthetic inputs.
+
 ## GitHub Configuration
 
 The release workflow requires these Actions secrets:

@@ -348,6 +348,7 @@ dotnet test tests/QuestIonAbleFileManager.Core.Tests --configuration Release --f
 pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 pwsh -NoProfile -File ./tools/Test-FleetInstallerReleaseConfiguration.ps1
+pwsh -NoProfile -File ./tools/Test-FleetInstallerHandoffLifecycle.ps1 -InputPath <private-lifecycle-input.json> -QfmSetupExecutablePath <exact-qfm-setup.exe>
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
 pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
 pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
@@ -377,7 +378,8 @@ pwsh -NoProfile -File ./tools/app/Invoke-ReleaseBuild.ps1 `
   -ExpectedKioskVersion <kiosk-version> `
   -ExpectedKioskSourceRevision <kiosk-source-commit> `
   -PackageCertificatePath ./artifacts/signing/windows-signing.pfx `
-  -PackageCertificatePassword <pfx-password>
+  -PackageCertificatePassword <pfx-password> `
+  -FleetInstallerLifecycleInputPath <private-lifecycle-input.json>
 
 pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -ReleaseDirectory ./artifacts/release `
@@ -388,7 +390,10 @@ If that release enables the optional Fleet distribution handoff, add the
 complete public eight-field metadata block to the checked-in release
 configuration source as documented in `docs/release-workflow.md`. Leave the
 source inert otherwise. Never rely on ambient MSBuild/environment/script
-values or generated files, and never commit private publisher material.
+values or generated files, and never commit private publisher material. The
+private lifecycle input names exact externally staged Fleet A/B release
+directories and independently reviewed public pins; it is never a release
+asset or committed source file.
 
 Use `-DirectPackage` only when the agent shell cannot accept UAC. That fallback
 validates the helper plan and signed MSIX install/launch separately, and the

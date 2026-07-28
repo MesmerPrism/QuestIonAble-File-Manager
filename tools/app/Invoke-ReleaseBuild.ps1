@@ -27,6 +27,7 @@ param(
     [string]$ExpectedKioskSourceRevision,
 
     [string]$ApkSignerPath,
+    [string]$FleetInstallerLifecycleInputPath,
     [switch]$SkipBuildAndTest
 )
 
@@ -207,6 +208,19 @@ if ($LASTEXITCODE -ne 0) { throw 'MSIX package build failed.' }
     -CertificatePassword $SetupCertificatePassword `
     -TimestampUrl $SetupTimestampUrl
 if ($LASTEXITCODE -ne 0) { throw 'Guided setup publish failed.' }
+
+if (-not [string]::IsNullOrWhiteSpace(
+        $FleetInstallerLifecycleInputPath)) {
+    & (Join-Path $repoRoot `
+        'tools\Test-FleetInstallerHandoffLifecycle.ps1') `
+        -InputPath $FleetInstallerLifecycleInputPath `
+        -QfmSetupExecutablePath (
+            Join-Path $OutputDirectory `
+                'QuestIonAbleFileManager-Setup.exe')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Fleet installer handoff lifecycle validation failed.'
+    }
+}
 
 # Releases keep byte-identical former-name aliases so 0.3.x App Installer
 # subscriptions and pinned automation download URLs migrate without breaking.

@@ -456,6 +456,9 @@ public sealed class FleetInstallerHandoffTests
         var sizeException = await Assert.ThrowsAsync<FleetInstallerException>(
             () => sizeFixture.CreateService().InstallAsync());
         Assert.Equal("fleet_asset_size_mismatch", sizeException.Code);
+        Assert.Empty(Directory.EnumerateDirectories(
+            sizeFixture.StateRoot,
+            "fleet-*"));
 
         using var hashFixture = new SignedFixture();
         hashFixture.ResignPayload(
@@ -463,6 +466,9 @@ public sealed class FleetInstallerHandoffTests
         var hashException = await Assert.ThrowsAsync<FleetInstallerException>(
             () => hashFixture.CreateService().InstallAsync());
         Assert.Equal("fleet_asset_digest_mismatch", hashException.Code);
+        Assert.Empty(Directory.EnumerateDirectories(
+            hashFixture.StateRoot,
+            "fleet-*"));
     }
 
     [Fact]
@@ -478,6 +484,9 @@ public sealed class FleetInstallerHandoffTests
             () => signerFixture.CreateService(
                 verifier: new FixedVerifier(new string('b', 64))).InstallAsync());
         Assert.Equal("fleet_installer_signer_mismatch", signerException.Code);
+        Assert.Empty(Directory.EnumerateDirectories(
+            signerFixture.StateRoot,
+            "fleet-*"));
 
         using var planFixture = new SignedFixture();
         var wrongPlan = planFixture.Plan with { AssetSha256 = new string('0', 64) };
@@ -485,6 +494,9 @@ public sealed class FleetInstallerHandoffTests
             () => planFixture.CreateService(
                 runner: new RecordingInstallerRunner(wrongPlan)).InstallAsync());
         Assert.Equal("fleet_installer_plan_mismatch", planException.Code);
+        Assert.Empty(Directory.EnumerateDirectories(
+            planFixture.StateRoot,
+            "fleet-*"));
     }
 
     [Fact]
@@ -582,6 +594,36 @@ public sealed class FleetInstallerHandoffTests
         var replay = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().InstallAsync());
         Assert.Equal("fleet_descriptor_replay", replay.Code);
+    }
+
+    [Fact]
+    public async Task GuidedCancellationLeavesHighWaterUnchangedAndCleansPartialStage()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture(
+            version: "2.0.0",
+            descriptorId: "release-cancelled");
+        using var cancellation = new CancellationTokenSource();
+        var runner = new CancellationInstallerRunner(
+            fixture.Plan,
+            cancellation);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fixture.CreateService(
+                    runner: runner)
+                .InstallAsync(cancellation.Token));
+
+        Assert.True(runner.GuidedStarted);
+        Assert.Empty(Directory.EnumerateDirectories(
+            fixture.StateRoot,
+            "fleet-*"));
+        var status = await fixture.CreateService().GetStatusAsync();
+        Assert.Equal("ready", status.Status);
+        Assert.Null(status.HighestHandoffVersion);
+        Assert.Equal("guided_installer_failed", status.LastOutcome);
     }
 
     [Fact]
@@ -1425,6 +1467,31 @@ public sealed class FleetInstallerHandoffTests
             string executablePath,
             CancellationToken cancellationToken) =>
             throw new TimeoutException("fixture timeout");
+    }
+
+    private sealed class CancellationInstallerRunner(
+        FleetInstallerPlanReceipt plan,
+        CancellationTokenSource cancellation) :
+        IFleetInstallerProcessRunner
+    {
+        public bool GuidedStarted { get; private set; }
+
+        public Task<FleetInstallerPlanReceipt> RunPlanAsync(
+            string executablePath,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(plan);
+
+        public async Task<int> RunGuidedAsync(
+            string executablePath,
+            CancellationToken cancellationToken)
+        {
+            GuidedStarted = true;
+            cancellation.Cancel();
+            await Task.Delay(
+                Timeout.InfiniteTimeSpan,
+                cancellationToken);
+            return 0;
+        }
     }
 
     private sealed class CallbackInstallerRunner(

@@ -326,6 +326,75 @@ time. They never contain:
 successfully and private staging was cleaned. It is not a File Manager claim
 about device enrollment, Fleet service health, or any later Fleet operation.
 
+## Externally Staged Release Lifecycle Gate
+
+The bounded Windows lifecycle gate consumes two independently pinned,
+externally staged Fleet release directories. Each directory must contain these
+exact files:
+
+- `RustyFleet-Setup.exe`;
+- `RustyFleet-Setup.build-receipt.json`;
+- `release.json`;
+- `release-descriptor.receipt.json`;
+- `release-descriptor.spki.der`.
+
+The local input document has schema
+`questionable.file_manager.fleet_installer_lifecycle_input.v1`. It names the
+two retained release directories and a clean Fleet install root, identifies
+the run as `signed_synthetic` or `signed_release`, and supplies the channel
+plus independently reviewed descriptor-SPKI and Setup-certificate SHA-256
+pins. Paths are runner input only and never appear in its receipt. The runner
+does not derive either pin from the staged release receipts.
+
+```json
+{
+  "schema": "questionable.file_manager.fleet_installer_lifecycle_input.v1",
+  "artifact_kind": "signed_synthetic",
+  "release_a_root": "<path-to-retained-release-a>",
+  "release_b_root": "<path-to-retained-release-b>",
+  "install_root": "<new-temporary-lifecycle-root>",
+  "channel": "dev",
+  "trusted_descriptor_signer_spki_sha256": "<64-lowercase-hex>",
+  "trusted_installer_signer_certificate_sha256": "<64-lowercase-hex>",
+  "cleanup_fixture_install_root": true
+}
+```
+
+Run the gate with:
+
+```powershell
+pwsh -NoProfile -File `
+  ./tools/Test-FleetInstallerHandoffLifecycle.ps1 `
+  -InputPath <private-lifecycle-input.json> `
+  -QfmSetupExecutablePath `
+    ./artifacts/release/QuestIonAbleFileManager-Setup.exe
+```
+
+The lifecycle runner verifies the strict Fleet build and descriptor receipts,
+the exact RSA-PSS/JCS descriptor through Core, the external Setup
+Authenticode signer, hash, size, canonical GitHub Release URL, and
+`--plan --json` result. It then exercises release A installation, cancellation
+after an inert candidate is retained, recovery through a same-signer A-to-B
+update, side-by-side retention, QFM replay and downgrade rejection, Fleet's
+pointer rollback with exact retained-release readback, and cleanup of QFM
+staging. It also checks missing machine authority, wrong signer/hash/SPKI,
+stale metadata, and partial staging. A synthetic run may remove only a new
+`qfm-fleet-lifecycle-*` install root under the system temporary directory; a
+`signed_release` run cannot request that fixture cleanup.
+
+The path-free result uses schema
+`questionable.file_manager.fleet_installer_lifecycle_receipt.v1`. Supplying
+`-QfmSetupExecutablePath` additionally runs the exact built QFM Setup's
+release-configuration and replay-security proof, including rollback
+reconciliation/readback. The external A/B runner labels its replay authority
+as an isolated, non-authorizing test store; it does not claim that a synthetic
+run wrote protected HKLM state. The Setup security proof remains the evidence
+for that machine-authority implementation. The release build accepts
+`-FleetInstallerLifecycleInputPath` to make this gate part of the signed build
+transaction once the Fleet lane has staged its exact A/B inputs. The
+checked-in eight-field Fleet trust remains inert until the reviewed production
+values are committed.
+
 ## Offline Acceptance
 
 Core tests generate ephemeral RSA-signed descriptors and in-memory installer
@@ -367,7 +436,9 @@ includes:
 - receipt exclusion of source URLs and private paths;
 - installer-plan mismatch;
 - visible guided launch, retry after decline/timeout, descriptor consumption
-  only after success, process-tree termination, and private-stage cleanup;
+  only after success, explicit cancellation with unchanged high-water state,
+  process-tree termination, partial-stage rejection, and private-stage
+  cleanup;
 - workspace reparse rejection.
 
 These tests verify the distribution boundary only. They do not replace Fleet's
