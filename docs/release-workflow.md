@@ -189,17 +189,33 @@ QuestIonAbleFileManager-Setup.exe --plan --json
 certificate or installing a package. Actual guided installation requests UAC;
 the elevation is part of the public installer contract.
 
-The signed helper alone also owns explicit Fleet replay-lifecycle repair:
+Signed Setup owns non-destructive Fleet replay-file repair:
 
 ```powershell
 QuestIonAbleFileManager-Setup.exe --repair-fleet-replay-protection --json
 ```
 
-Normal install provisions or preserves replay protection but refuses a reset.
-The repair option validates paired replay files, refuses partial evidence, and
-records its sanitized preserve/repair/reset action in the Setup result.
-Setup also installs its exact same-signed replay-authority copy under the fixed
-Program Files product directory. Runtime requests never carry a path or secret;
+This route repairs local files only from the protected HKLM authority. It
+preserves the root digest, accepted descriptor IDs, monotonic high-water
+version, and any valid local outcome; partial or forged local evidence is
+refused. A valid local pair is not authority for recreating a missing HKLM
+record. Discarding replay history therefore requires the separately named,
+mutually exclusive command:
+
+```powershell
+QuestIonAbleFileManager-Setup.exe --destructive-reset-fleet-replay-protection --json
+```
+
+Normal install provisions or preserves replay protection but refuses to infer
+a reset. The Setup result records a sanitized provision, preserve, repair, or
+destructive-reset action. Setup also installs its replay-authority copy under
+the fixed Program Files product directory. A later helper is an ordinary
+atomic update only when both the retained installed artifact and staged new
+artifact match the reviewed signer pin; Setup re-hashes retained staged bytes
+after path-based Authenticode validation, and failed committed validation
+restores the prior helper without changing replay state. Signer changes fail
+until a separately reviewed rotation mechanism exists. Runtime requests never
+carry a path or secret;
 the elevated helper re-fetches and verifies the current signed Fleet descriptor
 before it advances the protected HKLM high-water mark. Its protected
 SYSTEM/Administrators-only machine mutex serializes descriptor refetch through
@@ -208,6 +224,10 @@ recovery. Elevated staging uses a new unpredictable directory under the
 protected Program Files product root and rejects reparse components. Quiet
 success reports only the App Installer source kind and staged-content SHA-256;
 quiet failure is a bounded code/HRESULT result. Neither exposes a local path.
+The release gate executes a signed-synthetic A-to-B same-signer lifecycle proof
+covering retained substitution attempts, nonempty state preservation,
+different-signer rejection, missing-machine repair refusal, forged/partial
+local evidence, and post-update equal-version/downgrade rejection.
 
 ## GitHub Configuration
 

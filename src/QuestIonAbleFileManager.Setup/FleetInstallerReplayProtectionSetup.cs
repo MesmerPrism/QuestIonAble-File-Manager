@@ -16,6 +16,37 @@ internal sealed record FleetReplayProtectionSetupResult(
     string Action,
     string? StateRootSha256);
 
+internal enum ProtectedHelperInstallAction
+{
+    Installed,
+    Preserved,
+    UpgradedSameSigner
+}
+
+internal interface ISetupArtifactVerifier
+{
+    string VerifySignerCertificateSha256(string path);
+}
+
+internal sealed class AuthenticodeSetupArtifactVerifier :
+    ISetupArtifactVerifier
+{
+    public static AuthenticodeSetupArtifactVerifier Instance { get; } =
+        new();
+
+    public string VerifySignerCertificateSha256(string path)
+    {
+        SetupAuthenticode.Verify(path);
+#pragma warning disable SYSLIB0057
+        using var signer = new X509Certificate2(
+            X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0057
+        return Convert.ToHexString(
+                SHA256.HashData(signer.RawData))
+            .ToLowerInvariant();
+    }
+}
+
 internal static class FleetInstallerReleaseProof
 {
     private const string MetadataPrefix =
@@ -90,7 +121,9 @@ internal static class FleetInstallerReplayProtectionSetup
     private const int MaximumStateBytes = 1024 * 1024;
 
     public static FleetReplayProtectionSetupResult
-        ProvisionOrRepairEmbeddedRelease(bool allowRepair)
+        ProvisionOrRepairEmbeddedRelease(
+            bool allowRepair,
+            bool destructiveReset)
     {
         var settings = FleetInstallerSettings.FromEmbeddedRelease();
         if (settings is null)
@@ -111,7 +144,6 @@ internal static class FleetInstallerReplayProtectionSetup
                     "The reviewed QFM Setup signer pin is missing.");
             }
             VerifyOwnAuthenticode(setupSignerPin);
-            InstallProtectedHelper(setupSignerPin, allowRepair);
             var root = Path.TrimEndingDirectorySeparator(
                 Path.GetFullPath(settings.PrivateStageRoot));
             var digest = StateRootDigest(root);
@@ -119,42 +151,70 @@ internal static class FleetInstallerReplayProtectionSetup
             var anchorPath = root + AnchorSuffix;
             using var machineLock =
                 FleetReplayMachineLock.Acquire(digest);
+            var helperAction =
+                InstallProtectedHelper(setupSignerPin);
             var stateExists = File.Exists(statePath);
             var anchorExists = File.Exists(anchorPath);
             var machineRecord = ReadMachineRecord(digest);
-            if (stateExists != anchorExists)
+            if (destructiveReset)
             {
-                throw new InvalidOperationException(
-                    "Fleet replay repair stopped because only one replay-state file remains.");
+                var empty = FleetInstallerProtectedState.Empty(digest);
+                WriteReplayFiles(root, digest, empty, lastOutcome: null);
+                WriteMachineRecord(empty);
+                return new FleetReplayProtectionSetupResult(
+                    "destructive_reset",
+                    digest);
             }
+            ValidateReplayEvidenceShape(stateExists, anchorExists);
 
             if (stateExists)
             {
-                ValidateExistingReplayFiles(statePath, anchorPath, digest);
+                var localState = ValidateExistingReplayFiles(
+                    statePath,
+                    anchorPath,
+                    digest);
                 if (machineRecord is not null)
                 {
+                    if (!LocalReplayMatchesMachine(
+                            localState,
+                            machineRecord))
+                    {
+                        RequireExplicitRepair(allowRepair);
+                        RepairLocalReplayFilesFromMachine(
+                            root,
+                            digest,
+                            machineRecord,
+                            localState);
+                        return new FleetReplayProtectionSetupResult(
+                            "repaired_local_state_from_machine_authority",
+                            digest);
+                    }
                     return new FleetReplayProtectionSetupResult(
                         "preserved_initialized",
                         digest);
                 }
 
-                RequireExplicitRepair(allowRepair);
-                WriteMachineRecord(
-                    FleetInstallerProtectedState.Empty(digest));
-                return new FleetReplayProtectionSetupResult(
-                    "repaired_missing_machine_record",
-                    digest);
+                _ = RequireProtectedAuthorityForRepair(machineRecord);
             }
 
             if (machineRecord is not null)
             {
                 RequireExplicitRepair(allowRepair);
-                WriteInitialReplayFiles(root, digest);
+                RepairLocalReplayFilesFromMachine(
+                    root,
+                    digest,
+                    machineRecord,
+                    localState: null);
                 return new FleetReplayProtectionSetupResult(
-                    "lifecycle_reset_with_machine_record_preserved",
+                    "repaired_local_files_from_machine_authority",
                     digest);
             }
 
+            if (helperAction != ProtectedHelperInstallAction.Installed)
+            {
+                throw new InvalidOperationException(
+                    "Fleet replay authority is missing from an existing installation. Use --destructive-reset-fleet-replay-protection only to explicitly discard replay history.");
+            }
             WriteInitialReplayFiles(root, digest);
             WriteMachineRecord(FleetInstallerProtectedState.Empty(digest));
             return new FleetReplayProtectionSetupResult(
@@ -189,6 +249,7 @@ internal static class FleetInstallerReplayProtectionSetup
             }
         }
         RunConcurrencySelfTest();
+        RunReleaseArtifactLifecycleSelfTest();
         try
         {
             RequireAdministrator(administrator: false);
@@ -214,6 +275,30 @@ internal static class FleetInstallerReplayProtectionSetup
         {
         }
         RequireExplicitRepair(allowRepair: true);
+        try
+        {
+            _ = InstallerOptions.Parse(
+            [
+                "--repair-fleet-replay-protection",
+                "--destructive-reset-fleet-replay-protection"
+            ]);
+            throw new InvalidOperationException(
+                "Conflicting replay lifecycle options were accepted.");
+        }
+        catch (ArgumentException exception) when (
+            exception.Message.Contains(
+                "mutually exclusive",
+                StringComparison.Ordinal))
+        {
+        }
+        if (!InstallerOptions.Parse(
+            [
+                "--destructive-reset-fleet-replay-protection"
+            ]).DestructiveResetFleetReplayProtection)
+        {
+            throw new InvalidOperationException(
+                "The explicit destructive reset option was not recognized.");
+        }
         if (FixedLowerHexEquals(
                 new string('a', 64),
                 new string('b', 64)))
@@ -265,6 +350,11 @@ internal static class FleetInstallerReplayProtectionSetup
             unelevated_writer = "rejected",
             signer_mismatch = "rejected",
             explicit_repair = "required",
+            release_artifact_upgrade =
+                "synthetic_same_signer_state_preserving",
+            missing_machine_repair = "fail_closed",
+            destructive_reset = "explicit_only",
+            forged_partial_evidence = "rejected",
             result_local_paths = "absent"
         }));
         return 0;
@@ -505,6 +595,376 @@ internal static class FleetInstallerReplayProtectionSetup
         }
     }
 
+    private static void RunReleaseArtifactLifecycleSelfTest()
+    {
+        using var staging = SetupStagingDirectory.Create(
+            "ReplayArtifactSelfTest",
+            protectedMachineStaging: false);
+        var sourceA = Path.Combine(staging.Path, "setup-a.exe");
+        var sourceB = Path.Combine(staging.Path, "setup-b.exe");
+        var sourceOtherSigner = Path.Combine(
+            staging.Path,
+            "setup-other-signer.exe");
+        var destination = Path.Combine(
+            staging.Path,
+            "replay-authority.exe");
+        var bytesA = Encoding.UTF8.GetBytes(
+            "synthetic signed setup release A");
+        var bytesB = Encoding.UTF8.GetBytes(
+            "synthetic signed setup release B");
+        var bytesOtherSigner = Encoding.UTF8.GetBytes(
+            "synthetic signed setup with another signer");
+        File.WriteAllBytes(sourceA, bytesA);
+        File.WriteAllBytes(sourceB, bytesB);
+        File.WriteAllBytes(sourceOtherSigner, bytesOtherSigner);
+        var signerPin = new string('a', 64);
+        var otherSignerPin = new string('b', 64);
+        var signerByHash = new Dictionary<string, string>(
+            StringComparer.Ordinal)
+        {
+            [BytesSha256(bytesA)] = signerPin,
+            [BytesSha256(bytesB)] = signerPin,
+            [BytesSha256(bytesOtherSigner)] = otherSignerPin
+        };
+        var verifier = new SyntheticSetupArtifactVerifier(
+            signerByHash,
+            attemptMutation: false);
+        if (InstallProtectedHelperCore(
+                sourceA,
+                destination,
+                signerPin,
+                verifier) !=
+            ProtectedHelperInstallAction.Installed)
+        {
+            throw new InvalidOperationException(
+                "The synthetic release-A helper was not installed.");
+        }
+
+        var replayRoot = Path.Combine(staging.Path, "replay");
+        var replayDigest = StateRootDigest(replayRoot);
+        var protectedState =
+            FleetInstallerProtectedState.Empty(replayDigest) with
+            {
+                HighestHandoffVersion = "2.0.0",
+                AcceptedDescriptorIds = ["release-2"]
+            };
+        WriteReplayFiles(
+            replayRoot,
+            replayDigest,
+            protectedState,
+            "guided_installer_completed");
+        var statePath = Path.Combine(replayRoot, StateFileName);
+        var anchorPath = replayRoot + AnchorSuffix;
+        var stateBeforeUpgrade = File.ReadAllBytes(statePath);
+        var anchorBeforeUpgrade = File.ReadAllBytes(anchorPath);
+
+        var mutationVerifier = new SyntheticSetupArtifactVerifier(
+            signerByHash,
+            attemptMutation: true);
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceB,
+                destination,
+                signerPin,
+                mutationVerifier);
+            throw new InvalidOperationException(
+                "A staged helper mutation was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "changed during signature validation",
+                StringComparison.Ordinal))
+        {
+        }
+        if (mutationVerifier.MutationAttempts < 3 ||
+            mutationVerifier.PermittedMutationAttempts != 1 ||
+            mutationVerifier.RejectedMutationAttempts !=
+                mutationVerifier.MutationAttempts - 1 ||
+            !File.ReadAllBytes(destination).SequenceEqual(bytesA))
+        {
+            throw new InvalidOperationException(
+                "The synthetic substitution attempt was not contained before replacement.");
+        }
+        if (InstallProtectedHelperCore(
+                sourceB,
+                destination,
+                signerPin,
+                verifier) !=
+            ProtectedHelperInstallAction.UpgradedSameSigner)
+        {
+            throw new InvalidOperationException(
+                "The synthetic same-signer helper upgrade was not committed.");
+        }
+        if (!File.ReadAllBytes(destination).SequenceEqual(bytesB) ||
+            !File.ReadAllBytes(statePath).SequenceEqual(
+                stateBeforeUpgrade) ||
+            !File.ReadAllBytes(anchorPath).SequenceEqual(
+                anchorBeforeUpgrade))
+        {
+            throw new InvalidOperationException(
+                "The same-signer helper upgrade changed replay state or committed the wrong artifact.");
+        }
+        if (InstallProtectedHelperCore(
+                sourceB,
+                destination,
+                signerPin,
+                verifier) !=
+            ProtectedHelperInstallAction.Preserved)
+        {
+            throw new InvalidOperationException(
+                "The identical synthetic helper was not preserved.");
+        }
+
+        WriteReplayFiles(
+            replayRoot,
+            replayDigest,
+            FleetInstallerProtectedState.Empty(replayDigest),
+            "guided_installer_completed");
+        var mutableLocal = ValidateExistingReplayFiles(
+            statePath,
+            anchorPath,
+            replayDigest);
+        RepairLocalReplayFilesFromMachine(
+            replayRoot,
+            replayDigest,
+            protectedState,
+            mutableLocal);
+        var repaired = ValidateExistingReplayFiles(
+            statePath,
+            anchorPath,
+            replayDigest);
+        if (!LocalReplayMatchesMachine(
+                repaired,
+                protectedState) ||
+            repaired.LastOutcome !=
+                "guided_installer_completed")
+        {
+            throw new InvalidOperationException(
+                "Protected nonempty replay evidence was not preserved during repair reconstruction.");
+        }
+        try
+        {
+            _ = RequireProtectedAuthorityForRepair(
+                machineRecord: null);
+            throw new InvalidOperationException(
+                "Mutable local replay evidence reconstructed missing machine authority.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "--destructive-reset-fleet-replay-protection",
+                StringComparison.Ordinal))
+        {
+        }
+        try
+        {
+            ValidateReplayEvidenceShape(
+                stateExists: true,
+                anchorExists: false);
+            throw new InvalidOperationException(
+                "Partial replay evidence was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "only one replay-state file",
+                StringComparison.Ordinal))
+        {
+        }
+        WriteThrough(
+            anchorPath,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schema = FleetInstallerContract.StateAnchorSchema,
+                state_root_sha256 = new string('c', 64)
+            }));
+        try
+        {
+            _ = ValidateExistingReplayFiles(
+                statePath,
+                anchorPath,
+                replayDigest);
+            throw new InvalidOperationException(
+                "A forged replay anchor was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "durable replay anchor is invalid",
+                StringComparison.Ordinal))
+        {
+        }
+        WriteReplayFiles(
+            replayRoot,
+            replayDigest,
+            protectedState,
+            "guided_installer_completed");
+
+        AssertReplayTransitionRejected(
+            protectedState,
+            "release-downgrade",
+            "1.9.9");
+        AssertReplayTransitionRejected(
+            protectedState,
+            "release-same-version",
+            "2.0.0");
+        var advanced = AdvanceProtectedState(
+            protectedState,
+            "release-3",
+            "3.0.0");
+        if (advanced.HighestHandoffVersion != "3.0.0" ||
+            !advanced.AcceptedDescriptorIds.SequenceEqual(
+                ["release-2", "release-3"],
+                StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The protected replay transition did not preserve history.");
+        }
+
+        var rejectCommittedVerifier =
+            new RejectCommittedSetupArtifactVerifier(
+                verifier,
+                destination);
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceA,
+                destination,
+                signerPin,
+                rejectCommittedVerifier);
+            throw new InvalidOperationException(
+                "A failed committed helper readback was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "previous helper was restored",
+                StringComparison.Ordinal))
+        {
+        }
+        if (!File.ReadAllBytes(destination).SequenceEqual(bytesB))
+        {
+            throw new InvalidOperationException(
+                "Failed helper readback did not restore release B.");
+        }
+
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceOtherSigner,
+                destination,
+                signerPin,
+                verifier);
+            throw new InvalidOperationException(
+                "A helper signed by another synthetic signer was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "reviewed release signer pin",
+                StringComparison.Ordinal))
+        {
+        }
+        if (!File.ReadAllBytes(destination).SequenceEqual(bytesB))
+        {
+            throw new InvalidOperationException(
+                "A rejected signer change modified the installed helper.");
+        }
+    }
+
+    private sealed class RejectCommittedSetupArtifactVerifier(
+        ISetupArtifactVerifier inner,
+        string destination) : ISetupArtifactVerifier
+    {
+        private int _destinationVerificationCount;
+
+        public string VerifySignerCertificateSha256(string path)
+        {
+            if (string.Equals(
+                    Path.GetFullPath(path),
+                    Path.GetFullPath(destination),
+                    StringComparison.OrdinalIgnoreCase) &&
+                ++_destinationVerificationCount == 2)
+            {
+                throw new InvalidOperationException(
+                    "Synthetic committed-helper verification failed.");
+            }
+            return inner.VerifySignerCertificateSha256(path);
+        }
+    }
+
+    private static void AssertReplayTransitionRejected(
+        FleetInstallerProtectedState state,
+        string descriptorId,
+        string version)
+    {
+        try
+        {
+            _ = AdvanceProtectedState(
+                state,
+                descriptorId,
+                version);
+            throw new InvalidOperationException(
+                "A non-advancing replay transition was accepted.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains(
+                "high-water mark",
+                StringComparison.Ordinal))
+        {
+        }
+    }
+
+    private static string BytesSha256(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes))
+            .ToLowerInvariant();
+
+    private sealed class SyntheticSetupArtifactVerifier(
+        IReadOnlyDictionary<string, string> signerByHash,
+        bool attemptMutation) : ISetupArtifactVerifier
+    {
+        public int MutationAttempts { get; private set; }
+
+        public int RejectedMutationAttempts { get; private set; }
+
+        public int PermittedMutationAttempts { get; private set; }
+
+        public string VerifySignerCertificateSha256(string path)
+        {
+            using var input = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            var bytes = new byte[checked((int)input.Length)];
+            input.ReadExactly(bytes);
+            var digest = BytesSha256(bytes);
+            if (attemptMutation)
+            {
+                MutationAttempts++;
+                var mutationRejected = false;
+                try
+                {
+                    File.WriteAllBytes(
+                        path,
+                        Encoding.UTF8.GetBytes(
+                            "synthetic substitution"));
+                }
+                catch (IOException)
+                {
+                    RejectedMutationAttempts++;
+                    mutationRejected = true;
+                }
+                if (!mutationRejected)
+                {
+                    PermittedMutationAttempts++;
+                }
+            }
+            return signerByHash.TryGetValue(
+                    digest,
+                    out var signer)
+                ? signer
+                : throw new InvalidOperationException(
+                    "The synthetic helper signature is unknown.");
+        }
+    }
+
     private static string NewLockTestState(ICollection<string> tokens)
     {
         return NewLockTestToken(tokens, createState: true);
@@ -661,29 +1121,10 @@ internal static class FleetInstallerReplayProtectionSetup
             var current = ReadMachineRecord(stateRootSha256) ??
                 throw new InvalidOperationException(
                     "The protected Fleet replay machine record is missing.");
-            if (current.AcceptedDescriptorIds.Contains(
-                    descriptorId,
-                    StringComparer.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    "The signed Fleet release descriptor was already accepted.");
-            }
-            if (current.HighestHandoffVersion is not null &&
-                Version.Parse(version) <=
-                Version.Parse(current.HighestHandoffVersion))
-            {
-                throw new InvalidOperationException(
-                    "The signed Fleet release does not advance the protected replay high-water mark.");
-            }
-            var accepted = current.AcceptedDescriptorIds
-                .Append(descriptorId)
-                .TakeLast(256)
-                .ToArray();
-            var expected = current with
-            {
-                HighestHandoffVersion = version,
-                AcceptedDescriptorIds = accepted
-            };
+            var expected = AdvanceProtectedState(
+                current,
+                descriptorId,
+                version);
             WriteMachineRecord(expected);
             var committed = ReadMachineRecord(stateRootSha256) ??
                 throw new InvalidOperationException(
@@ -718,7 +1159,62 @@ internal static class FleetInstallerReplayProtectionSetup
         }
     }
 
-    private static void ValidateExistingReplayFiles(
+    private static void ValidateReplayEvidenceShape(
+        bool stateExists,
+        bool anchorExists)
+    {
+        if (stateExists != anchorExists)
+        {
+            throw new InvalidOperationException(
+                "Fleet replay repair stopped because only one replay-state file remains.");
+        }
+    }
+
+    private static FleetInstallerProtectedState
+        RequireProtectedAuthorityForRepair(
+            FleetInstallerProtectedState? machineRecord) =>
+        machineRecord ??
+        throw new InvalidOperationException(
+            "Fleet replay repair cannot reconstruct missing protected machine authority from mutable local files. Use --destructive-reset-fleet-replay-protection only to explicitly discard replay history.");
+
+    private static FleetInstallerProtectedState AdvanceProtectedState(
+        FleetInstallerProtectedState current,
+        string descriptorId,
+        string version)
+    {
+        if (!FleetInstallerValidation.IsIdentifier(
+                descriptorId,
+                128) ||
+            !FleetInstallerValidation.IsThreePartVersion(version))
+        {
+            throw new InvalidOperationException(
+                "The signed Fleet release transition is invalid.");
+        }
+        if (current.AcceptedDescriptorIds.Contains(
+                descriptorId,
+                StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The signed Fleet release descriptor was already accepted.");
+        }
+        if (current.HighestHandoffVersion is not null &&
+            Version.Parse(version) <=
+            Version.Parse(current.HighestHandoffVersion))
+        {
+            throw new InvalidOperationException(
+                "The signed Fleet release does not advance the protected replay high-water mark.");
+        }
+        return current with
+        {
+            HighestHandoffVersion = version,
+            AcceptedDescriptorIds = current.AcceptedDescriptorIds
+                .Append(descriptorId)
+                .TakeLast(256)
+                .ToArray()
+        };
+    }
+
+    private static FleetInstallerState ValidateExistingReplayFiles(
         string statePath,
         string anchorPath,
         string digest)
@@ -797,6 +1293,13 @@ internal static class FleetInstallerReplayProtectionSetup
             throw new InvalidOperationException(
                 "Fleet replay repair stopped because the durable replay anchor is invalid.");
         }
+        return new FleetInstallerState(
+            FleetInstallerContract.StateSchema,
+            ReadOptionalString(
+                stateRoot,
+                "highest_handoff_version"),
+            acceptedIdValues,
+            ReadOptionalString(stateRoot, "last_outcome"));
     }
 
     private static JsonDocument ReadJsonDocument(
@@ -892,9 +1395,27 @@ internal static class FleetInstallerReplayProtectionSetup
         {
             return true;
         }
-        return value.ValueKind == JsonValueKind.String &&
+        return value.ValueKind == JsonValueKind.Null ||
+               value.ValueKind == JsonValueKind.String &&
                predicate(value.GetString()!);
     }
+
+    private static string? ReadOptionalString(
+        JsonElement element,
+        string name) =>
+        element.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static bool LocalReplayMatchesMachine(
+        FleetInstallerState localState,
+        FleetInstallerProtectedState machineRecord) =>
+        localState.HighestHandoffVersion ==
+            machineRecord.HighestHandoffVersion &&
+        localState.AcceptedDescriptorIds.SequenceEqual(
+            machineRecord.AcceptedDescriptorIds,
+            StringComparer.Ordinal);
 
     private static FleetInstallerProtectedState? ReadMachineRecord(
         string digest)
@@ -1003,9 +1524,8 @@ internal static class FleetInstallerReplayProtectionSetup
         ValidateMachineAcl(key);
     }
 
-    private static void InstallProtectedHelper(
-        string signerPin,
-        bool allowRepair)
+    private static ProtectedHelperInstallAction InstallProtectedHelper(
+        string signerPin)
     {
         RequireAdministrator(IsAdministrator());
         var source = Environment.ProcessPath ??
@@ -1022,37 +1542,254 @@ internal static class FleetInstallerReplayProtectionSetup
                 "The Fleet replay authority directory must not be a reparse point.");
         }
         var destination = Path.Combine(directory, HelperFileName);
+        return InstallProtectedHelperCore(
+            source,
+            destination,
+            signerPin,
+            AuthenticodeSetupArtifactVerifier.Instance);
+    }
+
+    internal static ProtectedHelperInstallAction
+        InstallProtectedHelperCore(
+            string source,
+            string destination,
+            string signerPin,
+            ISetupArtifactVerifier verifier)
+    {
+        EnsureDigest(signerPin);
+        ArgumentNullException.ThrowIfNull(verifier);
+        var sourcePath = Path.GetFullPath(source);
+        var destinationPath = Path.GetFullPath(destination);
+        using var retainedSource =
+            FleetWindowsFileSafety.OpenRetainedStagedReadOnlyFile(
+                sourcePath);
+        FleetWindowsFileSafety.ValidateFile(
+            retainedSource.SafeFileHandle,
+            sourcePath,
+            requireSingleLink: true);
+        var sourceIdentity = FleetWindowsFileSafety.GetIdentity(
+            retainedSource.SafeFileHandle);
+        var sourceHash = FileSha256(retainedSource);
+        RequireSignerPin(
+            verifier.VerifySignerCertificateSha256(sourcePath),
+            signerPin);
+        FleetWindowsFileSafety.ValidateFile(
+            retainedSource.SafeFileHandle,
+            sourcePath,
+            requireSingleLink: true);
+        if (FleetWindowsFileSafety.GetIdentity(
+                retainedSource.SafeFileHandle) != sourceIdentity)
+        {
+            throw new InvalidOperationException(
+                "The signed Setup source identity changed during helper validation.");
+        }
         if (string.Equals(
-                Path.GetFullPath(source),
-                Path.GetFullPath(destination),
+                sourcePath,
+                destinationPath,
                 StringComparison.OrdinalIgnoreCase))
         {
-            return;
+            return ProtectedHelperInstallAction.Preserved;
         }
-        if (File.Exists(destination))
+
+        var destinationExisted = File.Exists(destinationPath);
+        if (destinationExisted)
         {
-            VerifyExecutableAuthenticode(destination, signerPin);
-            if (FixedLowerHexEquals(
-                    FileSha256(source),
-                    FileSha256(destination)))
+            using var retainedDestination =
+                FleetWindowsFileSafety.OpenRetainedStagedReadOnlyFile(
+                    destinationPath);
+            FleetWindowsFileSafety.ValidateFile(
+                retainedDestination.SafeFileHandle,
+                destinationPath,
+                requireSingleLink: true);
+            var destinationIdentity = FleetWindowsFileSafety.GetIdentity(
+                retainedDestination.SafeFileHandle);
+            var destinationHash = FileSha256(retainedDestination);
+            RequireSignerPin(
+                verifier.VerifySignerCertificateSha256(
+                    destinationPath),
+                signerPin);
+            FleetWindowsFileSafety.ValidateFile(
+                retainedDestination.SafeFileHandle,
+                destinationPath,
+                requireSingleLink: true);
+            if (FleetWindowsFileSafety.GetIdentity(
+                    retainedDestination.SafeFileHandle) !=
+                destinationIdentity)
             {
-                return;
+                throw new InvalidOperationException(
+                    "The installed replay helper identity changed during validation.");
             }
-            RequireExplicitRepair(allowRepair);
+            if (FixedLowerHexEquals(sourceHash, destinationHash))
+            {
+                return ProtectedHelperInstallAction.Preserved;
+            }
         }
-        var temporary = destination + "." +
+
+        var temporary = destinationPath + "." +
             Guid.NewGuid().ToString("N") + ".tmp";
+        var backup = destinationPath + "." +
+            Guid.NewGuid().ToString("N") + ".backup";
+        FleetWindowsFileIdentity temporaryIdentity;
+        var preserveBackup = false;
+        var replacementCommitted = false;
         try
         {
-            File.Copy(source, temporary, overwrite: false);
-            VerifyExecutableAuthenticode(temporary, signerPin);
-            File.Move(temporary, destination, overwrite: true);
-            VerifyExecutableAuthenticode(destination, signerPin);
+            using (var retainedTemporary =
+                   FleetWindowsFileSafety
+                       .CreateNewRetainedReadableFile(temporary))
+            {
+                retainedSource.Position = 0;
+                retainedSource.CopyTo(retainedTemporary);
+                retainedTemporary.Flush(flushToDisk: true);
+                FleetWindowsFileSafety.ValidateFile(
+                    retainedTemporary.SafeFileHandle,
+                    temporary,
+                    requireSingleLink: true);
+                temporaryIdentity = FleetWindowsFileSafety.GetIdentity(
+                    retainedTemporary.SafeFileHandle);
+                if (!FixedLowerHexEquals(
+                        sourceHash,
+                        FileSha256(retainedTemporary)))
+                {
+                    throw new InvalidOperationException(
+                        "The staged replay helper differs from the signed Setup source.");
+                }
+            }
+            using (var retainedValidatedTemporary =
+                   FleetWindowsFileSafety
+                       .OpenAuthenticodeCompatibleReadOnlyFile(
+                           temporary))
+            {
+                FleetWindowsFileSafety.ValidateFile(
+                    retainedValidatedTemporary.SafeFileHandle,
+                    temporary,
+                    requireSingleLink: true);
+                if (FleetWindowsFileSafety.GetIdentity(
+                        retainedValidatedTemporary.SafeFileHandle) !=
+                    temporaryIdentity ||
+                    !FixedLowerHexEquals(
+                        sourceHash,
+                        FileSha256(retainedValidatedTemporary)))
+                {
+                    throw new InvalidOperationException(
+                        "The staged replay helper changed before signature validation.");
+                }
+                RequireSignerPin(
+                    verifier.VerifySignerCertificateSha256(temporary),
+                    signerPin);
+                FleetWindowsFileSafety.ValidateFile(
+                    retainedValidatedTemporary.SafeFileHandle,
+                    temporary,
+                    requireSingleLink: true);
+                if (FleetWindowsFileSafety.GetIdentity(
+                        retainedValidatedTemporary.SafeFileHandle) !=
+                    temporaryIdentity ||
+                    !FixedLowerHexEquals(
+                        sourceHash,
+                        FileSha256(retainedValidatedTemporary)))
+                {
+                    throw new InvalidOperationException(
+                        "The staged replay helper changed during signature validation.");
+                }
+            }
+            try
+            {
+                if (destinationExisted)
+                {
+                    File.Replace(
+                        temporary,
+                        destinationPath,
+                        backup,
+                        ignoreMetadataErrors: false);
+                }
+                else
+                {
+                    File.Move(
+                        temporary,
+                        destinationPath,
+                        overwrite: false);
+                }
+                replacementCommitted = true;
+                using var committed =
+                    FleetWindowsFileSafety
+                        .OpenRetainedStagedReadOnlyFile(
+                            destinationPath);
+                FleetWindowsFileSafety.ValidateFile(
+                    committed.SafeFileHandle,
+                    destinationPath,
+                    requireSingleLink: true);
+                if (FleetWindowsFileSafety.GetIdentity(
+                        committed.SafeFileHandle) !=
+                    temporaryIdentity ||
+                    !FixedLowerHexEquals(
+                        sourceHash,
+                        FileSha256(committed)))
+                {
+                    throw new InvalidOperationException(
+                        "The committed replay helper differs from the retained validated artifact.");
+                }
+                RequireSignerPin(
+                    verifier.VerifySignerCertificateSha256(
+                        destinationPath),
+                    signerPin);
+                FleetWindowsFileSafety.ValidateFile(
+                    committed.SafeFileHandle,
+                    destinationPath,
+                    requireSingleLink: true);
+                if (FleetWindowsFileSafety.GetIdentity(
+                        committed.SafeFileHandle) !=
+                    temporaryIdentity)
+                {
+                    throw new InvalidOperationException(
+                        "The committed replay helper identity changed during validation.");
+                }
+            }
+            catch (Exception validationException)
+            {
+                if (!replacementCommitted)
+                {
+                    throw;
+                }
+                try
+                {
+                    if (destinationExisted)
+                    {
+                        File.Replace(
+                            backup,
+                            destinationPath,
+                            destinationBackupFileName: null,
+                            ignoreMetadataErrors: false);
+                    }
+                    else
+                    {
+                        File.Delete(destinationPath);
+                    }
+                }
+                catch (Exception rollbackException)
+                {
+                    preserveBackup = destinationExisted &&
+                        File.Exists(backup);
+                    throw new AggregateException(
+                        "The committed replay helper failed validation and rollback also failed.",
+                        validationException,
+                        rollbackException);
+                }
+                throw new InvalidOperationException(
+                    "The committed replay helper failed validation and the previous helper was restored.",
+                    validationException);
+            }
         }
         finally
         {
             File.Delete(temporary);
+            if (!preserveBackup)
+            {
+                File.Delete(backup);
+            }
         }
+        return destinationExisted
+            ? ProtectedHelperInstallAction.UpgradedSameSigner
+            : ProtectedHelperInstallAction.Installed;
     }
 
     private static RegistrySecurity CreateMachineAcl()
@@ -1129,6 +1866,41 @@ internal static class FleetInstallerReplayProtectionSetup
 
     private static void WriteInitialReplayFiles(string root, string digest)
     {
+        WriteReplayFiles(
+            root,
+            digest,
+            FleetInstallerProtectedState.Empty(digest),
+            lastOutcome: null);
+    }
+
+    private static void RepairLocalReplayFilesFromMachine(
+        string root,
+        string digest,
+        FleetInstallerProtectedState protectedState,
+        FleetInstallerState? localState)
+    {
+        WriteReplayFiles(
+            root,
+            digest,
+            protectedState,
+            localState?.LastOutcome);
+    }
+
+    private static void WriteReplayFiles(
+        string root,
+        string digest,
+        FleetInstallerProtectedState protectedState,
+        string? lastOutcome)
+    {
+        if (!FixedLowerHexEquals(
+                protectedState.StateRootSha256,
+                digest) ||
+            protectedState.Schema !=
+                WindowsFleetInstallerInitializationStore.Schema ||
+            protectedState.Status != "initialized")
+        {
+            throw MachineRecordInvalid();
+        }
         Directory.CreateDirectory(root);
         if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
         {
@@ -1138,9 +1910,11 @@ internal static class FleetInstallerReplayProtectionSetup
         var state = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schema = FleetInstallerContract.StateSchema,
-            highest_handoff_version = (string?)null,
-            accepted_descriptor_ids = Array.Empty<string>(),
-            last_outcome = (string?)null
+            highest_handoff_version =
+                protectedState.HighestHandoffVersion,
+            accepted_descriptor_ids =
+                protectedState.AcceptedDescriptorIds,
+            last_outcome = lastOutcome
         });
         var anchor = JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -1190,26 +1964,31 @@ internal static class FleetInstallerReplayProtectionSetup
         string expectedSignerSha256)
     {
         EnsureDigest(expectedSignerSha256);
-        SetupAuthenticode.Verify(path);
-#pragma warning disable SYSLIB0057
-        using var signer = new X509Certificate2(
-            X509Certificate.CreateFromSignedFile(path));
-#pragma warning restore SYSLIB0057
-        var actual = Convert.ToHexString(
-                SHA256.HashData(signer.RawData))
-            .ToLowerInvariant();
-        if (!CryptographicOperations.FixedTimeEquals(
-                Encoding.ASCII.GetBytes(actual),
-                Encoding.ASCII.GetBytes(expectedSignerSha256)))
+        RequireSignerPin(
+            AuthenticodeSetupArtifactVerifier.Instance
+                .VerifySignerCertificateSha256(path),
+            expectedSignerSha256);
+    }
+
+    private static void RequireSignerPin(
+        string actual,
+        string expected)
+    {
+        if (!FixedLowerHexEquals(actual, expected))
         {
             throw new InvalidOperationException(
                 "Signed Setup does not match its reviewed release signer pin.");
         }
     }
 
-    private static string FileSha256(string path) =>
-        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
+    private static string FileSha256(FileStream input)
+    {
+        input.Position = 0;
+        var digest = Convert.ToHexString(SHA256.HashData(input))
             .ToLowerInvariant();
+        input.Position = 0;
+        return digest;
+    }
 
     private static bool FixedLowerHexEquals(
         string left,

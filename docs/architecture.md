@@ -173,11 +173,17 @@ self-pin-verifying Setup copy, which re-verifies the current signed descriptor
 before a monotonic update. Descriptor fetch through exact durable readback is
 one machine-wide transaction under a protected SYSTEM/Administrators-only
 mutex shared with provisioning/repair; abandoned-lock recovery re-reads state
-before deciding. Elevated installer inputs use unpredictable protected
-Program Files staging with reparse rejection and per-run cleanup.
-Missing/coordinated-deleted
-files or machine-record loss after
-initialization fail closed. Runtime embedded trust ignores developer
+before deciding. Repair can reconstruct mutable local files only from that
+protected record and preserves its root digest, accepted IDs, and high-water
+mark. A missing protected record is never reconstructed from local evidence;
+only the separately named destructive-reset route may explicitly discard
+history. Setup updates its protected helper atomically only when the retained
+old and new artifacts share the reviewed signer pin, restores the prior helper
+on failed committed validation, and rejects signer changes without a reviewed
+rotation route. Elevated installer inputs use unpredictable protected Program
+Files staging with reparse rejection and per-run cleanup. Missing or
+coordinated-deleted files and machine-record loss after initialization fail
+closed. Runtime embedded trust ignores developer
 environment overrides. Fleet's guided installer owns installation
 behavior and any visible Windows consent. Neither the WPF nor CLI can choose a
 source, executable, argument vector, credential, device, ADB action, network

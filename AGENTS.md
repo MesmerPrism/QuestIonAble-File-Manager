@@ -199,8 +199,16 @@ documented.
   abandoned-lock recovery. Elevated Setup staging must be unpredictable,
   protected under Program Files, reparse-free, per-run, and cleaned; quiet
   success/failure output must never contain its path.
-  Missing/coordinated-deleted replay
-  files or marker loss must fail closed and require explicit reinstall/repair.
+  Missing/coordinated-deleted replay files or marker loss must fail closed;
+  signed Setup repair may reconstruct local files only from the protected
+  machine record and must preserve its high-water mark, accepted IDs, and root
+  binding. Mutable local evidence must never reconstruct a missing machine
+  record. Keep destructive reset behind the separate explicit
+  `--destructive-reset-fleet-replay-protection` route, mutually exclusive with
+  repair. Replace the Program Files helper atomically only when the retained
+  old and new artifacts share the reviewed signer pin; preserve replay state,
+  roll back a failed committed readback, and reject signer changes without a
+  separately reviewed rotation route.
   A declined, failed, or prompt-expired visible guided run remains unconsumed;
   recheck the clock immediately after guided success and require a fresh
   descriptor fetch before retry.

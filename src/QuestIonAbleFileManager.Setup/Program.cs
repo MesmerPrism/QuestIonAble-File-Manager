@@ -18,6 +18,7 @@ internal sealed record InstallerOptions(
     bool Quiet,
     bool NoLaunch,
     bool RepairFleetReplayProtection,
+    bool DestructiveResetFleetReplayProtection,
     bool Json)
 {
     private const string DefaultCertificateSource =
@@ -34,6 +35,7 @@ internal sealed record InstallerOptions(
         var quiet = false;
         var noLaunch = false;
         var repairFleetReplayProtection = false;
+        var destructiveResetFleetReplayProtection = false;
         var json = false;
 
         for (var index = 0; index < args.Length; index++)
@@ -58,6 +60,9 @@ internal sealed record InstallerOptions(
                 case "--repair-fleet-replay-protection":
                     repairFleetReplayProtection = true;
                     break;
+                case "--destructive-reset-fleet-replay-protection":
+                    destructiveResetFleetReplayProtection = true;
+                    break;
                 case "--json":
                     json = true;
                     break;
@@ -68,6 +73,12 @@ internal sealed record InstallerOptions(
                     throw new ArgumentException($"Unknown setup option: {args[index]}");
             }
         }
+        if (repairFleetReplayProtection &&
+            destructiveResetFleetReplayProtection)
+        {
+            throw new ArgumentException(
+                "Fleet replay repair and destructive reset are mutually exclusive.");
+        }
 
         return new InstallerOptions(
             certificateSource,
@@ -76,6 +87,7 @@ internal sealed record InstallerOptions(
             quiet,
             noLaunch,
             repairFleetReplayProtection,
+            destructiveResetFleetReplayProtection,
             json);
     }
 
@@ -91,7 +103,9 @@ internal sealed record InstallerOptions(
           --plan                              Stage and validate assets without trusting or installing.
           --quiet                             Run without the guided window.
           --no-launch                         Do not launch the app after installation.
-          --repair-fleet-replay-protection    Explicitly repair/reset validated Fleet replay lifecycle state.
+          --repair-fleet-replay-protection    Repair local replay files only from protected machine authority.
+          --destructive-reset-fleet-replay-protection
+                                              Explicitly discard replay history and create an empty authority.
           --json                              Emit a machine-readable result in quiet mode.
           --help                              Show this help.
         """;
@@ -391,7 +405,8 @@ internal sealed class GuidedInstaller
         var fleetReplayProtection =
             FleetInstallerReplayProtectionSetup
                 .ProvisionOrRepairEmbeddedRelease(
-                    options.RepairFleetReplayProtection);
+                    options.RepairFleetReplayProtection,
+                    options.DestructiveResetFleetReplayProtection);
 
         var launched = false;
         if (!options.NoLaunch)

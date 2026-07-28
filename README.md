@@ -222,10 +222,17 @@ descriptor before advancing the record. The entire protected transition is
 serialized by a machine-wide mutex whose protected ACL grants control only to
 SYSTEM and Administrators, with exact record readback before success;
 abandoned-lock recovery always re-reads machine state. Partial or coordinated file deletion
-and machine-record loss fail closed; reinstall/repair is the explicit recovery
-action. Lifecycle reset requires signed Setup's
-`--repair-fleet-replay-protection` option, and its receipt records
-provisioning/repair/reset. Elevated Setup stages installer inputs in a fresh
+fails closed until signed Setup repairs the local files from the protected
+machine record. Machine-record loss also fails closed: mutable local files
+never reconstruct protected authority. `--repair-fleet-replay-protection`
+preserves the protected version, descriptor IDs, root digest, and local
+outcome; the separately named
+`--destructive-reset-fleet-replay-protection` option is the only recovery that
+explicitly discards replay history. Setup receipts distinguish provisioning,
+preservation, repair, and destructive reset. Ordinary helper updates atomically
+replace the Program Files copy only when both artifacts match the reviewed
+signer pin; signer changes fail until a separately reviewed rotation mechanism
+exists. Elevated Setup stages installer inputs in a fresh
 unpredictable directory under its protected Program Files product root,
 rejects reparse components, and removes the run directory after use; plan-only
 staging remains unelevated and per-run. Quiet success and failure output never

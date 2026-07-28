@@ -251,6 +251,11 @@ function Assert-SetupSecuritySelfTest {
             $proof.unelevated_writer -cne 'rejected' -or
             $proof.signer_mismatch -cne 'rejected' -or
             $proof.explicit_repair -cne 'required' -or
+            $proof.release_artifact_upgrade -cne
+                'synthetic_same_signer_state_preserving' -or
+            $proof.missing_machine_repair -cne 'fail_closed' -or
+            $proof.destructive_reset -cne 'explicit_only' -or
+            $proof.forged_partial_evidence -cne 'rejected' -or
             $proof.result_local_paths -cne 'absent') {
             throw 'The Setup replay-security self-test proof is invalid.'
         }

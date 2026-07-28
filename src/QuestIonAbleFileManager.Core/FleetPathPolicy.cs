@@ -746,6 +746,25 @@ internal static class FleetWindowsFileSafety
         return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
     }
 
+    // Authenticode opens a second path handle and needs broad sharing.
+    // Callers must retain identity and re-hash this handle after verification.
+    public static FileStream OpenAuthenticodeCompatibleReadOnlyFile(
+        string path)
+    {
+        var handle = CreateFile(
+            path,
+            GenericRead,
+            FileShareRead | FileShareWrite | FileShareDelete,
+            IntPtr.Zero,
+            OpenExisting,
+            FileAttributeNormal | FileFlagOpenReparsePoint,
+            IntPtr.Zero);
+        ThrowIfInvalid(
+            handle,
+            $"open Authenticode-compatible file '{path}'");
+        return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+    }
+
     public static FileStream OpenFileForDeletion(string path)
     {
         var handle = CreateFile(

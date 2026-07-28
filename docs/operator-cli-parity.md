@@ -162,6 +162,10 @@ replay/downgrade and fail-closed state/anchor deletion, Pages-binary rejection,
 redirect escape, embedded configuration precedence/completeness, generated
 trust absence from ordinary build inputs, checked-in release-source authority,
 protected machine-record lifecycle loss, same-user replay-file rewrite,
+nonempty protected-state reconstruction of missing local files, refusal to
+reconstruct missing machine authority from local evidence, explicit-only
+destructive reset, synthetic same-signer helper A-to-B replacement with
+retained identity and state preservation, different-signer rejection, and
 visible guided-process retry semantics,
 receipt redaction, process timeouts, private-stage cleanup, and reparse
 rejection.

@@ -220,10 +220,17 @@ that does not trust the pinned Fleet publisher must not enable this handoff.
 
 Replay state is local defense in depth, not a permanent external ledger.
 Elevated signed QFM Setup independently verifies its own Authenticode chain and
-reviewed signer pin, installs a same-signed protected replay-authority copy
-under Program Files, writes an empty state plus root-bound sibling anchor, then
-creates an HKLM machine record whose protected ACL grants write only to SYSTEM
-and Administrators and read to Users. The machine record owns the accepted
+reviewed signer pin, installs a protected replay-authority copy under Program
+Files, writes an empty state plus root-bound sibling anchor, then creates an
+HKLM machine record whose protected ACL grants write only to SYSTEM and
+Administrators and read to Users. On later releases, Setup admits an ordinary
+helper update only when the retained old and new artifacts both match that
+same signer pin. It stages and verifies the new helper by retained identity,
+re-hashes the retained bytes after path-based Authenticode validation,
+atomically replaces the old helper from the protected directory with rollback
+on failed committed readback, and does not touch replay state. A different
+signer is rejected until a separately reviewed signer-rotation policy and
+migration route exist. The machine record owns the accepted
 descriptor IDs and monotonic version high-water mark; the mutable per-user
 files do not. Core cannot write the record. After guided success it may invoke
 only the installed helper's fixed accept route; the elevated helper verifies
@@ -244,18 +251,28 @@ as a fresh root.
 Ordinary same-user code cannot provision, reset, rewrite, or roll back the
 protected machine state. It can invoke the official helper, but cannot make
 that helper accept unsigned, mismatched, replayed, equal-version, or downgraded
-state. Signed QFM Setup with the
-explicit `--repair-fleet-replay-protection` option is the deliberate
-recovery/reset boundary; an ordinary reinstall refuses a lifecycle reset. The
-writer and reset implementation exists only in Setup, not in Core, and Setup's
+state. Signed QFM Setup exposes two deliberately separate lifecycle actions.
+`--repair-fleet-replay-protection` may recreate or correct local files only
+from the protected HKLM authority, preserving the root digest, accepted
+descriptor IDs, monotonic version high-water mark, and a valid local outcome.
+Mutable local files—even a valid nonempty pair—never reconstruct a missing
+machine record. `--destructive-reset-fleet-replay-protection` is the explicitly
+named destructive action that discards replay history and creates empty
+authority; it is mutually exclusive with repair. An ordinary reinstall refuses
+to infer either reset or protected state from missing evidence. The writer and
+reset implementation exists only in Setup, not in Core, and Setup's
 machine-readable result records whether it provisioned, preserved, repaired,
-or reset the machine record/files without exposing the state path. Paired
-replay files are validated before preserving or repairing the machine record,
-and a partial pair is refused for repair. Status and install otherwise fail
+or destructively reset authority without exposing the state path. A partial
+pair and a forged root anchor are refused. Status and install otherwise fail
 closed, including for the same descriptor or a lower version.
 Release acceptance covers a two-process same-descriptor race (exactly one
 success), ordered different-version contention (no rollback), and helper-exit
-abandoned-lock recovery. Setup additionally uses a fresh unpredictable staging
+abandoned-lock recovery. The Setup security proof also covers a signed
+synthetic release-A to release-B same-signer helper replacement with nonempty
+state preservation, retained-file substitution rejection, different-signer
+rejection, missing-machine-authority repair refusal, partial/forged local
+evidence, and equal-version/downgrade refusal after the update and repair
+semantics. Setup additionally uses a fresh unpredictable staging
 directory under its protected Program Files product root while elevated,
 rejects reparse components, and deletes that run directory afterward. Plan-only
 staging is unelevated and per-run. Quiet output is bounded and contains no
@@ -306,6 +323,12 @@ includes:
 - replay and downgrade across service instances, fail-closed single and
   coordinated replay-file deletion, protected machine-record loss, and
   lower-version replay after state deletion;
+- signed-synthetic same-signer helper A-to-B replacement with retained
+  identity, atomic readback/rollback, nonempty state preservation, and
+  different-signer rejection;
+- protected-authority reconstruction of missing local files, refusal to
+  reconstruct missing HKLM authority from valid mutable evidence, partial and
+  forged evidence rejection, and the separately named destructive reset;
 - Pages-sibling binary rejection and unreviewed, escaping, and chained
   redirects;
 - embedded-over-environment precedence, incomplete/unknown configuration, and
