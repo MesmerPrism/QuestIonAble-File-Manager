@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Xml.Linq;
+using QuestIonAbleFileManager.Core;
 using Windows.Foundation;
 using Windows.Management.Deployment;
 
@@ -14,6 +17,8 @@ internal sealed record InstallerOptions(
     bool PlanOnly,
     bool Quiet,
     bool NoLaunch,
+    bool RepairFleetReplayProtection,
+    bool DestructiveResetFleetReplayProtection,
     bool Json)
 {
     private const string DefaultCertificateSource =
@@ -29,6 +34,8 @@ internal sealed record InstallerOptions(
         var planOnly = false;
         var quiet = false;
         var noLaunch = false;
+        var repairFleetReplayProtection = false;
+        var destructiveResetFleetReplayProtection = false;
         var json = false;
 
         for (var index = 0; index < args.Length; index++)
@@ -50,6 +57,12 @@ internal sealed record InstallerOptions(
                 case "--no-launch":
                     noLaunch = true;
                     break;
+                case "--repair-fleet-replay-protection":
+                    repairFleetReplayProtection = true;
+                    break;
+                case "--destructive-reset-fleet-replay-protection":
+                    destructiveResetFleetReplayProtection = true;
+                    break;
                 case "--json":
                     json = true;
                     break;
@@ -60,8 +73,22 @@ internal sealed record InstallerOptions(
                     throw new ArgumentException($"Unknown setup option: {args[index]}");
             }
         }
+        if (repairFleetReplayProtection &&
+            destructiveResetFleetReplayProtection)
+        {
+            throw new ArgumentException(
+                "Fleet replay repair and destructive reset are mutually exclusive.");
+        }
 
-        return new InstallerOptions(certificateSource, appInstallerSource, planOnly, quiet, noLaunch, json);
+        return new InstallerOptions(
+            certificateSource,
+            appInstallerSource,
+            planOnly,
+            quiet,
+            noLaunch,
+            repairFleetReplayProtection,
+            destructiveResetFleetReplayProtection,
+            json);
     }
 
     public static string HelpText => """
@@ -76,6 +103,9 @@ internal sealed record InstallerOptions(
           --plan                              Stage and validate assets without trusting or installing.
           --quiet                             Run without the guided window.
           --no-launch                         Do not launch the app after installation.
+          --repair-fleet-replay-protection    Repair local replay files only from protected machine authority.
+          --destructive-reset-fleet-replay-protection
+                                              Explicitly discard replay history and create an empty authority.
           --json                              Emit a machine-readable result in quiet mode.
           --help                              Show this help.
         """;
@@ -100,13 +130,210 @@ internal sealed record InstallerResult(
     string PackageName,
     string PackageVersion,
     string Publisher,
-    string AppInstallerPath,
+    string AppInstallerSourceKind,
+    string AppInstallerSha256,
     string CertificateThumbprint,
     bool CertificateTrusted,
     bool Installed,
-    bool Launched);
+    bool Launched,
+    string FleetReplayProtectionAction);
+
+internal sealed record InstallerFailureResult(
+    string Status,
+    string ErrorCode,
+    string HResult,
+    string? InnerHResult);
 
 internal sealed record AppInstallerIdentity(string Name, string Publisher, string Version);
+
+internal sealed class SetupStagingDirectory : IDisposable
+{
+    private readonly string _expectedParent;
+
+    private SetupStagingDirectory(
+        string path,
+        string expectedParent)
+    {
+        Path = path;
+        _expectedParent = expectedParent;
+    }
+
+    public string Path { get; }
+
+    public static SetupStagingDirectory Create(
+        string purpose,
+        bool protectedMachineStaging)
+    {
+        if (purpose.Length is < 1 or > 64 ||
+            purpose.Any(static character =>
+                !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw new InvalidOperationException(
+                "The Setup staging purpose is invalid.");
+        }
+        if (!protectedMachineStaging)
+        {
+            var parent = System.IO.Path.GetFullPath(
+                System.IO.Path.GetTempPath());
+            var unprotectedPath = System.IO.Path.Combine(
+                parent,
+                purpose + "-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(unprotectedPath);
+            RejectReparse(unprotectedPath);
+            return new SetupStagingDirectory(unprotectedPath, parent);
+        }
+
+        var programFiles = System.IO.Path.GetFullPath(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.ProgramFiles));
+        var vendorDirectory = System.IO.Path.Combine(
+            programFiles,
+            "MesmerPrism");
+        var productDirectory = System.IO.Path.Combine(
+            vendorDirectory,
+            "QuestIonAbleFileManager");
+        var parentDirectory = System.IO.Path.Combine(
+            productDirectory,
+            "SetupStaging");
+        Directory.CreateDirectory(parentDirectory);
+        ValidatePathChain(
+            programFiles,
+            vendorDirectory,
+            productDirectory,
+            parentDirectory);
+        var security = CreateProtectedSecurity();
+        new DirectoryInfo(parentDirectory).SetAccessControl(security);
+        ValidateProtectedSecurity(
+            new DirectoryInfo(parentDirectory).GetAccessControl(
+                AccessControlSections.Access | AccessControlSections.Owner));
+        var path = System.IO.Path.Combine(
+            parentDirectory,
+            purpose + "-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        new DirectoryInfo(path).SetAccessControl(security);
+        RejectReparse(path);
+        ValidateProtectedSecurity(
+            new DirectoryInfo(path).GetAccessControl(
+                AccessControlSections.Access | AccessControlSections.Owner));
+        return new SetupStagingDirectory(path, parentDirectory);
+    }
+
+    public void Dispose()
+    {
+        var fullPath = System.IO.Path.GetFullPath(Path);
+        var parent = System.IO.Path.TrimEndingDirectorySeparator(
+            System.IO.Path.GetFullPath(_expectedParent)) +
+            System.IO.Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(
+                parent,
+                StringComparison.OrdinalIgnoreCase) ||
+            !Directory.Exists(fullPath))
+        {
+            return;
+        }
+        RejectReparse(fullPath);
+        Directory.Delete(fullPath, recursive: true);
+    }
+
+    internal static DirectorySecurity CreateProtectedSecurity()
+    {
+        var administrators = new SecurityIdentifier(
+            WellKnownSidType.BuiltinAdministratorsSid,
+            null);
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(
+            isProtected: true,
+            preserveInheritance: false);
+        security.SetOwner(administrators);
+        foreach (var identity in new[]
+                 {
+                     new SecurityIdentifier(
+                         WellKnownSidType.LocalSystemSid,
+                         null),
+                     administrators
+                 })
+        {
+            security.AddAccessRule(new FileSystemAccessRule(
+                identity,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit |
+                InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+        }
+        return security;
+    }
+
+    internal static void ValidateProtectedSecurity(
+        DirectorySecurity security)
+    {
+        var administrators = new SecurityIdentifier(
+            WellKnownSidType.BuiltinAdministratorsSid,
+            null);
+        var system = new SecurityIdentifier(
+            WellKnownSidType.LocalSystemSid,
+            null);
+        if (!security.AreAccessRulesProtected ||
+            security.GetOwner(typeof(SecurityIdentifier))
+                is not SecurityIdentifier owner ||
+            owner != administrators)
+        {
+            throw new InvalidOperationException(
+                "The protected Setup staging ACL is invalid.");
+        }
+        var expected = new HashSet<string>(
+            [system.Value, administrators.Value],
+            StringComparer.Ordinal);
+        var rules = security.GetAccessRules(
+                includeExplicit: true,
+                includeInherited: false,
+                typeof(SecurityIdentifier))
+            .Cast<FileSystemAccessRule>()
+            .ToArray();
+        if (rules.Length != expected.Count ||
+            rules.Any(rule =>
+                rule.AccessControlType != AccessControlType.Allow ||
+                rule.FileSystemRights != FileSystemRights.FullControl ||
+                rule.InheritanceFlags !=
+                    (InheritanceFlags.ContainerInherit |
+                     InheritanceFlags.ObjectInherit) ||
+                rule.IdentityReference is not SecurityIdentifier sid ||
+                !expected.Contains(sid.Value)))
+        {
+            throw new InvalidOperationException(
+                "The protected Setup staging ACL is invalid.");
+        }
+    }
+
+    private static void ValidatePathChain(
+        string root,
+        params string[] paths)
+    {
+        RejectReparse(root);
+        foreach (var path in paths)
+        {
+            var fullPath = System.IO.Path.GetFullPath(path);
+            if (!fullPath.StartsWith(
+                    System.IO.Path.TrimEndingDirectorySeparator(root) +
+                    System.IO.Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The protected Setup staging path escaped Program Files.");
+            }
+            RejectReparse(fullPath);
+        }
+    }
+
+    private static void RejectReparse(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                "The Setup staging path must not be a reparse point.");
+        }
+    }
+}
 
 internal sealed class GuidedInstaller
 {
@@ -120,8 +347,10 @@ internal sealed class GuidedInstaller
         IProgress<InstallerProgress>? progress,
         CancellationToken cancellationToken)
     {
-        var stagingDirectory = Path.Combine(Path.GetTempPath(), DownloadDirectoryName);
-        Directory.CreateDirectory(stagingDirectory);
+        using var staging = SetupStagingDirectory.Create(
+            DownloadDirectoryName,
+            protectedMachineStaging: IsAdministrator());
+        var stagingDirectory = staging.Path;
         var certificatePath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.cer");
         var appInstallerPath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.appinstaller");
 
@@ -143,11 +372,13 @@ internal sealed class GuidedInstaller
                 identity.Name,
                 identity.Version,
                 identity.Publisher,
-                appInstallerPath,
+                SourceKind(options.AppInstallerSource),
+                FileSha256(appInstallerPath),
                 certificate.Thumbprint,
                 CertificateTrusted: IsCertificateTrusted(certificate),
                 Installed: false,
-                Launched: false);
+                Launched: false,
+                FleetReplayProtectionAction: "not_run_plan");
         }
 
         progress?.Report(new InstallerProgress(
@@ -171,6 +402,12 @@ internal sealed class GuidedInstaller
             .FirstOrDefault()
             ?? throw new InvalidOperationException("Windows completed setup but the installed package registration could not be found.");
 
+        var fleetReplayProtection =
+            FleetInstallerReplayProtectionSetup
+                .ProvisionOrRepairEmbeddedRelease(
+                    options.RepairFleetReplayProtection,
+                    options.DestructiveResetFleetReplayProtection);
+
         var launched = false;
         if (!options.NoLaunch)
         {
@@ -184,11 +421,13 @@ internal sealed class GuidedInstaller
             identity.Name,
             identity.Version,
             identity.Publisher,
-            appInstallerPath,
+            SourceKind(options.AppInstallerSource),
+            FileSha256(appInstallerPath),
             certificate.Thumbprint,
             CertificateTrusted: addedCertificate || IsCertificateTrusted(certificate),
             Installed: true,
-            Launched: launched);
+            Launched: launched,
+            FleetReplayProtectionAction: fleetReplayProtection.Action);
     }
 
     internal static AppInstallerIdentity ParseAndValidateAppInstaller(string path)
@@ -211,6 +450,23 @@ internal sealed class GuidedInstaller
         }
 
         return identity;
+    }
+
+    private static string SourceKind(string source) =>
+        Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps
+            ? "https"
+            : "local_file";
+
+    private static string FileSha256(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)))
+            .ToLowerInvariant();
+
+    private static bool IsAdministrator()
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(
+            WindowsBuiltInRole.Administrator);
     }
 
     private static async Task StageSourceAsync(
@@ -370,6 +626,55 @@ internal static class Program
     {
         try
         {
+            if (args is ["--fleet-release-configuration-proof"])
+            {
+                return FleetInstallerReleaseProof.Write();
+            }
+            if (args is ["--fleet-replay-security-self-test"])
+            {
+                return FleetInstallerReplayProtectionSetup
+                    .WriteSecuritySelfTest();
+            }
+            if (args is
+                [
+                    "--fleet-replay-lock-test-child",
+                    var token,
+                    var testDescriptorId,
+                    var testVersion,
+                    var holdMilliseconds,
+                    var mode,
+                    var ready
+                ])
+            {
+                return FleetInstallerReplayProtectionSetup
+                    .RunLockTestChild(
+                        token,
+                        testDescriptorId,
+                        testVersion,
+                        holdMilliseconds,
+                        mode,
+                        ready);
+            }
+            if (args is
+                [
+                    "--fleet-replay-accept",
+                    var stateRootSha256,
+                    var descriptorId,
+                    var version,
+                    var payloadSha256
+                ])
+            {
+                if (!IsAdministrator())
+                {
+                    return RelaunchElevated(args);
+                }
+                return FleetInstallerReplayProtectionSetup
+                    .AcceptEmbeddedRelease(
+                        stateRootSha256,
+                        descriptorId,
+                        version,
+                        payloadSha256);
+            }
             var options = InstallerOptions.Parse(args);
             if (!options.PlanOnly && !IsAdministrator())
             {
@@ -395,7 +700,8 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine(exception.Message);
+            _ = exception;
+            Console.Error.WriteLine("Setup failed.");
             return 2;
         }
     }
@@ -441,18 +747,18 @@ internal static class Program
         {
             if (options.Json)
             {
-                Console.Error.WriteLine(JsonSerializer.Serialize(new
-                {
-                    status = "failed",
-                    error = exception.Message,
-                    error_type = exception.GetType().FullName,
-                    hresult = $"0x{exception.HResult:X8}",
-                    inner_hresult = exception.InnerException is null ? null : $"0x{exception.InnerException.HResult:X8}"
-                }));
+                Console.Error.WriteLine(JsonSerializer.Serialize(
+                    new InstallerFailureResult(
+                        "failed",
+                        "setup_failed",
+                        $"0x{exception.HResult:X8}",
+                        exception.InnerException is null
+                            ? null
+                            : $"0x{exception.InnerException.HResult:X8}")));
             }
             else
             {
-                Console.Error.WriteLine(exception.Message);
+                Console.Error.WriteLine("Setup failed.");
             }
 
             return 1;

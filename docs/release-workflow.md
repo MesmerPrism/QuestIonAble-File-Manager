@@ -15,8 +15,21 @@ Every Windows preview release contains:
 - `QuestIonAbleFileManager.cer`: public half of the package signing certificate;
 - `QuestIonAbleFileManager-win-x64.zip`: portable WPF app plus operator CLI;
 - `questionable-file-manager-cli-win-x64.zip`: CLI-only automation archive;
+- `questionable-file-manager-kiosk-v2-provider.exe`: dedicated self-contained
+  single-file provider for Fleet;
+- `questionable-file-manager-kiosk-v2-provider.receipt.json`: isolated-smoke
+  result, byte length, and lowercase SHA-256 for the provider;
+- `questionable-file-manager-awake-provider.exe`: dedicated self-contained
+  single-file Quest awake effect-owner provider for Fleet;
+- `questionable-file-manager-awake-provider.receipt.json`: isolated rejection,
+  trust-unit shape, byte length, and lowercase SHA-256 for the awake provider;
+- `questionable-file-manager-connectivity-provider.exe`: dedicated
+  self-contained single-file Quest connectivity execution provider for Fleet;
+- `questionable-file-manager-connectivity-provider.receipt.json`: isolated
+  absent-profile smoke, trust-unit shape, byte length, and lowercase SHA-256;
 - `SHA256SUMS.txt`: checksums for every release asset;
-- `release-validation.json`: signature, timestamp, identity, and feed receipt.
+- `release-validation.json`: signature, timestamp, identity, feed, and all
+  dedicated Fleet-provider validation summaries.
 
 Releases from `0.4.0` also contain byte-identical former-name aliases for the
 setup, MSIX, App Installer, certificate, portable archive, and CLI archive.
@@ -26,6 +39,36 @@ similarly include the former CLI executable name as a deprecated alias.
 
 Android Platform Tools are not bundled. The app discovers an operator-supplied
 `adb.exe` through the documented search order.
+
+Both portable archives include
+`questionable-file-manager-kiosk-v2-provider.exe`, the dedicated
+self-contained single-file Fleet catalog provider published directly from
+`QuestIonAbleFileManager.FleetKioskV2Provider`, and its validation receipt. The
+release never renames or repackages the general operator CLI as this provider.
+Fleet pins the receipt's lowercase SHA-256, copies only that EXE to an empty
+private stage, creates only its private `bundle-extract` subdirectory, and
+rejects the ordinary framework-dependent build apphost as a provider trust
+unit. Every staged launch uses a new private
+`DOTNET_BUNDLE_EXTRACT_BASE_DIR`; native runtime extraction never shares a
+mutable cross-stage cache.
+
+They also include `questionable-file-manager-awake-provider.exe`, published
+directly from `QuestIonAbleFileManager.FleetAwakeProvider`, and its artifact
+receipt. The release gate requires the same isolated single-file trust-unit
+shape, strict former-bound rejection before ADB initialization, empty standard
+error, and failed isolated framework-dependent apphost control. The release
+validation receipt records the provider hashes and validation summaries
+separately.
+
+They also include `questionable-file-manager-connectivity-provider.exe`,
+published directly from
+`QuestIonAbleFileManager.FleetConnectivityProvider`, and its artifact receipt.
+Its isolated gate accepts only `integration quest-connectivity --json`, fails
+closed when the File Manager-owned current-user profile is absent, rejects
+broad CLI shapes before initialization, and proves the framework-dependent
+apphost cannot substitute for the pinned single-file trust unit. The release
+validation receipt records its hash separately from the awake and Kiosk
+catalog providers.
 
 The WPF app, automation CLI, guided setup helper, MSIX package, and GitHub Pages
 site use the same folder mark. Its canonical source and multi-resolution ICO
@@ -72,6 +115,33 @@ pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -RemoveAfterTest
 ```
 
+For a release that exposes the optional Fleet download handoff, the release
+owner adds the complete eight-field public `AssemblyMetadata` block documented
+in [Fleet installer handoff](fleet-installer-handoff.md) to checked-in
+`src/QuestIonAbleFileManager.Core/FleetInstallerReleaseConfiguration.cs`.
+This is an intentional reviewed release commit, not a script argument,
+environment variable, MSBuild property, or generated file. Leave that source
+inert when the handoff is not enabled.
+
+`Invoke-ReleaseBuild.ps1` runs the configuration gate before building. It
+requires an exact clean commit tagged `v<Version>`, verifies that the
+configuration source is tracked, parses only the closed eight-literal source
+shape, hashes it before and after isolated builds, rejects custom
+SDK/import/targets hooks, and compares every compiled value to source. The
+unsigned MSIX payload and Setup's exact Core input are revalidated immediately
+before their signing commands. A custom source build may edit source but
+cannot become an official signed QFM release.
+
+The GitHub workflow has no branch or manual-dispatch signing route. It starts
+only for `refs/tags/v<version>`, fetches that exact existing tag from `origin`,
+and requires the authoritative tag's peeled commit to equal `GITHUB_SHA`
+before restoring signing material.
+
+The canonical Pages location publishes only signed `release.json` metadata
+valid for at most 24 hours. Its v2 payload must use RFC 8785 JCS bytes and bind
+`https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`;
+never publish or derive a Pages-sibling Setup binary.
+
 The default consumer test exercises the elevated guided route. On an
 unattended, non-elevated agent shell, use `-DirectPackage` to validate the
 helper's no-change plan and then install the same signed MSIX directly; the
@@ -90,6 +160,20 @@ Kiosk tag to an exact commit and verifies the bundle version, source pointer,
 all declared byte counts and SHA-256 values, and both APK signer digests. The
 public validation receipt records that Kiosk provenance alongside the Windows
 signatures and public release filenames, never local or CI-runner build paths.
+It also isolation-tests both exact dedicated Fleet provider executables with no
+unexpected sibling files. The Kiosk provider must return the strict
+absent-profile response while preserving its existing broad/general negative
+vectors. The awake provider must reject the former 24-hour bound and preserve
+its existing broad and case-varied negatives before ADB discovery. Awake,
+connectivity, and Kiosk provider gates additionally require the exact
+`--describe-json` route to exit while stdin remains open, with poisoned backend
+settings, empty standard error, exact registry actions, and no authority or
+target claim. Each gate also requires the descriptor's provider version,
+derived from immutable Core build metadata, to equal the semantic version
+passed to that artifact's publish. Mixed, extra, and case-varied description
+shapes reject. All three require an unreachable general CLI dispatcher and
+rejection of an isolated framework-dependent apphost before either portable
+archive is created.
 Existing release assets are not overwritten; any payload change requires a new
 semantic version. The consumer test stages a local HTTP feed with range
 support because the Windows deployment service does not consume workspace file
@@ -104,6 +188,88 @@ QuestIonAbleFileManager-Setup.exe --plan --json
 `--plan` downloads and validates the release identity without trusting a
 certificate or installing a package. Actual guided installation requests UAC;
 the elevation is part of the public installer contract.
+
+Signed Setup owns non-destructive Fleet replay-file repair:
+
+```powershell
+QuestIonAbleFileManager-Setup.exe --repair-fleet-replay-protection --json
+```
+
+This route repairs local files only from the protected HKLM authority. It
+preserves the root digest, accepted descriptor IDs, monotonic high-water
+version, and any valid local outcome; partial or forged local evidence is
+refused. A valid local pair is not authority for recreating a missing HKLM
+record. Discarding replay history therefore requires the separately named,
+mutually exclusive command:
+
+```powershell
+QuestIonAbleFileManager-Setup.exe --destructive-reset-fleet-replay-protection --json
+```
+
+Normal install provisions or preserves replay protection but refuses to infer
+a reset. The Setup result records a sanitized provision, preserve, repair, or
+destructive-reset action. Setup also installs its replay-authority copy under
+the fixed Program Files product directory. A later helper is an ordinary
+atomic update only when both the retained installed artifact and staged new
+artifact match the reviewed signer pin; Setup re-hashes retained staged bytes
+after path-based Authenticode validation, and failed committed validation
+restores the prior helper without changing replay state only after the backup
+matches its prior identity/hash/signer commitment and the restored destination
+passes stable retained identity/hash/signer readback. Otherwise Setup retains
+the backup for repair inspection and reports a bounded rollback failure; a
+backup that completed commitment validation remains exact repair evidence.
+Any thrown Windows atomic-replace call is reconciled as potentially
+state-changing by classifying destination, staged replacement, and backup
+against both commitments before bounded failure and cleanup. The rollback
+restore's atomic replace has the same fail-closed contract: Setup classifies
+the destination, rollback candidate, and original backup, retains unresolved
+evidence, and cannot claim restoration without exact stable readback. Signer
+changes fail until a separately reviewed rotation mechanism exists.
+Runtime requests never carry a path or secret;
+the elevated helper re-fetches and verifies the current signed Fleet descriptor
+before it advances the protected HKLM high-water mark. Its protected
+SYSTEM/Administrators-only machine mutex serializes descriptor refetch through
+durable HKLM readback, including provisioning/repair and abandoned-lock
+recovery. Elevated staging uses a new unpredictable directory under the
+protected Program Files product root and rejects reparse components. Quiet
+success reports only the App Installer source kind and staged-content SHA-256;
+quiet failure is a bounded code/HRESULT result. Neither exposes a local path.
+The release gate executes a signed-synthetic A-to-B same-signer lifecycle proof
+covering retained substitution attempts, nonempty state preservation,
+different-signer rejection, missing-machine repair refusal, forged/partial
+local evidence, post-update equal-version/downgrade rejection, uncontested
+verified rollback, and adversarial rollback-destination substitution with
+validated-backup retention. It also injects the Windows error-1177 partial
+failure shape—prior helper moved to backup before the call throws—and proves
+bounded path-free reconciliation plus exact backup retention. Separate
+rollback error-1177 cases cover missing, moved, and changed destination states
+and prove exact classification plus preservation of the original backup and
+any remaining rollback candidate.
+
+When exact Fleet A/B release artifacts are staged, run the external lifecycle
+gate before publication:
+
+```powershell
+pwsh -NoProfile -File `
+  ./tools/Test-FleetInstallerHandoffLifecycle.ps1 `
+  -InputPath <private-lifecycle-input.json> `
+  -QfmSetupExecutablePath `
+    ./artifacts/release/QuestIonAbleFileManager-Setup.exe
+```
+
+Each release directory named by the private input must contain the exact Fleet
+Setup executable, Setup build receipt, v2 descriptor, v2 descriptor receipt,
+and descriptor SPKI asset. The input supplies independently reviewed SPKI and
+Setup-certificate pins; the runner never treats staged metadata as independent
+trust. It emits the path-free
+`questionable.file_manager.fleet_installer_lifecycle_receipt.v1` receipt after
+status/plan verification, same-signer A-to-B update, side-by-side retention,
+exact pointer rollback readback, replay/downgrade rejection, cancellation,
+interrupted recovery, adversarial staging checks, and cleanup. Pass the same
+input to `Invoke-ReleaseBuild.ps1` through
+`-FleetInstallerLifecycleInputPath` to bind the gate to the signed QFM Setup
+artifact. Until real reviewed production values exist, keep the checked-in
+eight-field release configuration empty and use only signed synthetic inputs.
 
 ## GitHub Configuration
 
@@ -121,6 +287,7 @@ Optional Actions variables select alternate RFC 3161 timestamp services:
 - `WINDOWS_PREVIEW_SETUP_TIMESTAMP_URL`.
 
 Private keys stay in the Windows certificate store, ignored local artifacts,
-and encrypted GitHub Actions secrets. They are never committed. Publishing a
-tag or manually dispatching the workflow builds, validates, uploads, and then
-creates a new matching GitHub Release.
+and encrypted GitHub Actions secrets. They are never committed. Pushing an
+existing authoritative `v<version>` tag builds, validates, uploads, and then
+creates a new matching GitHub Release. Branch and manual workflow runs never
+sign release assets.

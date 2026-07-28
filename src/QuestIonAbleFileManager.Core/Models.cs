@@ -35,6 +35,11 @@ public sealed record CommandResult(
     }
 }
 
+public sealed record StreamingCommandResult(
+    CommandResult CommandResult,
+    long BytesWritten,
+    string Sha256);
+
 public sealed record QuestDevice(
     string Serial,
     string State,
@@ -73,6 +78,45 @@ public sealed record ApkInstallOptions(
     bool GrantRuntimePermissions = false,
     bool AllowTestPackages = false);
 
+public sealed record ApkArtifactIdentity(
+    string PackageName,
+    long VersionCode,
+    string? VersionName,
+    string SignerSha256,
+    string? SplitName);
+
+public sealed record ApkArtifactInspection(
+    string Path,
+    long SizeBytes,
+    string Sha256,
+    ApkArtifactIdentity Identity);
+
+public sealed record InstalledApkIdentity(
+    string Serial,
+    ApkArtifactIdentity? Identity,
+    IReadOnlyList<string> ApkPaths,
+    string BaseApkSha256,
+    long BaseApkSizeBytes);
+
+public sealed record InspectedApkInstallResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity Installed,
+    CommandResult CommandResult);
+
+public sealed record ResolvedAppLaunchResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity Installed,
+    string Component,
+    CommandResult CommandResult,
+    bool ComponentObservedResumed);
+
+public sealed record AppRuntimeObservation(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity? Installed,
+    bool IsForeground,
+    bool IsTopResumed,
+    IReadOnlyList<int> ProcessIds);
+
 public sealed record ApkExportResult(
     string PackageName,
     string SourcePath,
@@ -97,6 +141,7 @@ public sealed record WifiAdbEnableResult(
     string Host,
     int Port,
     string Endpoint,
+    string DeviceIdentitySha256,
     CommandResult AddressProbe,
     CommandResult TcpIpCommand,
     WifiAdbConnectionResult Connection);
@@ -165,4 +210,33 @@ public sealed class SplitPackageException : InvalidOperationException
     public string PackageName { get; }
 
     public IReadOnlyList<string> ApkPaths { get; }
+}
+
+public sealed class PackageNotInstalledException(string serial, string packageName)
+    : InvalidOperationException($"The package is not installed on the selected serial.")
+{
+    public string Serial { get; } = serial;
+    public string PackageName { get; } = packageName;
+}
+
+public sealed class FleetTransferLimitException : InvalidOperationException
+{
+    public FleetTransferLimitException(long maximumBytes)
+        : base($"The remote file exceeded the hard transfer limit of {maximumBytes} bytes.")
+    {
+        MaximumBytes = maximumBytes;
+    }
+
+    public long MaximumBytes { get; }
+}
+
+public sealed class FleetRemotePathException : InvalidOperationException
+{
+    public FleetRemotePathException(string code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public string Code { get; }
 }

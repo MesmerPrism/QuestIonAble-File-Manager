@@ -24,7 +24,9 @@ public sealed record QuestControlStatus(
     string ProximityState,
     string CpuLevel,
     string GpuLevel,
-    DateTimeOffset CapturedAt)
+    DateTimeOffset CapturedAt,
+    int? ProximityHoldDurationMilliseconds = null,
+    int? ProximityHoldRemainingMilliseconds = null)
 {
     public string HeadsetBatteryLabel => HeadsetBatteryLevel is int level
         ? $"{level}% {HeadsetBatteryState}".Trim()

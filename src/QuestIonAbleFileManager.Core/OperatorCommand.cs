@@ -5,13 +5,20 @@ namespace QuestIonAbleFileManager.Core;
 
 public enum OperatorCommandKind
 {
+    ConnectivityProfileStatus,
+    ConnectivityProfileList,
+    ConnectivityProfileImport,
+    ConnectivityProfileRevoke,
     DiscoverDevices,
     ListFiles,
     PullFile,
     PushFile,
     ListPackages,
     ExportApk,
+    InspectApk,
     InstallApk,
+    LaunchInspectedApp,
+    ObserveInspectedApp,
     InstallApkBundle,
     EnableWifiAdb,
     ConnectWifiAdb,
@@ -26,7 +33,16 @@ public enum OperatorCommandKind
     PushRustyKioskTags,
     ReadQuestControls,
     SetQuestKeepAwake,
-    SetQuestPerformance
+    SetQuestPerformance,
+    FleetInstallStatus,
+    FleetInstall
+}
+
+public enum QuestConnectivityProfileInputKind
+{
+    None,
+    PrivateFile,
+    StandardInput
 }
 
 public sealed class OperatorCommand
@@ -53,7 +69,11 @@ public sealed class OperatorCommand
         int durationMilliseconds = 28_800_000,
         int? cpuLevel = null,
         int? gpuLevel = null,
-        bool clearPerformance = false)
+        bool clearPerformance = false,
+        string? connectivityDeviceId = null,
+        QuestConnectivityProfileInputKind connectivityProfileInputKind =
+            QuestConnectivityProfileInputKind.None,
+        bool replaceExisting = false)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -79,6 +99,9 @@ public sealed class OperatorCommand
         CpuLevel = cpuLevel;
         GpuLevel = gpuLevel;
         ClearPerformance = clearPerformance;
+        ConnectivityDeviceId = connectivityDeviceId;
+        ConnectivityProfileInputKind = connectivityProfileInputKind;
+        ReplaceExisting = replaceExisting;
     }
 
     public OperatorCommandKind Kind { get; }
@@ -125,6 +148,12 @@ public sealed class OperatorCommand
 
     public bool ClearPerformance { get; }
 
+    public string? ConnectivityDeviceId { get; }
+
+    public QuestConnectivityProfileInputKind ConnectivityProfileInputKind { get; }
+
+    public bool ReplaceExisting { get; }
+
     public string ToPowerShellCommand(
         string cliExecutable = ".\\questionable-file-manager.exe",
         string? adbPath = null)
@@ -144,6 +173,188 @@ public sealed class OperatorCommand
 
 public static class OperatorCommands
 {
+    public static OperatorCommand ParseConnectivityProfileCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.SequenceEqual(
+                ["connectivity-profile", "list", "--json"],
+                StringComparer.Ordinal))
+        {
+            return ListQuestConnectivityProfiles();
+        }
+
+        if (arguments.Count == 5 &&
+            arguments[0] == "connectivity-profile" &&
+            arguments[1] == "status" &&
+            arguments[2] == "--device-id" &&
+            arguments[4] == "--json")
+        {
+            return QuestConnectivityProfileStatus(arguments[3]);
+        }
+
+        if (arguments.Count == 6 &&
+            arguments[0] == "connectivity-profile" &&
+            arguments[1] == "revoke" &&
+            arguments[2] == "--device-id" &&
+            arguments[4] == "--confirm-profile-revoke" &&
+            arguments[5] == "--json")
+        {
+            return RevokeQuestConnectivityProfile(
+                arguments[3],
+                operatorConfirmed: true);
+        }
+
+        var importingFile = arguments.Count is 6 or 7 &&
+                            arguments[0] == "connectivity-profile" &&
+                            arguments[1] == "import" &&
+                            arguments[2] == "--file" &&
+                            arguments[4] == "--confirm-profile-write";
+        if (importingFile &&
+            ((arguments.Count == 6 && arguments[5] == "--json") ||
+             (arguments.Count == 7 &&
+              arguments[5] == "--replace-existing" &&
+              arguments[6] == "--json")))
+        {
+            return ImportQuestConnectivityProfileFile(
+                arguments[3],
+                replaceExisting: arguments.Count == 7,
+                operatorConfirmed: true);
+        }
+
+        var importingStdin = arguments.Count is 5 or 6 &&
+                             arguments[0] == "connectivity-profile" &&
+                             arguments[1] == "import" &&
+                             arguments[2] == "--stdin" &&
+                             arguments[3] == "--confirm-profile-write";
+        if (importingStdin &&
+            ((arguments.Count == 5 && arguments[4] == "--json") ||
+             (arguments.Count == 6 &&
+              arguments[4] == "--replace-existing" &&
+              arguments[5] == "--json")))
+        {
+            return ImportQuestConnectivityProfileStdin(
+                replaceExisting: arguments.Count == 6,
+                operatorConfirmed: true);
+        }
+
+        throw new ArgumentException(
+            "Use an exact connectivity-profile status, list, import, or revoke command. " +
+            "Secrets are accepted only through --file or --stdin.",
+            nameof(arguments));
+    }
+
+    public static OperatorCommand QuestConnectivityProfileStatus(string deviceId)
+    {
+        deviceId = RequireConnectivityDeviceId(deviceId);
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileStatus,
+            ["connectivity-profile", "status", "--device-id", deviceId, "--json"],
+            connectivityDeviceId: deviceId);
+    }
+
+    public static OperatorCommand ListQuestConnectivityProfiles() =>
+        new(
+            OperatorCommandKind.ConnectivityProfileList,
+            ["connectivity-profile", "list", "--json"]);
+
+    public static OperatorCommand ImportQuestConnectivityProfileFile(
+        string privateJsonPath,
+        bool replaceExisting = false,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile write");
+        ArgumentException.ThrowIfNullOrWhiteSpace(privateJsonPath);
+        var fullPath = Path.GetFullPath(privateJsonPath);
+        var arguments = new List<string>
+        {
+            "connectivity-profile", "import", "--file", fullPath,
+            "--confirm-profile-write"
+        };
+        if (replaceExisting)
+            arguments.Add("--replace-existing");
+        arguments.Add("--json");
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileImport,
+            arguments,
+            localPath: fullPath,
+            operatorConfirmed: true,
+            connectivityProfileInputKind: QuestConnectivityProfileInputKind.PrivateFile,
+            replaceExisting: replaceExisting);
+    }
+
+    public static OperatorCommand ImportQuestConnectivityProfileStdin(
+        bool replaceExisting = false,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile write");
+        var arguments = new List<string>
+        {
+            "connectivity-profile", "import", "--stdin", "--confirm-profile-write"
+        };
+        if (replaceExisting)
+            arguments.Add("--replace-existing");
+        arguments.Add("--json");
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileImport,
+            arguments,
+            operatorConfirmed: true,
+            connectivityProfileInputKind: QuestConnectivityProfileInputKind.StandardInput,
+            replaceExisting: replaceExisting);
+    }
+
+    public static OperatorCommand RevokeQuestConnectivityProfile(
+        string deviceId,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Connectivity profile revocation");
+        deviceId = RequireConnectivityDeviceId(deviceId);
+        return new OperatorCommand(
+            OperatorCommandKind.ConnectivityProfileRevoke,
+            [
+                "connectivity-profile", "revoke", "--device-id", deviceId,
+                "--confirm-profile-revoke", "--json"
+            ],
+            operatorConfirmed: true,
+            connectivityDeviceId: deviceId);
+    }
+
+    public static OperatorCommand ParseFleetCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.SequenceEqual(
+                ["fleet", "status", "--json"],
+                StringComparer.Ordinal))
+        {
+            return FleetInstallStatus();
+        }
+        if (arguments.SequenceEqual(
+                ["fleet", "install", "--confirm-fleet-install", "--json"],
+                StringComparer.Ordinal))
+        {
+            return FleetInstall(operatorConfirmed: true);
+        }
+        throw new ArgumentException(
+            "Use exactly 'fleet status --json' or " +
+            "'fleet install --confirm-fleet-install --json'.",
+            nameof(arguments));
+    }
+
+    public static OperatorCommand FleetInstallStatus() =>
+        new(
+            OperatorCommandKind.FleetInstallStatus,
+            ["fleet", "status", "--json"]);
+
+    public static OperatorCommand FleetInstall(bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Fleet guided installation");
+        return new OperatorCommand(
+            OperatorCommandKind.FleetInstall,
+            ["fleet", "install", "--confirm-fleet-install", "--json"],
+            operatorConfirmed: true);
+    }
+
     public static OperatorCommand DiscoverDevices() =>
         new(OperatorCommandKind.DiscoverDevices, ["devices"]);
 
@@ -322,6 +533,40 @@ public static class OperatorCommands
             serial: serial,
             localPath: fullApkPath,
             installOptions: options);
+    }
+
+    public static OperatorCommand InspectApk(string apkPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.InspectApk,
+            ["apk", "inspect", "--file", fullPath],
+            localPath: fullPath);
+    }
+
+    public static OperatorCommand LaunchInspectedApp(string serial, string apkPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.LaunchInspectedApp,
+            ["apk", "launch", "--serial", serial, "--file", fullPath],
+            serial: serial,
+            localPath: fullPath);
+    }
+
+    public static OperatorCommand ObserveInspectedApp(string serial, string apkPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.ObserveInspectedApp,
+            ["apk", "observe", "--serial", serial, "--file", fullPath],
+            serial: serial,
+            localPath: fullPath);
     }
 
     public static OperatorCommand InstallApkBundle(
@@ -561,11 +806,11 @@ public static class OperatorCommands
     {
         RequireApproval(operatorConfirmed, "Quest keep-awake policy change");
         serial = AndroidInput.RequireSerial(serial);
-        if (durationMilliseconds is < 60_000 or > 86_400_000)
+        if (durationMilliseconds is < 60_000 or > QuestAwakeContract.MaximumHoldDurationMilliseconds)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(durationMilliseconds),
-                "Keep-awake duration must be between one minute and 24 hours.");
+                "Keep-awake duration must be between one minute and eight hours.");
         }
 
         return new OperatorCommand(
@@ -713,6 +958,18 @@ public static class OperatorCommands
             throw new ArgumentOutOfRangeException(parameterName, "Quest CPU/GPU level must be between 0 and 5.");
         }
     }
+
+    private static string RequireConnectivityDeviceId(string value)
+    {
+        if (!QuestConnectivityProfileManagementContract.IsDeviceId(value))
+        {
+            throw new ArgumentException(
+                "Fleet device ID must be a lowercase 1–256 character identifier.",
+                nameof(value));
+        }
+
+        return value;
+    }
 }
 
 public sealed record OperatorExecutionResult(
@@ -722,6 +979,10 @@ public sealed record OperatorExecutionResult(
     IReadOnlyList<string>? Packages = null,
     CommandResult? CommandResult = null,
     ApkExportResult? ApkExportResult = null,
+    ApkArtifactInspection? ApkArtifactInspection = null,
+    InspectedApkInstallResult? InspectedApkInstallResult = null,
+    ResolvedAppLaunchResult? ResolvedAppLaunchResult = null,
+    AppRuntimeObservation? AppRuntimeObservation = null,
     ApkBundleInstallResult? ApkBundleInstallResult = null,
     WifiAdbEnableResult? WifiAdbEnableResult = null,
     WifiAdbConnectionResult? WifiAdbConnectionResult = null,
@@ -733,21 +994,53 @@ public sealed record OperatorExecutionResult(
     QuestControlStatus? QuestControlStatus = null,
     QuestKeepAwakeResult? QuestKeepAwakeResult = null,
     QuestPerformanceResult? QuestPerformanceResult = null,
+    FleetInstallerStatusReceipt? FleetInstallerStatus = null,
+    FleetInstallerHandoffReceipt? FleetInstallerHandoff = null,
+    QuestConnectivityProfileStatusReceipt? ConnectivityProfileStatus = null,
+    QuestConnectivityProfileListReceipt? ConnectivityProfileList = null,
+    QuestConnectivityProfileMutationReceipt? ConnectivityProfileMutation = null,
     OperatorMutationReceipt? MutationReceipt = null);
 
-public sealed class OperatorCommandExecutor(AdbClient client)
+public sealed class OperatorCommandExecutor
 {
-    private readonly AdbClient _client = client ?? throw new ArgumentNullException(nameof(client));
+    private readonly AdbClient? _client;
+    private readonly FleetInstallerHandoff _fleetInstaller;
+    private readonly QuestConnectivityProfileManager _connectivityProfiles;
+
+    public OperatorCommandExecutor(AdbClient client)
+        : this(
+            client ?? throw new ArgumentNullException(nameof(client)),
+            new FleetInstallerHandoff(null),
+            QuestConnectivityProfileManager.CreateWindows())
+    {
+    }
+
+    public OperatorCommandExecutor(
+        AdbClient? client,
+        FleetInstallerHandoff fleetInstaller,
+        QuestConnectivityProfileManager? connectivityProfiles = null)
+    {
+        _client = client;
+        _fleetInstaller = fleetInstaller ??
+            throw new ArgumentNullException(nameof(fleetInstaller));
+        _connectivityProfiles = connectivityProfiles ??
+            QuestConnectivityProfileManager.CreateWindows();
+    }
 
     public async Task<OperatorExecutionResult> ExecuteAsync(
         OperatorCommand command,
         CancellationToken cancellationToken = default,
-        IProgress<OperatorProgress>? progress = null)
+        IProgress<OperatorProgress>? progress = null,
+        Stream? privateInput = null)
     {
         ArgumentNullException.ThrowIfNull(command);
         if (!OperatorMutations.RequiresHeadsetStateChange(command))
         {
-            return await ExecuteCoreAsync(command, cancellationToken, progress).ConfigureAwait(false);
+            return await ExecuteCoreAsync(
+                command,
+                cancellationToken,
+                progress,
+                privateInput).ConfigureAwait(false);
         }
 
         var tracker = new OperatorMutationTracker(command, progress);
@@ -755,7 +1048,11 @@ public sealed class OperatorCommandExecutor(AdbClient client)
         tracker.Pending();
         try
         {
-            var result = await ExecuteCoreAsync(command, cancellationToken, progress).ConfigureAwait(false);
+            var result = await ExecuteCoreAsync(
+                command,
+                cancellationToken,
+                progress,
+                privateInput).ConfigureAwait(false);
             var receipt = tracker.Complete(OperatorMutations.Observe(command, result));
             return result with { MutationReceipt = receipt };
         }
@@ -769,24 +1066,86 @@ public sealed class OperatorCommandExecutor(AdbClient client)
     private async Task<OperatorExecutionResult> ExecuteCoreAsync(
         OperatorCommand command,
         CancellationToken cancellationToken,
-        IProgress<OperatorProgress>? progress)
+        IProgress<OperatorProgress>? progress,
+        Stream? privateInput)
     {
         progress?.Report(new OperatorProgress(
             command.Kind.ToString(),
             StartingMessage(command.Kind),
             0,
             0));
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileStatus)
+        {
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileStatus: _connectivityProfiles.GetStatus(
+                    Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId))));
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileList)
+        {
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileList: _connectivityProfiles.List());
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileImport)
+        {
+            if (!command.OperatorConfirmed)
+                throw new InvalidOperationException(
+                    "Connectivity profile write requires explicit operator confirmation.");
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileMutation: await _connectivityProfiles.ImportAsync(
+                    command,
+                    privateInput,
+                    cancellationToken).ConfigureAwait(false));
+        }
+        if (command.Kind == OperatorCommandKind.ConnectivityProfileRevoke)
+        {
+            if (!command.OperatorConfirmed)
+                throw new InvalidOperationException(
+                    "Connectivity profile revocation requires explicit operator confirmation.");
+            return new OperatorExecutionResult(
+                command,
+                ConnectivityProfileMutation: _connectivityProfiles.Revoke(
+                    Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId)),
+                    command.OperatorConfirmed));
+        }
+        if (command.Kind == OperatorCommandKind.FleetInstallStatus)
+        {
+            return new OperatorExecutionResult(
+                command,
+                FleetInstallerStatus: await _fleetInstaller
+                    .GetStatusAsync(cancellationToken)
+                    .ConfigureAwait(false));
+        }
+        if (command.Kind == OperatorCommandKind.FleetInstall)
+        {
+            if (!command.OperatorConfirmed)
+            {
+                throw new InvalidOperationException(
+                    "Fleet guided installation requires explicit operator confirmation.");
+            }
+            return new OperatorExecutionResult(
+                command,
+                FleetInstallerHandoff: await _fleetInstaller
+                    .InstallAsync(cancellationToken, progress)
+                    .ConfigureAwait(false));
+        }
+
+        var client = _client ??
+            throw new InvalidOperationException(
+                "This operator command requires a configured ADB client.");
         switch (command.Kind)
         {
             case OperatorCommandKind.DiscoverDevices:
                 return new OperatorExecutionResult(
                     command,
-                    Devices: await _client.GetDevicesAsync(cancellationToken).ConfigureAwait(false));
+                    Devices: await client.GetDevicesAsync(cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.ListFiles:
                 return new OperatorExecutionResult(
                     command,
-                    RemoteEntries: await _client.ListRemoteDirectoryAsync(
+                    RemoteEntries: await client.ListRemoteDirectoryAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
                         cancellationToken).ConfigureAwait(false));
@@ -794,7 +1153,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PullFile:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PullFileAsync(
+                    CommandResult: await client.PullFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
@@ -803,7 +1162,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PushFile:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PushFileAsync(
+                    CommandResult: await client.PushFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         Require(command.RemotePath, nameof(command.RemotePath)),
@@ -812,34 +1171,62 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ListPackages:
                 return new OperatorExecutionResult(
                     command,
-                    Packages: await _client.GetThirdPartyPackageNamesAsync(
+                    Packages: await client.GetThirdPartyPackageNamesAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.ExportApk:
                 return new OperatorExecutionResult(
                     command,
-                    ApkExportResult: await _client.ExportSingleApkAsync(
+                    ApkExportResult: await client.ExportSingleApkAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.Overwrite,
                         cancellationToken).ConfigureAwait(false));
 
-            case OperatorCommandKind.InstallApk:
+            case OperatorCommandKind.InspectApk:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.InstallApkAsync(
+                    ApkArtifactInspection: await client.InspectApkAsync(
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.InstallApk:
+                {
+                    var install = await client.InstallInspectedApkAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.InstallOptions,
+                        cancellationToken).ConfigureAwait(false);
+                    return new OperatorExecutionResult(
+                        command,
+                        CommandResult: install.CommandResult,
+                        ApkArtifactInspection: install.Artifact,
+                        InspectedApkInstallResult: install);
+                }
+
+            case OperatorCommandKind.LaunchInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ResolvedAppLaunchResult: await client.LaunchInspectedAppAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    AppRuntimeObservation: await client.ObserveInspectedAppAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InstallApkBundle:
                 {
                     var bundle = command.ApkBundle ??
                         throw new InvalidOperationException("The operator command is missing its APK bundle.");
-                    var result = await _client.InstallApkBundleAsync(
+                    var result = await client.InstallApkBundleAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         bundle.ApkPaths,
                         command.InstallOptions,
@@ -854,7 +1241,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    WifiAdbEnableResult: await _client.EnableWifiAdbAndConnectAsync(
+                    WifiAdbEnableResult: await client.EnableWifiAdbAndConnectAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.WifiPort,
                         cancellationToken,
@@ -864,7 +1251,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    WifiAdbConnectionResult: await _client.ConnectWifiAdbAsync(
+                    WifiAdbConnectionResult: await client.ConnectWifiAdbAsync(
                         Require(command.WifiHost, nameof(command.WifiHost)),
                         command.WifiPort,
                         cancellationToken,
@@ -874,7 +1261,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                 EnsureWifiApproval(command);
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.DisconnectWifiAdbAsync(
+                    CommandResult: await client.DisconnectWifiAdbAsync(
                         Require(command.WifiHost, nameof(command.WifiHost)),
                         command.WifiPort,
                         cancellationToken,
@@ -883,7 +1270,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InstallApkMany:
                 return new OperatorExecutionResult(
                     command,
-                    ParallelApkInstallResult: await _client.InstallApkOnManyWifiDevicesAsync(
+                    ParallelApkInstallResult: await client.InstallApkOnManyWifiDevicesAsync(
                         Require(command.Serials, nameof(command.Serials)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         command.InstallOptions,
@@ -897,7 +1284,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                         throw new InvalidOperationException("The operator command is missing its APK bundle.");
                     return new OperatorExecutionResult(
                         command,
-                        ParallelApkInstallResult: await _client.InstallApkBundleOnManyWifiDevicesAsync(
+                        ParallelApkInstallResult: await client.InstallApkBundleOnManyWifiDevicesAsync(
                             Require(command.Serials, nameof(command.Serials)),
                             bundle.ApkPaths,
                             command.InstallOptions,
@@ -909,7 +1296,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InstallRustyKiosk:
                 return new OperatorExecutionResult(
                     command,
-                    RustyKioskInstallResult: await _client.InstallRustyKioskAsync(
+                    RustyKioskInstallResult: await client.InstallRustyKioskAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.RustyKioskBundle ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk bundle."),
@@ -919,11 +1306,11 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.InspectRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var status = await _client.GetRustyKioskInstallationStatusAsync(
+                    var status = await client.GetRustyKioskInstallationStatusAsync(
                         serial,
                         cancellationToken).ConfigureAwait(false);
                     var operatorResult = status.HostOperatorAvailable
-                        ? await _client.InvokeRustyKioskAsync(
+                        ? await client.InvokeRustyKioskAsync(
                             serial,
                             RustyKioskCommand.Status,
                             cancellationToken: cancellationToken).ConfigureAwait(false)
@@ -937,14 +1324,14 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ProvisionRustyKiosk:
                 return new OperatorExecutionResult(
                     command,
-                    RustyKioskProvisionResult: await _client.ProvisionRustyKioskAsync(
+                    RustyKioskProvisionResult: await client.ProvisionRustyKioskAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InvokeRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var result = await _client.InvokeRustyKioskAsync(
+                    var result = await client.InvokeRustyKioskAsync(
                         serial,
                         command.RustyKioskCommand ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk action."),
@@ -953,7 +1340,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                     return new OperatorExecutionResult(
                         command,
                         RustyKioskOperatorResult: result,
-                        RustyKioskInstallationStatus: await _client.GetRustyKioskInstallationStatusAsync(
+                        RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
                             cancellationToken).ConfigureAwait(false));
                 }
@@ -961,7 +1348,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PullRustyKioskTags:
                 return new OperatorExecutionResult(
                     command,
-                    CommandResult: await _client.PullRustyKioskTagFileAsync(
+                    CommandResult: await client.PullRustyKioskTagFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
@@ -969,11 +1356,11 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.PushRustyKioskTags:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
-                    var transfer = await _client.PushRustyKioskTagFileAsync(
+                    var transfer = await client.PushRustyKioskTagFileAsync(
                         serial,
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false);
-                    var hotload = await _client.InvokeRustyKioskAsync(
+                    var hotload = await client.InvokeRustyKioskAsync(
                         serial,
                         RustyKioskCommand.Reload,
                         cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -981,7 +1368,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
                         command,
                         CommandResult: transfer,
                         RustyKioskOperatorResult: hotload,
-                        RustyKioskInstallationStatus: await _client.GetRustyKioskInstallationStatusAsync(
+                        RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
                             cancellationToken).ConfigureAwait(false));
                 }
@@ -989,13 +1376,13 @@ public sealed class OperatorCommandExecutor(AdbClient client)
             case OperatorCommandKind.ReadQuestControls:
                 return new OperatorExecutionResult(
                     command,
-                    QuestControlStatus: await _client.GetQuestControlStatusAsync(
+                    QuestControlStatus: await client.GetQuestControlStatusAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.SetQuestKeepAwake:
                 {
-                    var keepAwake = await _client.SetQuestKeepAwakeAsync(
+                    var keepAwake = await client.SetQuestKeepAwakeAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.Enabled ??
                             throw new InvalidOperationException("The operator command is missing its keep-awake choice."),
@@ -1009,7 +1396,7 @@ public sealed class OperatorCommandExecutor(AdbClient client)
 
             case OperatorCommandKind.SetQuestPerformance:
                 {
-                    var performance = await _client.SetQuestPerformanceLevelsAsync(
+                    var performance = await client.SetQuestPerformanceLevelsAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         command.CpuLevel,
                         command.GpuLevel,
@@ -1047,6 +1434,10 @@ public sealed class OperatorCommandExecutor(AdbClient client)
 
     private static string StartingMessage(OperatorCommandKind kind) => kind switch
     {
+        OperatorCommandKind.ConnectivityProfileStatus => "Checking the private connectivity profile…",
+        OperatorCommandKind.ConnectivityProfileList => "Listing private connectivity profile IDs…",
+        OperatorCommandKind.ConnectivityProfileImport => "Validating and storing the private connectivity profile…",
+        OperatorCommandKind.ConnectivityProfileRevoke => "Revoking the private connectivity profile…",
         OperatorCommandKind.DiscoverDevices => "Looking for authorized headsets…",
         OperatorCommandKind.ListFiles => "Listing the device folder…",
         OperatorCommandKind.PullFile => "Copying the selected file from the headset…",
@@ -1069,6 +1460,8 @@ public sealed class OperatorCommandExecutor(AdbClient client)
         OperatorCommandKind.ReadQuestControls => "Reading Quest power and performance status…",
         OperatorCommandKind.SetQuestKeepAwake => "Changing Quest keep-awake policy…",
         OperatorCommandKind.SetQuestPerformance => "Changing Quest CPU/GPU overrides…",
+        OperatorCommandKind.FleetInstallStatus => "Checking the trusted Fleet installer release…",
+        OperatorCommandKind.FleetInstall => "Verifying and opening the Fleet guided installer…",
         _ => "Working…"
     };
 }

@@ -63,11 +63,13 @@ Every target receives a result even when another target fails.
 Wi-Fi ADB still requires Developer Mode and prior in-headset authorization.
 The reviewed enable route starts from one selected, ready USB headset:
 
-1. inspect `ip route` on that serial and select the non-loopback `wlan0` IPv4
+1. read one stable nonempty identity on that serial;
+2. inspect `ip route` on that serial and select the non-loopback `wlan0` IPv4
    source address;
-2. run `tcpip <port>` on that same serial;
-3. connect only the validated `<quest-ip>:<port>` endpoint;
-4. require that exact endpoint to appear ready in device discovery.
+3. run `tcpip <port>` on that same serial;
+4. connect only the validated `<quest-ip>:<port>` endpoint;
+5. require that exact endpoint to appear ready in device discovery;
+6. read the same identity property through that endpoint and require equality.
 
 The WPF app asks for confirmation before enable, connect, and disconnect. The
 CLI requires `--confirm-wifi-adb`, which an agent may use only after operator
@@ -112,3 +114,39 @@ Every state-changing operator route follows one state model:
 
 Timed-out wearer prompts remain reconcilable on a later refresh. Read-only
 status commands do not create mutation receipts.
+
+## Optional Fleet Hook
+
+Rusty Fleet interop is disabled by default and remains separate from ordinary
+file operations. Its v1 CLI contract can observe one exact ready serial, list
+one bounded relative path below File Manager's fixed `/sdcard` mapping, or pull
+one confirmed file into an operation-owned directory below an operator-approved
+local root.
+
+The hook rediscovers the exact serial and USB/Wi-Fi transport before and after
+work. Its one remote owner command requires the requested canonical path to be
+exactly below the canonical `/sdcard` root, pins a file descriptor, and
+revalidates that descriptor before bounded output. It rejects stale observation
+digests, traversal, Windows-reserved names, remote symlink/intermediate
+indirection, reparse points, hardlinks, delete-pending output, local collisions,
+oversized streams, directories passed as files, and ambient mutation. Windows
+staging and cleanup use retained handles rather than recursive path traversal.
+Ctrl+C and timeouts terminate the bounded process and clean the same owned
+handles.
+
+The shipped CLI remains `list`/`pull`/read-only-status only. A Core host may
+advertise no-overwrite push only after injecting a current Quest identity and
+Manifold authority verifier. That route locks an exact staged input, checks
+size/SHA-256 from the same stream, creates remote partial/final descriptors
+with no-clobber staging and atomic no-replace hard-link publication, and records
+durable live/recovery state. Filesystems without that primitive fail closed. It has no
+delete, overwrite, multi-target, or ADB daemon route, and recovery never
+retries or cleans remote paths automatically. ADB transport observation is not
+proof of Rusty Fleet device identity. See
+[Optional Rusty Fleet integration](fleet-integration.md).
+
+The operator-approved staging root must also be ACL-restricted to the
+operator/File Manager security context. Fleet treats its operation directories
+and replay tombstones as File Manager-owned state; a separate local principal
+with delete rights could otherwise erase durable replay evidence after the
+owning handles close.

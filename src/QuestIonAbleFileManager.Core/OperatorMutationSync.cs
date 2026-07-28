@@ -163,6 +163,7 @@ internal static class OperatorMutations
     {
         OperatorCommandKind.PushFile or
         OperatorCommandKind.InstallApk or
+        OperatorCommandKind.LaunchInspectedApp or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
         OperatorCommandKind.DisconnectWifiAdb or
@@ -182,7 +183,8 @@ internal static class OperatorMutations
     public static string DesiredState(OperatorCommand command) => command.Kind switch
     {
         OperatorCommandKind.PushFile => $"file present at {command.RemotePath}",
-        OperatorCommandKind.InstallApk => $"APK installed: {Path.GetFileName(command.LocalPath)}",
+        OperatorCommandKind.InstallApk => $"inspected APK installed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
+        OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
         OperatorCommandKind.EnableWifiAdb => $"Wi-Fi ADB enabled on port {command.WifiPort}",
         OperatorCommandKind.DisconnectWifiAdb => "Wi-Fi ADB endpoint disconnected from this PC",
@@ -222,7 +224,9 @@ internal static class OperatorMutations
                         "Waiting for every selected headset to confirm installation."),
             OperatorCommandKind.PushFile => OperatorMutationObservation.Confirmed(
                 "Remote file size matches the local source."),
-            OperatorCommandKind.InstallApk or OperatorCommandKind.InstallApkBundle =>
+            OperatorCommandKind.InstallApk => ObserveInspectedInstall(command, result),
+            OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
+            OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
                     "Android Package Manager completed the install and the installed-package inventory was read back."),
             OperatorCommandKind.EnableWifiAdb => OperatorMutationObservation.Confirmed(
@@ -231,6 +235,53 @@ internal static class OperatorMutations
                 "The endpoint is absent from the refreshed ADB device inventory."),
             _ => OperatorMutationObservation.Confirmed("The effective headset state was read back.")
         };
+    }
+
+    private static OperatorMutationObservation ObserveResolvedLaunch(OperatorExecutionResult result)
+    {
+        var launch = result.ResolvedAppLaunchResult ??
+            throw new InvalidOperationException("Resolved launch returned no structured result.");
+        return launch.ComponentObservedResumed
+            ? OperatorMutationObservation.Confirmed(
+                $"Exact resolved component {launch.Component} was observed resumed.")
+            : OperatorMutationObservation.Pending(
+                $"Resolved component {launch.Component} was not observed resumed.",
+                "Launch was sent, but exact resumed-activity readback is still pending.");
+    }
+
+    private static OperatorMutationObservation ObserveInspectedInstall(
+        OperatorCommand command,
+        OperatorExecutionResult result)
+    {
+        var install = result.InspectedApkInstallResult;
+        var observation = result.AppRuntimeObservation;
+        var artifact = install?.Artifact ?? observation?.Artifact ??
+            throw new InvalidOperationException("Inspected APK install returned no artifact-bound readback.");
+        var installed = install?.Installed ?? observation?.Installed;
+        if (installed is null)
+        {
+            return OperatorMutationObservation.Pending(
+                "The inspected package is not currently installed.",
+                "Waiting for exact package/version/signer readback on the selected serial.");
+        }
+        var exactSerial = string.Equals(command.Serial, installed.Serial, StringComparison.Ordinal);
+        var expected = artifact.Identity;
+        var actual = installed.Identity;
+        var matches = exactSerial && actual is not null &&
+            expected.PackageName == actual.PackageName &&
+            expected.VersionCode == actual.VersionCode &&
+            expected.VersionName == actual.VersionName &&
+            expected.SignerSha256 == actual.SignerSha256 &&
+            artifact.Sha256 == installed.BaseApkSha256 &&
+            artifact.SizeBytes == installed.BaseApkSizeBytes;
+        return matches
+            ? OperatorMutationObservation.Confirmed(
+                $"{actual!.PackageName} versionCode={actual.VersionCode} signer={actual.SignerSha256} " +
+                $"on serial {installed.Serial}; installed base sha256={installed.BaseApkSha256} " +
+                $"size={installed.BaseApkSizeBytes}; artifact sha256={artifact.Sha256} size={artifact.SizeBytes}.")
+            : OperatorMutationObservation.Pending(
+                "Installed identity or base APK bytes do not match the inspected artifact and selected serial.",
+                "Waiting for exact package/version/signer/base-APK digest and size readback on the selected serial.");
     }
 
     private static OperatorMutationObservation ObserveKioskInstall(OperatorExecutionResult result)
@@ -273,12 +324,25 @@ internal static class OperatorMutations
         var status = result.QuestControlStatus ??
             throw new InvalidOperationException("Keep-awake returned no effective-state readback.");
         var requested = command.Enabled == true;
-        return status.KeepAwakeActive == requested
+        var matches = requested
+            ? status.StayOn &&
+              string.Equals(status.Wakefulness, "Awake", StringComparison.OrdinalIgnoreCase) &&
+              (string.Equals(status.DisplayState, "ON", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status.DisplayState, "ON_SUSPEND", StringComparison.OrdinalIgnoreCase)) &&
+              string.Equals(status.ProximityState.Trim(), "CLOSE", StringComparison.OrdinalIgnoreCase) &&
+              status.ProximityHoldDurationMilliseconds == command.DurationMilliseconds &&
+              status.ProximityHoldRemainingMilliseconds is > 0
+            : !status.StayOn &&
+              status.AutoSleepDisabled != true &&
+              !string.Equals(status.ProximityState.Trim(), "CLOSE", StringComparison.OrdinalIgnoreCase);
+        return matches
             ? OperatorMutationObservation.Confirmed(
-                $"Keep-awake readback is {(status.KeepAwakeActive ? "active" : "inactive")}.")
+                requested
+                    ? "Stay-on, wake/display, and the exact bounded proximity hold are effective."
+                    : "Normal stay-on and proximity behavior is restored.")
             : OperatorMutationObservation.Pending(
-                $"Keep-awake currently reads {(status.KeepAwakeActive ? "active" : "inactive")}.",
-                "The requested power policy has not appeared in effective-state readback.");
+                "One or more independent power-policy readbacks do not match the request.",
+                "The requested power policy has not appeared in complete effective-state readback.");
     }
 
     private static OperatorMutationObservation ObservePerformance(

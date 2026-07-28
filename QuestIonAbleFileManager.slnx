@@ -1,11 +1,18 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/QuestIonAbleFileManager.Api/QuestIonAbleFileManager.Api.csproj" />
     <Project Path="src/QuestIonAbleFileManager.App/QuestIonAbleFileManager.App.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Cli/QuestIonAbleFileManager.Cli.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj" />
+    <Project Path="src/QuestIonAbleFileManager.FleetKioskV2Provider/QuestIonAbleFileManager.FleetKioskV2Provider.csproj" />
+    <Project Path="src/QuestIonAbleFileManager.FleetAwakeProvider/QuestIonAbleFileManager.FleetAwakeProvider.csproj" />
+    <Project Path="src/QuestIonAbleFileManager.FleetConnectivityProvider/QuestIonAbleFileManager.FleetConnectivityProvider.csproj" />
     <Project Path="src/QuestIonAbleFileManager.Setup/QuestIonAbleFileManager.Setup.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/QuestIonAbleFileManager.Core.Tests/QuestIonAbleFileManager.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/FleetInstallerLifecycle/QuestIonAbleFileManager.FleetInstallerLifecycle.csproj" />
   </Folder>
 </Solution>

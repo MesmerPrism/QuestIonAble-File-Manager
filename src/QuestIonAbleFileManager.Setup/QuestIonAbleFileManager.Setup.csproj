@@ -10,4 +10,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\assets\branding\QuestIonAbleFileManager.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj" />
+  </ItemGroup>
 </Project>

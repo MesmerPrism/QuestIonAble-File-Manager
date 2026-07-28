@@ -7,7 +7,7 @@ footer uses one restrained progress bar beside the existing status text:
 
 - indeterminate for discovery, directory/package listing, file transfer,
   single-device install, bundle install, export, and hashing;
-- determinate for the three owned Wi-Fi enable phases; and
+- determinate for the five owned Wi-Fi enable phases; and
 - determinate by completed target count for parallel installation.
 
 The bar uses the existing warm-neutral palette and native WPF animation. It is
@@ -35,7 +35,7 @@ per-target evidence used by the GUI.
 
 | Operation | Indicator | Unit |
 | --- | --- | --- |
-| Wi-Fi enable and connect | Determinate | Address inspection, transport enablement, verified connection |
+| Wi-Fi enable and connect | Determinate | USB identity, address inspection, transport enablement, endpoint connection, network identity |
 | Parallel APK install | Determinate | Headset targets completed |
 | Parallel APK bundle install | Determinate | Headset targets completed |
 | Other ADB operations | Indeterminate | No trustworthy total exposed |
@@ -48,7 +48,7 @@ the app knows how much time remains.
 
 - Unit tests clamp determinate percentages and preserve an explicit
   indeterminate state.
-- Wi-Fi tests require the exact `0, 1, 2, 3` phase sequence.
+- Wi-Fi tests require the exact `0, 1, 2, 3, 4, 5` phase sequence.
 - Parallel tests require progress from zero through the exact target count,
   including a partial-failure run.
 - Executor tests prove the optional shared progress adapter reaches core work.

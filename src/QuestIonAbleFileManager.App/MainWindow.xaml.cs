@@ -1,6 +1,7 @@
 using System.IO;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -13,7 +14,8 @@ namespace QuestIonAbleFileManager.App;
 public partial class MainWindow : Window
 {
     private readonly AdbClient? _client;
-    private readonly OperatorCommandExecutor? _operator;
+    private readonly OperatorCommandExecutor _operator;
+    private readonly string? _fleetConfigurationError;
     private readonly ObservableCollection<WifiInstallTargetChoice> _wifiInstallTargets = [];
     private RustyKioskBundle? _rustyKioskBundle;
     private RustyKioskInstallationStatus? _rustyKioskInstallation;
@@ -39,18 +41,41 @@ public partial class MainWindow : Window
         KioskTagFilterBox.SelectedIndex = 0;
         SetRustyKioskBundle(RustyKioskBundleLocator.TryFind());
 
+        FleetInstallerHandoff fleetInstaller;
+        try
+        {
+            fleetInstaller = FleetInstallerHandoff.FromEnvironment();
+        }
+        catch (FleetInstallerException exception)
+        {
+            _fleetConfigurationError = exception.Message;
+            fleetInstaller = new FleetInstallerHandoff(null);
+        }
+        catch
+        {
+            _fleetConfigurationError =
+                "The optional Fleet installer configuration is incomplete or invalid.";
+            fleetInstaller = new FleetInstallerHandoff(null);
+        }
+
         var adbPath = AdbLocator.Find();
         if (adbPath is null)
         {
             AdbPathText.Text = "ADB not found";
             StatusText.Text = "ADB is unavailable. Rusty Kiosk's direct link can still be used after headset setup.";
             RefreshDevicesButton.IsEnabled = false;
-            return;
         }
-
-        _client = new AdbClient(adbPath);
-        _operator = new OperatorCommandExecutor(_client);
-        AdbPathText.Text = $"ADB: {adbPath}";
+        else
+        {
+            _client = new AdbClient(adbPath);
+            AdbPathText.Text = $"ADB: {adbPath}";
+        }
+        _operator = new OperatorCommandExecutor(_client, fleetInstaller);
+        if (_fleetConfigurationError is not null)
+        {
+            FleetInstallerStatusText.Text =
+                $"Fleet installer configuration is invalid: {_fleetConfigurationError}";
+        }
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs eventArgs)
@@ -63,6 +88,299 @@ public partial class MainWindow : Window
 
     private async void OnRefreshDevices(object sender, RoutedEventArgs eventArgs) =>
         await RunBusyAsync(() => RefreshDevicesAsync(), "Refreshing devices…");
+
+    private async void OnRefreshFleetInstaller(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () =>
+            {
+                if (_fleetConfigurationError is not null)
+                {
+                    throw new FleetInstallerException(
+                        "fleet_installer_configuration_invalid",
+                        _fleetConfigurationError);
+                }
+
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.FleetInstallStatus());
+                var status = execution.FleetInstallerStatus ??
+                    throw new InvalidOperationException(
+                        "Fleet installer status did not return a receipt.");
+                FleetInstallerStatusText.Text = status.Configured
+                    ? $"Trusted release: {status.Product} {status.Version} ({status.Channel}); " +
+                      $"source: {status.SourceKind}; status: {status.Status}; " +
+                      $"last handoff: {status.LastOutcome ?? "none"}."
+                    : "Fleet installer handoff is optional and is not configured.";
+                StatusText.Text = "Fleet installer status checked.";
+            },
+            "Checking the trusted Fleet installer release…");
+
+    private async void OnInstallFleet(object sender, RoutedEventArgs eventArgs)
+    {
+        if (MessageBox.Show(
+                this,
+                "Verify and open the Fleet-owned guided installer?\n\n" +
+                "File Manager will accept only the configured signed Pages metadata and " +
+                "its exact immutable GitHub Release Setup asset, verify size, hash, and " +
+                "Windows signer, check Fleet's plan, and then open the visible installer. " +
+                "File Manager does not configure devices or Wi-Fi.",
+                "Confirm Rusty Fleet installation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                if (_fleetConfigurationError is not null)
+                {
+                    throw new FleetInstallerException(
+                        "fleet_installer_configuration_invalid",
+                        _fleetConfigurationError);
+                }
+
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.FleetInstall(operatorConfirmed: true));
+                var receipt = execution.FleetInstallerHandoff ??
+                    throw new InvalidOperationException(
+                        "Fleet installer handoff did not return a receipt.");
+                FleetInstallerStatusText.Text =
+                    $"Verified Fleet {receipt.Version} ({receipt.Channel}); " +
+                    $"guided installer exit code: {receipt.GuidedInstallerExitCode}; " +
+                    $"private staging cleaned: {receipt.CleanupCompleted}.";
+                StatusText.Text = "Fleet guided installer handoff completed.";
+            },
+            "Verifying the Fleet release and opening its guided installer…");
+    }
+
+    private void OnChooseConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a protected Fleet connectivity profile",
+            Filter = "JSON profile (*.json)|*.json",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) == true)
+            ConnectivityProfilePathBox.Text = dialog.FileName;
+    }
+
+    private async void OnImportConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        if (string.IsNullOrWhiteSpace(ConnectivityProfilePathBox.Text))
+        {
+            ShowInputMessage("Choose one protected connectivity profile JSON file first.");
+            return;
+        }
+
+        var replacing = ReplaceConnectivityProfileBox.IsChecked == true;
+        var confirmation = replacing
+            ? "Validate this private file and replace the existing File Manager-owned " +
+              "connectivity profile with the same Fleet device ID?"
+            : "Validate this private file and create a File Manager-owned connectivity profile?";
+        if (MessageBox.Show(
+                this,
+                confirmation + "\n\nThe private serial, endpoint, and pairing code remain in " +
+                "the current Windows user's Credential Manager and are not displayed or sent to Fleet.",
+                replacing ? "Confirm connectivity profile replacement" : "Confirm connectivity profile creation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                var command = OperatorCommands.ImportQuestConnectivityProfileFile(
+                    ConnectivityProfilePathBox.Text,
+                    replaceExisting: replacing,
+                    operatorConfirmed: true);
+                var execution = await ExecuteOperatorAsync(command);
+                var receipt = execution.ConnectivityProfileMutation ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile import did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                ConnectivityProfilePathBox.Clear();
+                ReplaceConnectivityProfileBox.IsChecked = false;
+                await RefreshConnectivityProfilesAsync(receipt.DeviceId);
+            },
+            "Validating and storing the private connectivity profile…");
+    }
+
+    private async void OnRefreshConnectivityProfiles(
+        object sender,
+        RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            () => RefreshConnectivityProfilesAsync(),
+            "Refreshing private connectivity profile IDs…");
+
+    private async void OnCheckConnectivityProfileStatus(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        if (ConnectivityProfilesBox.SelectedItem is not QuestConnectivityProfileListEntry selected)
+        {
+            ShowInputMessage("Select one Fleet device ID to check.");
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.QuestConnectivityProfileStatus(
+                        selected.DeviceId));
+                var receipt = execution.ConnectivityProfileStatus ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile status did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+            },
+            "Checking the selected private connectivity profile…");
+    }
+
+    private async void OnSaveEnteredKioskLinkForFleet(
+        object sender,
+        RoutedEventArgs eventArgs)
+    {
+        byte[]? privateDocument = null;
+        try
+        {
+            var usbDevice = RequireReadyUsbDevice();
+            privateDocument = QuestConnectivityProfileEnrollmentDocument.Create(
+                ConnectivityFleetDeviceIdBox.Text,
+                usbDevice.Serial,
+                KioskDirectEndpointBox.Text,
+                KioskDirectPairingCodeBox.Password);
+            var deviceId = ConnectivityFleetDeviceIdBox.Text;
+
+            await RunBusyAsync(
+                async () =>
+                {
+                    bool Confirm(QuestConnectivityProfileWriteStage stage)
+                    {
+                        var replacing = stage == QuestConnectivityProfileWriteStage.Replace;
+                        var message = replacing
+                            ? $"A connectivity profile already exists for {deviceId}. " +
+                              "Replace that exact File Manager-owned record?\n\nNo write " +
+                              "has occurred yet. The private fields will remain hidden."
+                            : $"Create the File Manager-owned connectivity profile for {deviceId}?\n\n" +
+                              "The exact selected USB serial and entered Kiosk endpoint/pairing " +
+                              "code will be validated in memory and stored in the current Windows " +
+                              "user's Credential Manager. This request will not replace an " +
+                              "existing profile without a second confirmation.";
+                        return MessageBox.Show(
+                            this,
+                            message,
+                            replacing
+                                ? "Confirm connectivity profile replacement"
+                                : "Confirm new connectivity profile",
+                            MessageBoxButton.OKCancel,
+                            MessageBoxImage.Warning) == MessageBoxResult.OK;
+                    }
+
+                    var receipt = await QuestConnectivityProfileWriteWorkflow.ExecuteAsync(
+                        Confirm,
+                        async replace =>
+                        {
+                            await using var privateInput = new MemoryStream(
+                                privateDocument,
+                                writable: false);
+                            var execution = await ExecuteOperatorAsync(
+                                OperatorCommands.ImportQuestConnectivityProfileStdin(
+                                    replaceExisting: replace,
+                                    operatorConfirmed: true),
+                                privateInput);
+                            return execution.ConnectivityProfileMutation ??
+                                throw new InvalidOperationException(
+                                    "Connectivity profile import did not return a receipt.");
+                        });
+                    if (receipt is null)
+                    {
+                        ConnectivityProfileStatusText.Text =
+                            $"{deviceId}: no profile write performed.";
+                        return;
+                    }
+                    ConnectivityProfileStatusText.Text =
+                        $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                    await RefreshConnectivityProfilesAsync(receipt.DeviceId);
+                },
+                "Validating and storing the entered Kiosk direct link…");
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            QuestConnectivityProfileManagementException or
+            InvalidOperationException)
+        {
+            ShowInputMessage(exception.Message);
+        }
+        finally
+        {
+            if (privateDocument is not null)
+                CryptographicOperations.ZeroMemory(privateDocument);
+            KioskDirectEndpointBox.Clear();
+            KioskDirectPairingCodeBox.Clear();
+        }
+    }
+
+    private async Task RefreshConnectivityProfilesAsync(string? preferredDeviceId = null)
+    {
+        preferredDeviceId ??=
+            (ConnectivityProfilesBox.SelectedItem as QuestConnectivityProfileListEntry)?.DeviceId;
+        var execution = await ExecuteOperatorAsync(
+            OperatorCommands.ListQuestConnectivityProfiles());
+        var receipt = execution.ConnectivityProfileList ??
+            throw new InvalidOperationException(
+                "Connectivity profile list did not return a receipt.");
+        ConnectivityProfilesBox.ItemsSource = receipt.Profiles;
+        ConnectivityProfilesBox.SelectedItem = receipt.Profiles.FirstOrDefault(profile =>
+            string.Equals(profile.DeviceId, preferredDeviceId, StringComparison.Ordinal)) ??
+            receipt.Profiles.FirstOrDefault();
+        ConnectivityProfileStatusText.Text = receipt.Profiles.Count == 0
+            ? "No File Manager-owned Fleet connectivity profiles are enrolled."
+            : $"{receipt.Profiles.Count} connectivity profile ID" +
+              $"{(receipt.Profiles.Count == 1 ? string.Empty : "s")} found; " +
+              $"{receipt.Profiles.Count(profile => profile.State == "invalid")} invalid.";
+    }
+
+    private async void OnRevokeConnectivityProfile(object sender, RoutedEventArgs eventArgs)
+    {
+        if (ConnectivityProfilesBox.SelectedItem is not QuestConnectivityProfileListEntry selected)
+        {
+            ShowInputMessage("Select one Fleet device ID to revoke.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Revoke the File Manager-owned connectivity profile for {selected.DeviceId}?\n\n" +
+                "This removes the private Credential Manager record. It does not change the " +
+                "headset or disconnect ADB.",
+                "Confirm connectivity profile revocation",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () =>
+            {
+                var execution = await ExecuteOperatorAsync(
+                    OperatorCommands.RevokeQuestConnectivityProfile(
+                        selected.DeviceId,
+                        operatorConfirmed: true));
+                var receipt = execution.ConnectivityProfileMutation ??
+                    throw new InvalidOperationException(
+                        "Connectivity profile revocation did not return a receipt.");
+                ConnectivityProfileStatusText.Text =
+                    $"{receipt.DeviceId}: {receipt.State} ({receipt.ReasonCode}).";
+                await RefreshConnectivityProfilesAsync();
+            },
+            "Revoking the private connectivity profile…");
+    }
 
     private void OnDeviceSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
@@ -419,7 +737,7 @@ public partial class MainWindow : Window
         var confirmation = MessageBox.Show(
             this,
             $"Enable Wi-Fi ADB on the selected USB headset using TCP port {port}?\n\n" +
-            "The app will read its Wi-Fi address, change its debugging transport, and connect from this PC.",
+            "The app will bind its device identity, read its Wi-Fi address, change its debugging transport, connect from this PC, and verify the same headset.",
             "Confirm Wi-Fi ADB change",
             MessageBoxButton.OKCancel,
             MessageBoxImage.Warning);
@@ -683,7 +1001,7 @@ public partial class MainWindow : Window
         {
             endpoint = RustyKioskDirectEndpoint.Parse(
                 KioskDirectEndpointBox.Text,
-                KioskDirectPairingCodeBox.Text);
+                KioskDirectPairingCodeBox.Password);
         }
         catch (ArgumentException exception)
         {
@@ -1292,9 +1610,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!int.TryParse(KeepAwakeDurationBox.Text, out var duration) || duration is < 60_000 or > 86_400_000)
+        if (!int.TryParse(KeepAwakeDurationBox.Text, out var duration) ||
+            duration is < QuestAwakeContract.MinimumHoldDurationMilliseconds
+                or > QuestAwakeContract.MaximumHoldDurationMilliseconds)
         {
-            ShowInputMessage("Keep-awake duration must be a whole number from 60000 through 86400000 milliseconds.");
+            ShowInputMessage("Keep-awake duration must be a whole number from 60000 through 28800000 milliseconds (eight hours).");
             return;
         }
 
@@ -1428,9 +1748,13 @@ public partial class MainWindow : Window
 
         HeadsetBatteryText.Text = $"Headset battery: {status.HeadsetBatteryLabel}";
         ControllerBatteryText.Text = $"Controllers: {status.ControllerBatteryLabel}";
+        var hold = status.ProximityHoldDurationMilliseconds is int duration &&
+                   status.ProximityHoldRemainingMilliseconds is int remaining
+            ? $"{duration} ms hold, {remaining} ms remaining"
+            : "no bounded hold observed";
         KeepAwakeStatusText.Text =
-            $"Keep awake: {(status.KeepAwakeActive ? "active" : "not active")}; " +
-            $"display {status.DisplayState}; proximity {status.ProximityState}";
+            $"Stay-on {(status.StayOn ? "active" : "inactive")}; " +
+            $"{status.Wakefulness}/{status.DisplayState}; proximity {status.ProximityState}; {hold}";
         PerformanceStatusText.Text =
             $"CPU/GPU: {DisplayPerformanceLevel(status.CpuLevel)} / {DisplayPerformanceLevel(status.GpuLevel)}";
     }
@@ -1565,13 +1889,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private OperatorCommandExecutor RequireOperator() =>
-        _operator ?? throw new InvalidOperationException(
-            "ADB was not found. Install Android Platform Tools or configure QUESTIONABLE_FILE_MANAGER_ADB.");
+    private OperatorCommandExecutor RequireOperator() => _operator;
 
-    private async Task<OperatorExecutionResult> ExecuteOperatorAsync(OperatorCommand command)
+    private async Task<OperatorExecutionResult> ExecuteOperatorAsync(
+        OperatorCommand command,
+        Stream? privateInput = null)
     {
-        var execution = await RequireOperator().ExecuteAsync(command, progress: _activeProgress);
+        var execution = await RequireOperator().ExecuteAsync(
+            command,
+            progress: _activeProgress,
+            privateInput: privateInput);
         if (execution.MutationReceipt is { } receipt)
         {
             _lastMutationReceipt = receipt;
@@ -1692,7 +2019,7 @@ public partial class MainWindow : Window
             OperationProgressBar.ToolTip = null;
             OperationProgressBar.Visibility = Visibility.Collapsed;
             Mouse.OverrideCursor = null;
-            MainTabs.IsEnabled = _client is not null;
+            MainTabs.IsEnabled = true;
             RefreshDevicesButton.IsEnabled = _client is not null;
             _busy = false;
         }

@@ -27,11 +27,19 @@ param(
     [string]$ExpectedKioskSourceRevision,
 
     [string]$ApkSignerPath,
+    [string]$FleetInstallerLifecycleInputPath,
     [switch]$SkipBuildAndTest
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+& (Join-Path $repoRoot 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+    -RequireOfficialRelease `
+    -ExpectedVersion $Version
+if ($LASTEXITCODE -ne 0) {
+    throw 'Fleet installer checked-in release configuration validation failed.'
+}
+
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts'))
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $OutputDirectory.StartsWith($artifactsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -99,15 +107,88 @@ foreach ($directory in @($appPublish, $cliPublish, $combined)) {
 if ($LASTEXITCODE -ne 0) { throw 'Portable app publish failed.' }
 & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Cli\QuestIonAbleFileManager.Cli.csproj') `
     --configuration Release --runtime win-x64 --self-contained true `
-    -p:PublishSingleFile=true -p:Version=$Version --output $cliPublish
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:DebugType=None -p:DebugSymbols=false -p:PublishTrimmed=false `
+    -p:Version=$Version --output $cliPublish
 if ($LASTEXITCODE -ne 0) { throw 'Portable CLI publish failed.' }
 
 # Keep the former executable name as a migration alias for existing scripts.
 Copy-Item -LiteralPath (Join-Path $cliPublish 'questionable-file-manager.exe') `
     -Destination (Join-Path $cliPublish 'meta-quest-file-manager.exe') -Force
+$providerValidationDirectory = Join-Path $repoRoot 'artifacts\fleet-kiosk-v2-provider-release-validation'
+& (Join-Path $repoRoot 'tools\Test-FleetKioskV2ProviderArtifact.ps1') `
+    -OutputDirectory $providerValidationDirectory `
+    -Version $Version
+if ($LASTEXITCODE -ne 0) { throw 'Fleet Kiosk v2 provider artifact validation failed.' }
+Copy-Item -LiteralPath (
+    Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe') `
+    -Destination $OutputDirectory -Force
+Copy-Item -LiteralPath (
+    Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json') `
+    -Destination $OutputDirectory -Force
+$awakeProviderValidationDirectory =
+    Join-Path $repoRoot 'artifacts\fleet-awake-provider-release-validation'
+& (Join-Path $repoRoot 'tools\Test-FleetAwakeProviderArtifact.ps1') `
+    -OutputDirectory $awakeProviderValidationDirectory `
+    -Version $Version
+if ($LASTEXITCODE -ne 0) { throw 'Fleet awake provider artifact validation failed.' }
+Copy-Item -LiteralPath (
+    Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.receipt.json') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe') `
+    -Destination $OutputDirectory -Force
+Copy-Item -LiteralPath (
+    Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.receipt.json') `
+    -Destination $OutputDirectory -Force
+$connectivityProviderValidationDirectory =
+    Join-Path $repoRoot 'artifacts\fleet-connectivity-provider-release-validation'
+& (Join-Path $repoRoot 'tools\Test-FleetConnectivityProviderArtifact.ps1') `
+    -OutputDirectory $connectivityProviderValidationDirectory `
+    -Version $Version
+if ($LASTEXITCODE -ne 0) { throw 'Fleet connectivity provider artifact validation failed.' }
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.receipt.json') `
+    -Destination $cliPublish -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $OutputDirectory -Force
+Copy-Item -LiteralPath (
+    Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.receipt.json') `
+    -Destination $OutputDirectory -Force
 Copy-Item -Path (Join-Path $appPublish '*') -Destination $combined -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $cliPublish 'questionable-file-manager.exe') -Destination $combined -Force
 Copy-Item -LiteralPath (Join-Path $cliPublish 'meta-quest-file-manager.exe') -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-kiosk-v2-provider.exe') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-kiosk-v2-provider.receipt.json') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-awake-provider.exe') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-awake-provider.receipt.json') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.exe') `
+    -Destination $combined -Force
+Copy-Item -LiteralPath (
+    Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.receipt.json') `
+    -Destination $combined -Force
 Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory 'QuestIonAbleFileManager-win-x64.zip')
 Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory 'questionable-file-manager-cli-win-x64.zip')
 
@@ -128,6 +209,19 @@ if ($LASTEXITCODE -ne 0) { throw 'MSIX package build failed.' }
     -TimestampUrl $SetupTimestampUrl
 if ($LASTEXITCODE -ne 0) { throw 'Guided setup publish failed.' }
 
+if (-not [string]::IsNullOrWhiteSpace(
+        $FleetInstallerLifecycleInputPath)) {
+    & (Join-Path $repoRoot `
+        'tools\Test-FleetInstallerHandoffLifecycle.ps1') `
+        -InputPath $FleetInstallerLifecycleInputPath `
+        -QfmSetupExecutablePath (
+            Join-Path $OutputDirectory `
+                'QuestIonAbleFileManager-Setup.exe')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Fleet installer handoff lifecycle validation failed.'
+    }
+}
+
 # Releases keep byte-identical former-name aliases so 0.3.x App Installer
 # subscriptions and pinned automation download URLs migrate without breaking.
 $compatibilityAliases = [ordered]@{
@@ -146,6 +240,9 @@ foreach ($entry in $compatibilityAliases.GetEnumerator()) {
 & (Join-Path $PSScriptRoot 'Test-BrandAssets.ps1') -Executable @(
     (Join-Path $appPublish 'QuestIonAbleFileManager.exe'),
     (Join-Path $cliPublish 'questionable-file-manager.exe'),
+    (Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe'),
+    (Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe'),
+    (Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe'),
     (Join-Path $OutputDirectory 'QuestIonAbleFileManager-Setup.exe')
 )
 if ($LASTEXITCODE -ne 0) { throw 'Brand asset validation failed.' }

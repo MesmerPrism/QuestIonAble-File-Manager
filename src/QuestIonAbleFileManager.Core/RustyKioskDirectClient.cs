@@ -147,11 +147,27 @@ public sealed class RustyKioskDirectClient
                 string.Equals(schema.GetString(), RustyKioskContract.ResultSchema, StringComparison.Ordinal))
             {
                 var parsed = RustyKioskOperatorResult.Parse(result.RootElement.GetRawText());
+                if (!string.Equals(
+                        parsed.RequestId,
+                        requestId,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "Rusty Kiosk returned a result for a different request.");
+                }
+                if (parsed.Command != command)
+                {
+                    throw new InvalidDataException(
+                        "Rusty Kiosk returned a result for a different typed command.");
+                }
                 if (!parsed.Accepted)
                 {
                     throw new InvalidOperationException(parsed.Message);
                 }
-                return parsed;
+                if (parsed.Completed)
+                {
+                    return parsed;
+                }
             }
 
             await Task.Delay(200, cancellationToken).ConfigureAwait(false);

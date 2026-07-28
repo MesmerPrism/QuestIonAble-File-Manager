@@ -11,6 +11,17 @@ internal static class CliApplication
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    private static readonly JsonSerializerOptions IntegrationJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+    private static readonly JsonSerializerOptions FleetJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        WriteIndented = true
+    };
 
     public static async Task<int> RunAsync(string[] arguments)
     {
@@ -26,6 +37,18 @@ internal static class CliApplication
             if (command == "kiosk-direct")
             {
                 return await RunKioskDirectAsync(arguments);
+            }
+            if (command == "integration")
+            {
+                return await RunIntegrationAsync(arguments);
+            }
+            if (command == "fleet")
+            {
+                return await RunFleetAsync(arguments);
+            }
+            if (command == "connectivity-profile")
+            {
+                return await RunConnectivityProfileAsync(arguments);
             }
 
             var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
@@ -56,6 +79,369 @@ internal static class CliApplication
             return 1;
         }
     }
+
+    private static async Task<int> RunConnectivityProfileAsync(string[] arguments)
+    {
+        var errorSchema = arguments.Length > 1
+            ? arguments[1] switch
+            {
+                "status" => QuestConnectivityProfileManagementContract.StatusSchema,
+                "list" => QuestConnectivityProfileManagementContract.ListSchema,
+                _ => QuestConnectivityProfileManagementContract.MutationSchema
+            }
+            : QuestConnectivityProfileManagementContract.MutationSchema;
+        try
+        {
+            var command = OperatorCommands.ParseConnectivityProfileCliArguments(arguments);
+            var executor = new OperatorCommandExecutor(
+                client: null,
+                new FleetInstallerHandoff(null),
+                QuestConnectivityProfileManager.CreateWindows());
+            await using var stdin = command.ConnectivityProfileInputKind ==
+                                    QuestConnectivityProfileInputKind.StandardInput
+                ? Console.OpenStandardInput()
+                : null;
+            var result = await executor.ExecuteAsync(
+                command,
+                privateInput: stdin).ConfigureAwait(false);
+            WriteFleetJson<object?>(command.Kind switch
+            {
+                OperatorCommandKind.ConnectivityProfileStatus =>
+                    result.ConnectivityProfileStatus,
+                OperatorCommandKind.ConnectivityProfileList =>
+                    result.ConnectivityProfileList,
+                OperatorCommandKind.ConnectivityProfileImport or
+                    OperatorCommandKind.ConnectivityProfileRevoke =>
+                    result.ConnectivityProfileMutation,
+                _ => null
+            });
+            return 0;
+        }
+        catch (QuestConnectivityProfileManagementException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = exception.Status,
+                reason_code = exception.Code,
+                rollback_state = exception.RollbackState,
+                message = exception.Message
+            });
+            return exception.Status == "rejected" ? 2 : 1;
+        }
+        catch (ArgumentException)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "rejected",
+                reason_code = "profileCommandInvalid",
+                message =
+                    "Use one exact connectivity-profile route; private values belong only in --file or --stdin JSON."
+            });
+            return 2;
+        }
+        catch
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                reason_code = "profileInternalError",
+                message = "Connectivity profile management failed without exposing private details."
+            });
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunFleetAsync(string[] arguments)
+    {
+        var errorSchema = arguments.Length > 1 &&
+                          string.Equals(arguments[1], "status", StringComparison.Ordinal)
+            ? FleetInstallerContract.StatusSchema
+            : FleetInstallerContract.HandoffSchema;
+        using var cancellationSource = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellationSource.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            var command = OperatorCommands.ParseFleetCliArguments(arguments);
+
+            var executor = new OperatorCommandExecutor(
+                client: null,
+                FleetInstallerHandoff.FromEnvironment());
+            var result = await executor.ExecuteAsync(
+                command,
+                cancellationSource.Token).ConfigureAwait(false);
+            WriteFleetJson<object?>(command.Kind == OperatorCommandKind.FleetInstallStatus
+                ? result.FleetInstallerStatus
+                : result.FleetInstallerHandoff);
+            return 0;
+        }
+        catch (FleetInstallerException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                error = exception.Code,
+                message = exception.Message
+            });
+            return 2;
+        }
+        catch (ArgumentException exception)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "rejected",
+                error = "fleet_command_invalid",
+                message = exception.Message
+            });
+            return 2;
+        }
+        catch (OperationCanceledException)
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "cancelled",
+                error = "fleet_installer_cancelled",
+                message = "The Fleet installer handoff was cancelled."
+            });
+            return 1;
+        }
+        catch
+        {
+            WriteFleetJson(new
+            {
+                schema = errorSchema,
+                status = "failed",
+                error = "fleet_installer_internal_error",
+                message = "The Fleet installer handoff failed without exposing local details."
+            });
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    private static async Task<int> RunIntegrationAsync(string[] arguments)
+    {
+        FleetIntegrationAdapter? adapter = null;
+        using var cancellationSource = new CancellationTokenSource();
+        ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            cancellationSource.Cancel();
+        };
+        Console.CancelKeyPress += cancelHandler;
+        try
+        {
+            if (!HasFlag(arguments, "--json"))
+            {
+                throw FleetIntegrationException.Input(
+                    "json_required",
+                    "Integration routes require --json and emit exactly one final JSON document.");
+            }
+
+            var action = RequireAction(arguments, "integration");
+            if (string.Equals(action, "kiosk-v2-catalog", StringComparison.Ordinal))
+            {
+                await using var input = Console.OpenStandardInput();
+                await using var output = Console.OpenStandardOutput();
+                return await RustyKioskV2CatalogSubprocessHost
+                    .CreateWindows()
+                    .RunAsync(arguments, input, output, cancellationSource.Token);
+            }
+
+            var settings = FleetIntegrationSettings.FromEnvironment(GetOption(arguments, "--adb"));
+            var client = settings.AdbPath is null ? null : new AdbClient(settings.AdbPath);
+            adapter = new FleetIntegrationAdapter(settings, client);
+            var requestedVersion = GetOption(arguments, "--contract-version");
+            if (requestedVersion is not null &&
+                !string.Equals(requestedVersion, FleetIntegrationContract.Version, StringComparison.Ordinal))
+            {
+                throw FleetIntegrationException.Unsupported(
+                    $"Unsupported integration contract version '{requestedVersion}'.");
+            }
+
+            switch (action)
+            {
+                case "capabilities":
+                    WriteIntegrationJson(FleetIntegrationResponse.ForCapability(adapter.GetCapabilities()));
+                    return 0;
+                case "observe":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var observation = await adapter.ObserveAsync(
+                            RequireOption(arguments, "--serial"),
+                            cancellationSource.Token);
+                        WriteIntegrationJson(FleetIntegrationResponse.ForObservation(capability, observation));
+                        return 0;
+                    }
+                case "invoke":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var requestBytes = await ReadBoundedRequestAsync(
+                            RequireOption(arguments, "--request"),
+                            cancellationSource.Token);
+                        var request = FleetIntegrationOperationRequest.Parse(requestBytes);
+                        var result = await adapter.InvokeAsync(request, cancellationSource.Token);
+                        WriteIntegrationJson(FleetIntegrationResponse.ForResult(capability, result));
+                        return 0;
+                    }
+                case "status":
+                    {
+                        var capability = adapter.GetCapabilities();
+                        var status = adapter.GetOperationStatus(
+                            RequireOption(arguments, "--operation"));
+                        WriteIntegrationJson(FleetIntegrationResponse.ForOperationStatus(capability, status));
+                        return 0;
+                    }
+                default:
+                    throw FleetIntegrationException.Input(
+                        "integration_action_unknown",
+                        $"Unknown integration action '{action}'.");
+            }
+        }
+        catch (FleetIntegrationException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                exception.Status,
+                exception.Code,
+                exception.Message,
+                exception.Retryable,
+                TryGetCapability(adapter)));
+            return IntegrationExitCode(exception.Status);
+        }
+        catch (OperationCanceledException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Cancelled,
+                "operation_cancelled",
+                exception.Message.Length == 0
+                    ? "The integration operation was cancelled."
+                    : exception.Message,
+                retryable: true,
+                TryGetCapability(adapter)));
+            return IntegrationExitCode(FleetIntegrationStatus.Cancelled);
+        }
+        catch (TimeoutException exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Failed,
+                "operation_timeout",
+                exception.Message,
+                retryable: true,
+                TryGetCapability(adapter)));
+            return 1;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            FileNotFoundException or
+            DirectoryNotFoundException or
+            IOException or
+            UnauthorizedAccessException)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Rejected,
+                "integration_input_invalid",
+                exception.Message,
+                retryable: false,
+                TryGetCapability(adapter)));
+            return 2;
+        }
+        catch (Exception exception)
+        {
+            WriteIntegrationJson(FleetIntegrationResponse.Failure(
+                FleetIntegrationStatus.Failed,
+                "integration_internal_error",
+                exception.Message,
+                retryable: false,
+                TryGetCapability(adapter)));
+            return 1;
+        }
+        finally
+        {
+            Console.CancelKeyPress -= cancelHandler;
+        }
+    }
+
+    private static async Task<byte[]> ReadBoundedRequestAsync(
+        string requestPath,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(requestPath);
+        await using var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            16 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length > FleetIntegrationContract.MaximumRequestBytes)
+        {
+            throw FleetIntegrationException.Input(
+                "request_too_large",
+                $"The integration request exceeds {FleetIntegrationContract.MaximumRequestBytes} bytes.");
+        }
+
+        using var buffer = new MemoryStream((int)stream.Length);
+        var chunk = new byte[16 * 1024];
+        while (true)
+        {
+            var count = await stream.ReadAsync(chunk, cancellationToken);
+            if (count == 0)
+            {
+                break;
+            }
+            if (buffer.Length + count > FleetIntegrationContract.MaximumRequestBytes)
+            {
+                throw FleetIntegrationException.Input(
+                    "request_too_large",
+                    $"The integration request exceeds {FleetIntegrationContract.MaximumRequestBytes} bytes.");
+            }
+            buffer.Write(chunk, 0, count);
+        }
+        return buffer.ToArray();
+    }
+
+    private static FleetIntegrationCapabilitySnapshot? TryGetCapability(
+        FleetIntegrationAdapter? adapter)
+    {
+        if (adapter is null)
+        {
+            return null;
+        }
+        try
+        {
+            return adapter.GetCapabilities();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static int IntegrationExitCode(FleetIntegrationStatus status) =>
+        status switch
+        {
+            FleetIntegrationStatus.Rejected or
+            FleetIntegrationStatus.Unsupported => 2,
+            FleetIntegrationStatus.Disabled or
+            FleetIntegrationStatus.Absent or
+            FleetIntegrationStatus.Unavailable or
+            FleetIntegrationStatus.Unauthorized => 3,
+            FleetIntegrationStatus.Cancelled => 4,
+            _ => 1
+        };
 
     private static async Task<int> RunKioskDirectAsync(string[] arguments)
     {
@@ -345,6 +731,25 @@ internal static class CliApplication
 
         switch (action)
         {
+            case "inspect":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.InspectApk(RequireOption(arguments, "--file")));
+                    var inspection = execution.ApkArtifactInspection ??
+                        throw new InvalidOperationException("APK inspection returned no result.");
+                    if (HasFlag(arguments, "--json"))
+                    {
+                        WriteJson(inspection);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{inspection.Identity.PackageName} versionCode={inspection.Identity.VersionCode}");
+                        Console.WriteLine($"Signer SHA-256: {inspection.Identity.SignerSha256}");
+                        Console.WriteLine($"Artifact SHA-256: {inspection.Sha256} ({inspection.SizeBytes} bytes)");
+                    }
+                    return 0;
+                }
+
             case "list":
                 {
                     var serial = RequireOption(arguments, "--serial");
@@ -403,6 +808,42 @@ internal static class CliApplication
                         execution.CommandResult,
                         HasFlag(arguments, "--json"),
                         () => Console.WriteLine(execution.CommandResult?.StandardOutput.Trim()));
+                    return 0;
+                }
+
+            case "launch":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.LaunchInspectedApp(
+                            RequireOption(arguments, "--serial"),
+                            RequireOption(arguments, "--file")));
+                    WriteMutationAware(
+                        execution,
+                        execution.ResolvedAppLaunchResult,
+                        HasFlag(arguments, "--json"),
+                        () => Console.WriteLine(execution.ResolvedAppLaunchResult?.Component));
+                    return 0;
+                }
+
+            case "observe":
+                {
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.ObserveInspectedApp(
+                            RequireOption(arguments, "--serial"),
+                            RequireOption(arguments, "--file")));
+                    var observation = execution.AppRuntimeObservation ??
+                        throw new InvalidOperationException("Runtime observation returned no result.");
+                    if (HasFlag(arguments, "--json"))
+                    {
+                        WriteJson(observation);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Installed: {observation.Installed is not null}");
+                        Console.WriteLine($"Foreground: {observation.IsForeground}");
+                        Console.WriteLine($"Top resumed: {observation.IsTopResumed}");
+                        Console.WriteLine($"Processes: {string.Join(", ", observation.ProcessIds)}");
+                    }
                     return 0;
                 }
 
@@ -712,7 +1153,11 @@ internal static class CliApplication
                     {
                         Console.WriteLine($"Headset battery: {result.HeadsetBatteryLabel}");
                         Console.WriteLine($"Controllers: {result.ControllerBatteryLabel}");
-                        Console.WriteLine($"Keep awake: {(result.KeepAwakeActive ? "active" : "not active")}");
+                        Console.WriteLine($"Stay on: {(result.StayOn ? "active" : "inactive")}");
+                        Console.WriteLine($"Wake/display: {result.Wakefulness} / {result.DisplayState}");
+                        Console.WriteLine(
+                            $"Proximity: {result.ProximityState}; " +
+                            $"hold {DisplayHold(result.ProximityHoldDurationMilliseconds, result.ProximityHoldRemainingMilliseconds)}");
                         Console.WriteLine($"CPU/GPU override: {DisplayOverride(result.CpuLevel)} / {DisplayOverride(result.GpuLevel)}");
                     }
 
@@ -891,11 +1336,22 @@ internal static class CliApplication
 
     private static string DisplayOverride(string value) => string.IsNullOrWhiteSpace(value) ? "app controlled" : value;
 
+    private static string DisplayHold(int? durationMilliseconds, int? remainingMilliseconds) =>
+        durationMilliseconds is int duration && remainingMilliseconds is int remaining
+            ? $"{duration} ms requested, {remaining} ms remaining"
+            : "not observed";
+
     private static bool HasFlag(string[] arguments, string name) =>
         arguments.Any(argument => string.Equals(argument, name, StringComparison.OrdinalIgnoreCase));
 
     private static void WriteJson<T>(T value) =>
         Console.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
+
+    private static void WriteFleetJson<T>(T value) =>
+        Console.WriteLine(JsonSerializer.Serialize(value, FleetJsonOptions));
+
+    private static void WriteIntegrationJson(FleetIntegrationResponse value) =>
+        Console.WriteLine(JsonSerializer.Serialize(value, IntegrationJsonOptions));
 
     private static void WriteMutationAware<T>(
         OperatorExecutionResult execution,
@@ -966,8 +1422,11 @@ internal static class CliApplication
               questionable-file-manager files pull --serial <serial> --remote <path> --output <path>
               questionable-file-manager files push --serial <serial> --file <path> --remote <path>
               questionable-file-manager apk list --serial <serial> [--json]
+              questionable-file-manager apk inspect --file <file.apk> [--json]
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
+              questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
               questionable-file-manager apk install-bundle-many --serial <host:port> --serial <host:port> --folder <apk-folder> [options]
@@ -991,8 +1450,20 @@ internal static class CliApplication
               questionable-file-manager kiosk-direct install --endpoint <url> --pairing-code <code> --file <base.apk> [--file <split.apk> ...] --confirm-local-install [--json]
               questionable-file-manager kiosk-direct install-status --endpoint <url> --pairing-code <code> --request-id <id> [--json]
               questionable-file-manager device status --serial <serial> [--json]
-              questionable-file-manager device keep-awake --serial <serial> <--on|--off> [--duration-ms <n>] --confirm-device-settings
+              questionable-file-manager device keep-awake --serial <serial> <--on|--off> [--duration-ms <60000..28800000>] --confirm-device-settings
               questionable-file-manager device performance --serial <serial> [--cpu <0-5>] [--gpu <0-5>] [--clear] --confirm-device-settings
+              questionable-file-manager integration capabilities --json [--contract-version 1.0]
+              questionable-file-manager integration observe --serial <serial> --json
+              questionable-file-manager integration invoke --request <operation-request.v1.json> --json
+              questionable-file-manager integration status --operation <operation-id> --json
+              questionable-file-manager fleet status --json
+              questionable-file-manager fleet install --confirm-fleet-install --json
+              questionable-file-manager connectivity-profile status --device-id <fleet-device-id> --json
+              questionable-file-manager connectivity-profile list --json
+              questionable-file-manager connectivity-profile import --file <private-profile.json> --confirm-profile-write [--replace-existing] --json
+              questionable-file-manager connectivity-profile import --stdin --confirm-profile-write [--replace-existing] --json
+              questionable-file-manager connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
+              questionable-file-manager-kiosk-v2-provider integration kiosk-v2-catalog --json < <strict-request.json>
 
             Install options:
               --no-replace                 Do not reinstall over an existing package.
@@ -1018,7 +1489,42 @@ internal static class CliApplication
             Android records one wearer decision for the app installation session.
             Keep-awake, proximity, and CPU/GPU changes require explicit confirmation and
             report effective readback; --clear restores app-controlled performance levels.
+            Connectivity profiles are File Manager-owned current-user Credential Manager
+            records. Status/list return only Fleet device IDs and sanitized state. Import
+            accepts one strict private JSON document from a protected local file or standard
+            input; serials, endpoints, and pairing codes are never command-line arguments
+            or output. Replacement and revocation require their explicit confirmation flags.
             Split APK packages are refused by the single-APK export command.
+            Fleet integration is optional and disabled by default. The normal executable
+            exposes one exact-device read-only list or staged pull under adb-shared.
+            Bounded push is advertised only by a host that injects current Quest identity
+            and Manifold mutation-authority verification. It never overwrites and has no
+            delete, move, multi-target, daemon, or WPF automation route. Durable status
+            distinguishes final-path and partial-path uncertainty after interruption.
+            The separate kiosk-v2-catalog subprocess route reads one strict request from
+            standard input and resolves one opaque File Manager-owned profile from the
+            current Windows user's Credential Manager. It is unavailable unless that
+            profile was explicitly enrolled. Fleet never supplies an endpoint, pairing
+            code, key, decrypted transport material, launch scope, or Manifold barrier.
+            Fleet uses only the hash-pinned self-contained release artifact named
+            questionable-file-manager-kiosk-v2-provider.exe, never a dotnet-build apphost.
+            The optional fleet routes are a distribution bootstrap only. Configuration
+            selects the canonical MesmerPrism Pages metadata descriptor (or an explicitly
+            enabled development fixture) and pins both its descriptor key and Windows
+            installer signer. Its strict v2 payload binds the exact numeric-version GitHub
+            Release URL for RustyFleet-Setup.exe; Pages never carries the binary. Payload
+            bytes must use RFC 8785 JCS, bind issue/expiry with a required duration, and
+            expire within 24 hours. Embedded release trust
+            comes only from reviewed checked-in source on the clean tagged release commit;
+            MSBuild, environment, script arguments, and generated files cannot add trust.
+            Replay state, its sibling file anchor, and its elevated signed-Setup-provisioned
+            protected machine record fail closed after deletion or record loss; Core is
+            read-only and has no provisioning/reset/transition API. A declined, failed, or prompt-expired
+            visible guided run remains unconsumed, with freshness checked again after
+            success. File Manager invokes only Fleet's
+            fixed plan and guided setup entrypoints. It accepts no URL, program, argument,
+            credential, device, ADB, hotspot, or elevation option and reports only sanitized
+            handoff metadata.
             """);
     }
 }

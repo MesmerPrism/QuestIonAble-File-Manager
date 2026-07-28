@@ -1,4 +1,5 @@
 using QuestIonAbleFileManager.Core;
+using System.Security.Cryptography;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
@@ -9,8 +10,39 @@ public sealed class OperatorCommandTests
     {
         var localPath = Path.GetFullPath(Path.Combine("Test Data", "example file.txt"));
         var apkPath = Path.GetFullPath(Path.Combine("Test Data", "example app.apk"));
+        var privateProfilePath = Path.GetFullPath(
+            Path.Combine("Private Data", "quest connectivity.json"));
         var commands = new (OperatorCommand Command, string[] Expected)[]
         {
+            (OperatorCommands.QuestConnectivityProfileStatus("fleet-device-1"),
+                ["connectivity-profile", "status", "--device-id", "fleet-device-1", "--json"]),
+            (OperatorCommands.ListQuestConnectivityProfiles(),
+                ["connectivity-profile", "list", "--json"]),
+            (OperatorCommands.ImportQuestConnectivityProfileFile(
+                    privateProfilePath,
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "import", "--file", privateProfilePath,
+                    "--confirm-profile-write", "--json"
+                ]),
+            (OperatorCommands.ImportQuestConnectivityProfileStdin(
+                    replaceExisting: true,
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "import", "--stdin",
+                    "--confirm-profile-write", "--replace-existing", "--json"
+                ]),
+            (OperatorCommands.RevokeQuestConnectivityProfile(
+                    "fleet-device-1",
+                    operatorConfirmed: true),
+                [
+                    "connectivity-profile", "revoke", "--device-id", "fleet-device-1",
+                    "--confirm-profile-revoke", "--json"
+                ]),
+            (OperatorCommands.FleetInstallStatus(),
+                ["fleet", "status", "--json"]),
+            (OperatorCommands.FleetInstall(operatorConfirmed: true),
+                ["fleet", "install", "--confirm-fleet-install", "--json"]),
             (OperatorCommands.DiscoverDevices(), ["devices"]),
             (OperatorCommands.ListFiles("QUEST123", "/sdcard/My Files"),
                 ["files", "list", "--serial", "QUEST123", "--path", "/sdcard/My Files"]),
@@ -20,6 +52,8 @@ public sealed class OperatorCommandTests
                 ["files", "push", "--serial", "QUEST123", "--file", localPath, "--remote", "/sdcard/Download/example.txt"]),
             (OperatorCommands.ListPackages("QUEST123"),
                 ["apk", "list", "--serial", "QUEST123"]),
+            (OperatorCommands.InspectApk(apkPath),
+                ["apk", "inspect", "--file", apkPath]),
             (OperatorCommands.ExportApk("QUEST123", "com.example.app", apkPath, overwrite: true),
                 ["apk", "export", "--serial", "QUEST123", "--package", "com.example.app", "--output", apkPath, "--overwrite"]),
             (OperatorCommands.InstallApk(
@@ -27,6 +61,10 @@ public sealed class OperatorCommandTests
                     apkPath,
                     new ApkInstallOptions(false, true, true, true)),
                 ["apk", "install", "--serial", "QUEST123", "--file", apkPath, "--no-replace", "--downgrade", "--grant-runtime-permissions", "--test-only"]),
+            (OperatorCommands.LaunchInspectedApp("QUEST123", apkPath),
+                ["apk", "launch", "--serial", "QUEST123", "--file", apkPath]),
+            (OperatorCommands.ObserveInspectedApp("QUEST123", apkPath),
+                ["apk", "observe", "--serial", "QUEST123", "--file", apkPath]),
             (OperatorCommands.EnableWifiAdb("QUEST123", 5555, operatorConfirmed: true),
                 ["wifi", "enable", "--serial", "QUEST123", "--port", "5555", "--confirm-wifi-adb"]),
             (OperatorCommands.ConnectWifiAdb("192.0.2.42", 5555, operatorConfirmed: true),
@@ -52,6 +90,61 @@ public sealed class OperatorCommandTests
         {
             Assert.Equal(expected, command.CliArguments);
         }
+    }
+
+    [Fact]
+    public void ConnectivityProfileFactoriesAndParserRequireExactPrivateRoutes()
+    {
+        var privatePath = Path.GetFullPath(Path.Combine("Private Data", "profile.json"));
+        var vectors = new[]
+        {
+            OperatorCommands.QuestConnectivityProfileStatus("fleet-device-1"),
+            OperatorCommands.ListQuestConnectivityProfiles(),
+            OperatorCommands.ImportQuestConnectivityProfileFile(
+                privatePath,
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileFile(
+                privatePath,
+                replaceExisting: true,
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileStdin(
+                operatorConfirmed: true),
+            OperatorCommands.ImportQuestConnectivityProfileStdin(
+                replaceExisting: true,
+                operatorConfirmed: true),
+            OperatorCommands.RevokeQuestConnectivityProfile(
+                "fleet-device-1",
+                operatorConfirmed: true)
+        };
+
+        foreach (var expected in vectors)
+        {
+            var parsed = OperatorCommands.ParseConnectivityProfileCliArguments(
+                expected.CliArguments);
+            Assert.Equal(expected.Kind, parsed.Kind);
+            Assert.Equal(expected.CliArguments, parsed.CliArguments);
+        }
+
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.ImportQuestConnectivityProfileFile(privatePath));
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.ImportQuestConnectivityProfileStdin());
+        Assert.Throws<InvalidOperationException>(
+            () => OperatorCommands.RevokeQuestConnectivityProfile("fleet-device-1"));
+        Assert.Throws<ArgumentException>(
+            () => OperatorCommands.ParseConnectivityProfileCliArguments(
+                [
+                    "connectivity-profile", "import",
+                    "--device-id", "fleet-device-1",
+                    "--pairing-code", "<private>",
+                    "--confirm-profile-write", "--json"
+                ]));
+        Assert.Throws<ArgumentException>(
+            () => OperatorCommands.ParseConnectivityProfileCliArguments(
+                [
+                    "connectivity-profile", "import", "--stdin", "--file", privatePath,
+                    "--confirm-profile-write", "--json"
+                ]));
     }
 
     [Fact]
@@ -243,8 +336,18 @@ public sealed class OperatorCommandTests
         await File.WriteAllBytesAsync(baseApkPath, [0x50, 0x4b, 0x03, 0x04]);
         await File.WriteAllBytesAsync(splitApkPath, [0x50, 0x4b, 0x03, 0x04]);
 
-        var runner = new RecordingCommandRunner((_, arguments) =>
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
         {
+            if (fileName == "aapt2-test")
+            {
+                return Success("package: name='com.example.app' versionCode='42' versionName='1.2.3'\n");
+            }
+
+            if (fileName == "apksigner-test")
+            {
+                return Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n");
+            }
+
             if (arguments.SequenceEqual(["devices", "-l"]))
             {
                 return Success("List of devices attached\nQUEST123 device model:Quest_3\n");
@@ -278,7 +381,10 @@ public sealed class OperatorCommandTests
 
             return Success("Success\n");
         });
-        var executor = new OperatorCommandExecutor(new AdbClient("adb-test", runner));
+        var executor = new OperatorCommandExecutor(new AdbClient(
+            "adb-test",
+            runner,
+            new AndroidBuildToolPaths("aapt2-test", "apksigner-test")));
 
         try
         {
@@ -305,7 +411,7 @@ public sealed class OperatorCommandTests
             Assert.Equal(2, bundle.ApkBundleInstallResult!.ApkPaths.Count);
             Assert.Equal(new[] { "devices", "-l" }, runner.Calls[0].Arguments);
             Assert.All(
-                runner.Calls.Skip(1),
+                runner.Calls.Where(static call => call.FileName == "adb-test").Skip(1),
                 static call => Assert.Equal(new[] { "-s", "QUEST123" }, call.Arguments.Take(2)));
             Assert.Contains(
                 runner.Calls,
@@ -326,7 +432,7 @@ public sealed class OperatorCommandTests
         new("adb-test", Array.Empty<string>(), 0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class RecordingCommandRunner(
-        Func<string, IReadOnlyList<string>, CommandResult> handler) : ICommandRunner
+        Func<string, IReadOnlyList<string>, CommandResult> handler) : IStreamingCommandRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
 
@@ -342,6 +448,37 @@ public sealed class OperatorCommandTests
             }
             var handled = handler(fileName, arguments);
             return Task.FromResult(handled with { FileName = fileName, Arguments = arguments.ToArray() });
+        }
+
+        public async Task<StreamingCommandResult> RunToStreamAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            Stream destination,
+            long maximumBytes,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default)
+        {
+            lock (Calls)
+            {
+                Calls.Add((fileName, arguments.ToArray()));
+            }
+            var handled = handler(fileName, arguments) with
+            {
+                FileName = fileName,
+                Arguments = arguments.ToArray()
+            };
+            byte[] bytes = [0x50, 0x4b, 0x03, 0x04];
+            if (handled.Succeeded)
+            {
+                if (bytes.Length > maximumBytes)
+                    throw new FleetTransferLimitException(maximumBytes);
+                await destination.WriteAsync(bytes, cancellationToken);
+            }
+            return new StreamingCommandResult(
+                handled,
+                handled.Succeeded ? bytes.Length : 0,
+                Convert.ToHexString(SHA256.HashData(handled.Succeeded ? bytes : []))
+                    .ToLowerInvariant());
         }
     }
 

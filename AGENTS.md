@@ -10,7 +10,22 @@ Meta Quest headsets. It owns file-transfer UX, installed-package inspection,
 single-APK export, single-APK and complete split-set installation, diagnostics,
 explicit Wi-Fi ADB connection lifecycle, bounded multi-headset installation,
 optional Rusty Kiosk installation/operator UX, reviewed Quest power/performance
-controls, and Windows delivery. Rusty Kiosk remains a separate AGPL-licensed
+controls, an optional disabled-by-default single-device Rusty Fleet hook whose
+shipped CLI stays read-only and whose Core push requires injected current
+Quest/Manifold authority, an optional summary-only encrypted Kiosk v2 catalog
+provider whose endpoint and credential remain File Manager-owned, and Windows
+delivery. The three dedicated provider artifacts may describe their existing
+typed registries through the shared short-lived, target-free, explicitly
+non-authorizing discovery contract; description is not backend health,
+activation, target resolution, or execution authority. It also owns an
+explicit current-user Credential Manager lifecycle for Fleet connectivity
+profiles: sanitized status/list, strict private file/stdin or in-memory WPF
+enrollment, confirmed replacement, and confirmed revocation. This owner route
+does not contact a headset or broaden the dedicated provider. It also owns an
+optional distribution-only handoff that verifies one
+configured signed Rusty Fleet Windows release and opens Fleet's own guided
+installer; this is not Fleet runtime, device, connectivity, or policy
+authority. Rusty Kiosk remains a separate AGPL-licensed
 Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
@@ -50,8 +65,10 @@ documented.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes
-  `tcpip` to one ready USB serial, and connects one validated endpoint. Never
-  reset or restart the ADB server as part of this workflow.
+  `tcpip` to one ready USB serial, connects one validated endpoint, and
+  requires one stable identity to match before USB mutation and after exact
+  network-endpoint connection. Never reset or restart the ADB server as part
+  of this workflow.
 - Parallel installation requires at least two distinct ready Wi-Fi ADB
   serials, uses a bounded 1–16 concurrency limit, sends one serial-scoped
   install transaction per headset, and preserves per-target partial failures.
@@ -70,8 +87,168 @@ documented.
   versioned provider. It admits fixed typed commands and bounded SHA-256 tag
   chunks. Never add arbitrary intents, components, shell commands, or host-
   supplied headset paths to that contract.
-- Meta permission prompts remain wearer decisions. Showing a Wi-Fi ADB prompt
-  is `pending`; it becomes `confirmed` only when Kiosk reports Wi-Fi ADB enabled.
+- Rusty Fleet integration v1 is disabled by default. Its environment-created
+  CLI adapter is restricted to strict JSON capability discovery, exact-serial
+  observation, bounded `adb-shared` list/pull, and read-only durable status.
+  Core push must remain unadvertised without an injected current Quest identity
+  plus Manifold command/lease/revocation verifier. It is one target, staged
+  input only, size/SHA bound, no-overwrite, descriptor-validated, and one-use.
+  Recheck the identical verified authority digest before the stream and after
+  exact-serial readback; stop before the earlier request/authority expiry.
+  Durable recovery distinguishes destination/partial uncertainty and never
+  retries or deletes remotely by itself. No delete, overwrite, WPF,
+  multi-target, or ADB daemon route is admitted. Never replace bounded streams
+  with `adb pull`/`adb push`, post-transfer-only checks, recursive cleanup, or
+  path-only reparse checks.
+- The separate Fleet/Kiosk v2 catalog subprocess is summary-only and reads one
+  strict request from standard input. It resolves an opaque File Manager profile
+  from the current user's secure store; Fleet never supplies or receives its
+  endpoint, pairing code, keys, session plaintext, launch scope, or Manifold
+  barrier. File Manager independently verifies the fresh public Kiosk contract,
+  session proof, directional HKDF/AES-GCM exchange, nonce/counter/AAD bindings,
+  and owner snapshot. Only the exact encrypted envelopes, deliberately
+  exportable owner catalog, and owner grant receipt cross back to Fleet as
+  bounded base64url evidence. Do not add v1 fallback, endpoint arguments,
+  inherited-environment credentials, launch, mutation, or free-form errors.
+- The separate Fleet awake-control subprocess owns only closed exact-serial
+  status, bounded hold, drift-only repair, temporary device-watchdog, stop,
+  and restore actions. Keep the hold bound at `60000..28800000` milliseconds
+  and watchdog polling at `1000..60000` milliseconds. A Windows watchdog is
+  Fleet-owned and calls `repairOnce`; the device watchdog is a fixed File
+  Manager-owned `/data/local/tmp` helper with generation, boot, process,
+  heartbeat, and repair-counter readback. It is not reboot-persistent.
+  Same-generation reuse requires the exact requested interval.
+  `stopWatchdogs` must leave power/proximity settings unchanged;
+  `restoreNormal` must prove the helper inactive and recheck request expiry
+  after the stop wait before restoring them. Receipts report
+  stay-on, proximity hold, wake/display, watchdog, and restore facts
+  independently and must not expose serials, controller identifiers, raw ADB
+  output, caller shell, paths, or process commands.
+- The separate Fleet connectivity subprocess owns only the closed `status`,
+  `request_wireless_adb`, after-boot preference enable/disable,
+  `disable_wireless_adb`, and classic USB `tcpip 5555` actions. It resolves
+  endpoint, Kiosk pairing code, and exact USB serial from a File Manager-owned
+  current-user credential profile keyed by Fleet device ID; Fleet never
+  supplies or receives those values. Kiosk remains the privileged effect
+  owner and Meta prompts remain wearer decisions. Keep request delivery,
+  Kiosk setting, after-boot preference, wearer approval, and listener
+  discovery independent. A Kiosk setting never proves listener usability.
+  Termux proof belongs to Fleet's separate signed observation state and must
+  not appear in this File Manager-owned receipt. Reject duplicate request IDs
+  and operation IDs within the provider process before effect dispatch.
+  Current-user Credential Manager is not same-user process isolation and the
+  request carries no cryptographic Manifold proof; do not claim otherwise.
+  Deploy under an isolated Windows identity when same-user callers are not
+  trusted.
+- Fleet may launch awake control only through the self-contained, single-file
+  `questionable-file-manager-awake-provider.exe`, pinned by lowercase SHA-256
+  and staged with a per-launch private `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its
+  execution vector is exact case-sensitive
+  `integration quest-awake --json`. Its separate inert discovery vector is
+  exactly `--describe-json`; that route must return before stdin, provider
+  factory, ADB, target, or state use. Invalid, mixed, case-varied, and extra
+  arguments and strict-request failures reject before ADB discovery. Never
+  substitute the general CLI or a framework-dependent apphost.
+- Fleet may launch Wi-Fi ADB connectivity only through the self-contained,
+  single-file `questionable-file-manager-connectivity-provider.exe`, pinned by
+  lowercase SHA-256 and staged with a per-launch private
+  `DOTNET_BUNDLE_EXTRACT_BASE_DIR`. Its execution vector is exact
+  case-sensitive `integration quest-connectivity --json`. Its separate inert
+  discovery vector is exactly `--describe-json`; that route must return before
+  stdin, profile, provider factory, Kiosk, ADB, target, or replay-state use.
+  Invalid, mixed, case-varied, and extra arguments and strict-request failures
+  reject before profile or ADB initialization. Never substitute the general
+  CLI or a framework-dependent apphost.
+- The optional Fleet installer handoff is distribution bootstrap only. It
+  accepts no caller URL, program, argument, credential, device, ADB, hotspot,
+  or elevation choice. Published releases embed one all-or-none versioned trust
+  configuration: the exact canonical
+  `https://mesmerprism.com/Rusty-Fleet/metadata/<channel>/release.json`
+  descriptor, descriptor RSA SPKI and pin, channel, Setup signer pin, and safe
+  per-user relative state root. Embedded configuration is authoritative and
+  ignores environment overrides. Environment and explicitly enabled local
+  fixture configuration are development-only fallbacks. MesmerPrism Pages is
+  metadata-only: never publish, derive, or download a sibling Setup binary
+  there. The strict v2 signed payload binds the exact immutable
+  `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`
+  asset URL. Release trust exists only as the complete eight-field metadata
+  block in checked-in `FleetInstallerReleaseConfiguration.cs`, reviewed on
+  the exact clean tagged release commit. Ordinary MSBuild, environment,
+  release-script arguments, and generated `obj` files have no trust authority.
+  Core verifies RFC 8785 JCS payload bytes, schema,
+  product, exact three-part version/tag, the
+  required duration/exact expiry relation, 24-hour maximum lifetime,
+  30-second future-skew boundary, fresh-clock post-guided-success check, asset
+  name/size/SHA-256/protocol, RSA-PSS signature,
+  Authenticode, and the Fleet-owned `--plan --json` result before starting the
+  exact installer with no arguments. Keep staging local, non-reparse, retained against
+  substitution, create-new, and cleaned by handle. Persist replay and
+  strictly-monotonic-version state with write-through after guided success,
+  plus a sibling file anchor and an elevated signed-Setup-provisioned,
+  root-bound HKLM record with SYSTEM/Administrators write and Users read. The
+  machine record owns accepted descriptor IDs and the monotonic version
+  high-water mark; per-user files are not authoritative for those decisions.
+  Setup must verify its own Authenticode and reviewed signer pin before write;
+  Core must expose no direct machine-state writer. Its only transition route is
+  the protected signed Setup copy under Program Files, which elevates,
+  re-fetches, and independently verifies the current signed descriptor before
+  advancing the record. Serialize descriptor refetch, protected record
+  read/check/write, and exact durable readback under a machine-wide mutex with
+  a protected SYSTEM/Administrators-only DACL. Revalidate that DACL on every
+  open, use the same lock for provisioning/repair, and re-read state after
+  abandoned-lock recovery. Elevated Setup staging must be unpredictable,
+  protected under Program Files, reparse-free, per-run, and cleaned; quiet
+  success/failure output must never contain its path.
+  Missing/coordinated-deleted replay files or marker loss must fail closed;
+  signed Setup repair may reconstruct local files only from the protected
+  machine record and must preserve its high-water mark, accepted IDs, and root
+  binding. Mutable local evidence must never reconstruct a missing machine
+  record. Keep destructive reset behind the separate explicit
+  `--destructive-reset-fleet-replay-protection` route, mutually exclusive with
+  repair. Replace the Program Files helper atomically only when the retained
+  old and new artifacts share the reviewed signer pin; preserve replay state,
+  and report rollback only after the prior backup identity/hash/signer and the
+  restored destination receive exact retained readback. Retain the backup when
+  rollback is unknown or fails; describe it as validated repair evidence only
+  after exact prior-commitment validation. Treat a thrown atomic-replace call
+  as potentially state-changing and reconcile destination, replacement, and
+  backup against retained commitments without deleting prior evidence. Apply
+  the same rule if rollback's atomic restore throws: reconcile the destination,
+  rollback candidate, and original backup, preserve unresolved evidence, and
+  never report restored without exact stable destination readback. Reject signer
+  changes without a separately reviewed rotation route.
+  A declined, failed, or prompt-expired visible guided run remains unconsumed;
+  recheck the clock immediately after guided success and require a fresh
+  descriptor fetch before retry.
+  Status and handoff receipts must never contain
+  source URLs, local paths, process arguments, credentials, or device data.
+  File Manager must not download another bootstrapper, configure Fleet,
+  perform hidden elevation, or claim that Fleet installation succeeded merely
+  because the handoff began. See `docs/fleet-installer-handoff.md`.
+- Fleet may launch the Kiosk v2 catalog provider only from the reviewed,
+  self-contained, single-file Windows artifact named
+  `questionable-file-manager-kiosk-v2-provider.exe`, pinned by lowercase
+  SHA-256. Publish it directly from
+  `QuestIonAbleFileManager.FleetKioskV2Provider`; never rename or package the
+  general operator CLI as the provider. Never point Fleet at a `dotnet build`
+  apphost; it loads mutable sibling assemblies and is not a complete trust
+  unit. The dedicated entrypoint admits the exact case-sensitive execution
+  vector `integration kiosk-v2-catalog --json` and the separate exact inert
+  discovery vector `--describe-json`. Discovery must return before stdin,
+  credential/profile, provider, HTTP, target, or owner-session use. The
+  entrypoint cannot dispatch ADB, file, APK, Wi-Fi, Kiosk, kiosk-direct, or
+  device-control commands.
+  The artifact gate must smoke-run a stage containing only the dedicated EXE
+  and an empty private `bundle-extract` subdirectory, require the exact
+  absent-profile response and exit code, and require zero standard-error bytes.
+  It must also prove broad verbs reject before provider initialization and an
+  ordinary framework-dependent apphost fails when isolated. Fleet supplies a
+  new private `DOTNET_BUNDLE_EXTRACT_BASE_DIR` for each pinned provider stage so
+  any native single-file extraction remains inside that stage's trust boundary;
+  it never reuses a shared extraction directory.
+- Meta permission prompts remain wearer decisions. A Kiosk
+  `wifi_adb_enabled` readback proves only that setting; it does not prove
+  wearer acceptance, a current listener, or Termux loopback shell authority.
 
 ## Agent CLI Workflow
 
@@ -82,6 +259,18 @@ the prefix is:
 ```powershell
 dotnet run --project src/QuestIonAbleFileManager.Cli --
 ```
+
+The optional `QuestIonAbleFileManager.Api` executable is a separate,
+Windows-only, inert-until-started loopback projection of only the
+inspected-deployment typed
+registry. It requires `QUESTIONABLE_FILE_MANAGER_API_BEARER`, refuses
+non-loopback listeners, and is not a general CLI/ADB wrapper. Private staged
+state and its integrity secret must be explicitly configured through
+`QUESTIONABLE_FILE_MANAGER_API_STATE` and
+`QUESTIONABLE_FILE_MANAGER_API_JOURNAL_SECRET`; its local private root, retained
+non-reparse handles, journal/anchor chain, capacity reservations, and
+journal-before-delete cleanup ordering are part of the reviewed boundary. See
+`docs/local-api.md`. Do not start it during ordinary build/test validation.
 
 In a published Windows archive, invoke `questionable-file-manager.exe` directly.
 The former `meta-quest-file-manager.exe` name is a deprecated release-only
@@ -96,8 +285,11 @@ questionable-file-manager.exe files list --serial <quest-serial> --path /sdcard 
 questionable-file-manager.exe files pull --serial <quest-serial> --remote <remote-path> --output <local-path>
 questionable-file-manager.exe files push --serial <quest-serial> --file <local-path> --remote <remote-path>
 questionable-file-manager.exe apk list --serial <quest-serial> --json
+questionable-file-manager.exe apk inspect --file <path-to.apk> --json
 questionable-file-manager.exe apk export --serial <quest-serial> --package <package> --output <local-apk>
 questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
+questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
 questionable-file-manager.exe apk install-bundle --serial <quest-serial> --folder <apk-folder>
 questionable-file-manager.exe wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
 questionable-file-manager.exe wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
@@ -111,6 +303,17 @@ questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <
 questionable-file-manager.exe device status --serial <quest-serial> --json
 questionable-file-manager.exe device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
+questionable-file-manager.exe integration capabilities --json
+questionable-file-manager.exe integration observe --serial <quest-serial> --json
+questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
+questionable-file-manager.exe integration status --operation <operation-id> --json
+questionable-file-manager.exe fleet status --json
+questionable-file-manager.exe fleet install --confirm-fleet-install --json
+questionable-file-manager.exe connectivity-profile status --device-id <fleet-device-id> --json
+questionable-file-manager.exe connectivity-profile list --json
+questionable-file-manager.exe connectivity-profile import --file <private-profile.json> --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile import --stdin --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
 ```
 
 The WPF buttons map to those routes exactly. Both install actions accept
@@ -120,6 +323,11 @@ the base APK first when recognizable, and installs all parts atomically as one
 package set. ADB rejects mixed package names, versions, signatures, or missing
 required splits. Pass `--adb <path>` to select a particular ADB executable
 without changing global ADB state.
+
+The single-APK `install`, `launch`, and `observe` routes inspect the local
+artifact with Android SDK Build Tools and bind package/version/signer plus
+base-APK digest/size readback to the exact selected serial. See
+`docs/inspected-deployment.md`.
 
 The `--confirm-wifi-adb` flag records that an operator approved the exact
 Wi-Fi state change; agents must not add it without that approval. Parallel
@@ -136,9 +344,16 @@ Use PowerShell 7.6 or newer through `pwsh` for maintained scripts.
 dotnet build QuestIonAbleFileManager.slnx --configuration Release
 dotnet test QuestIonAbleFileManager.slnx --configuration Release
 dotnet run --project src/QuestIonAbleFileManager.Cli -- --help
+dotnet test tests/QuestIonAbleFileManager.Core.Tests --configuration Release --filter "FullyQualifiedName~LocalApiTests"
 pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
+pwsh -NoProfile -File ./tools/Test-FleetInstallerReleaseConfiguration.ps1
+pwsh -NoProfile -File ./tools/Test-FleetInstallerHandoffLifecycle.ps1 -InputPath <private-lifecycle-input.json> -QfmSetupExecutablePath <exact-qfm-setup.exe>
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
+pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
+pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
+pwsh -NoProfile -File ./tools/Test-FleetConnectivityProviderArtifact.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./tools/Test-ProviderCapabilityDiscovery.ps1 -ContractRoot <meta-quest-agent-workflow-root>
 ```
 
 The canonical folder mark and multi-resolution Windows icon live under
@@ -163,12 +378,22 @@ pwsh -NoProfile -File ./tools/app/Invoke-ReleaseBuild.ps1 `
   -ExpectedKioskVersion <kiosk-version> `
   -ExpectedKioskSourceRevision <kiosk-source-commit> `
   -PackageCertificatePath ./artifacts/signing/windows-signing.pfx `
-  -PackageCertificatePassword <pfx-password>
+  -PackageCertificatePassword <pfx-password> `
+  -FleetInstallerLifecycleInputPath <private-lifecycle-input.json>
 
 pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -ReleaseDirectory ./artifacts/release `
   -RemoveAfterTest
 ```
+
+If that release enables the optional Fleet distribution handoff, add the
+complete public eight-field metadata block to the checked-in release
+configuration source as documented in `docs/release-workflow.md`. Leave the
+source inert otherwise. Never rely on ambient MSBuild/environment/script
+values or generated files, and never commit private publisher material. The
+private lifecycle input names exact externally staged Fleet A/B release
+directories and independently reviewed public pins; it is never a release
+asset or committed source file.
 
 Use `-DirectPackage` only when the agent shell cannot accept UAC. That fallback
 validates the helper plan and signed MSIX install/launch separately, and the
@@ -193,6 +418,20 @@ dotnet run --project src/QuestIonAbleFileManager.App
   install/export, Wi-Fi endpoint lifecycle, bounded fan-out, progress units,
   hashes, typed Kiosk hosting, and mutation reconciliation.
 - `QuestIonAbleFileManager.Cli` is the automation-equivalent operator surface.
+- Core's optional Fleet installer handoff is a distribution consumer, not a
+  Fleet provider or device-control route. The WPF “Get Fleet” tab and exact
+  `fleet` CLI routes share its typed `OperatorCommand`.
+- `QuestIonAbleFileManager.FleetAwakeProvider` is the narrow Fleet effect-owner
+  artifact for Quest awake control; it is not a general CLI projection.
+- `QuestIonAbleFileManager.FleetConnectivityProvider` is the narrow Fleet
+  execution artifact for Kiosk-owned wireless requests and exact-USB classic
+  TCP/IP setup; it is not a general CLI projection.
+- `ProviderCapabilityDiscoveryProjection` is the shared Core-only inert
+  description of the awake, connectivity, and Kiosk catalog registries. It
+  owns no execution, target, profile, credential, backend, or effect truth.
+- Fleet integration stays in the Core/CLI boundary described in
+  `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
+  one read-only target without a separate authority and UX review.
 - `QuestIonAbleFileManager.App` is the Windows WPF projection.
 - Keep external processes behind `ICommandRunner` and preserve cancellation
   and bounded timeouts.
@@ -206,8 +445,9 @@ dotnet run --project src/QuestIonAbleFileManager.App
 
 GitHub Pages is the human-facing download surface and GitHub Releases is the
 binary source of truth. The workflow publishes the signed guided setup, signed
-MSIX, App Installer feed, public CER, portable app/CLI archives, checksums, and
-a validation receipt. The build verifies the exact published Kiosk version and
+MSIX, App Installer feed, public CER, portable app/CLI archives, three dedicated
+Fleet provider executables and receipts, checksums, and a validation receipt.
+The build verifies the exact published Kiosk version and
 tag commit, every manifest byte count and SHA-256, both APK signer digests, and
 the source pointer before packaging; the receipt retains that provenance.
 Published assets are never overwritten—any change requires a new version.

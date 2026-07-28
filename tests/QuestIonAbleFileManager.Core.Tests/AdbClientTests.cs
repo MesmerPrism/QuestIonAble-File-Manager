@@ -165,6 +165,18 @@ public sealed class AdbClientTests
     {
         var runner = new RecordingCommandRunner((_, arguments) =>
         {
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "getprop", "ro.serialno"]))
+            {
+                return Success("stable-quest-identity\n");
+            }
+
+            if (arguments.SequenceEqual(
+                    ["-s", "192.0.2.42:5555", "shell", "getprop", "ro.serialno"]))
+            {
+                return Success("stable-quest-identity\n");
+            }
+
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "ip route"]))
             {
                 return Success(
@@ -197,16 +209,99 @@ public sealed class AdbClientTests
             progress: progress);
 
         Assert.Equal("192.0.2.42:5555", result.Endpoint);
-        Assert.Equal([0, 1, 2, 3], progress.Values.Select(static value => value.CompletedUnits));
-        Assert.All(progress.Values, static value => Assert.Equal(3, value.TotalUnits));
+        Assert.Equal(64, result.DeviceIdentitySha256.Length);
+        Assert.Equal(
+            [0, 1, 2, 3, 4, 5],
+            progress.Values.Select(static value => value.CompletedUnits));
+        Assert.All(progress.Values, static value => Assert.Equal(5, value.TotalUnits));
         Assert.Equal(
             [
+                new[] { "-s", "QUEST123", "shell", "getprop", "ro.serialno" },
                 new[] { "-s", "QUEST123", "shell", "ip route" },
                 new[] { "-s", "QUEST123", "tcpip", "5555" },
                 new[] { "connect", "192.0.2.42:5555" },
-                new[] { "devices", "-l" }
+                new[] { "devices", "-l" },
+                new[] { "-s", "192.0.2.42:5555", "shell", "getprop", "ro.serialno" }
             ],
             runner.Calls.Select(static call => call.Arguments));
+    }
+
+    [Fact]
+    public async Task EnableWifiAdb_RejectsNetworkIdentityMismatch()
+    {
+        var runner = WifiIdentityRunner(
+            "selected-device",
+            "different-device",
+            "connected to 192.0.2.42:5555\n");
+        var client = new AdbClient("adb-test", runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.EnableWifiAdbAndConnectAsync("QUEST123"));
+
+        Assert.Contains("did not match", exception.Message);
+        Assert.Contains(
+            runner.Calls,
+            static call => call.Arguments.SequenceEqual(
+                [
+                    "-s",
+                    "192.0.2.42:5555",
+                    "shell",
+                    "getprop",
+                    "ro.serialno"
+                ]));
+    }
+
+    [Fact]
+    public async Task EnableWifiAdb_RejectsReadyStaleEndpointForAnotherDevice()
+    {
+        var runner = WifiIdentityRunner(
+            "selected-device",
+            "stale-endpoint-device",
+            "already connected to 192.0.2.42:5555\n");
+        var client = new AdbClient("adb-test", runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.EnableWifiAdbAndConnectAsync("QUEST123"));
+
+        Assert.Contains("did not match", exception.Message);
+        Assert.Contains(
+            runner.Calls,
+            static call => call.Arguments.SequenceEqual(
+                ["connect", "192.0.2.42:5555"]));
+    }
+
+    [Fact]
+    public async Task EnableWifiAdb_StopsBeforeMutationWithoutStableUsbIdentity()
+    {
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (arguments.Count >= 5 &&
+                arguments[0] == "-s" &&
+                arguments[1] == "QUEST123" &&
+                arguments[2] == "shell" &&
+                arguments[3] == "getprop")
+            {
+                return Success("\n");
+            }
+            return new CommandResult(
+                "adb-test",
+                arguments,
+                1,
+                string.Empty,
+                "unexpected command",
+                TimeSpan.Zero);
+        });
+        var client = new AdbClient("adb-test", runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.EnableWifiAdbAndConnectAsync("QUEST123"));
+
+        Assert.Contains("stable device identity", exception.Message);
+        Assert.DoesNotContain(
+            runner.Calls,
+            static call => call.Arguments.Contains(
+                "tcpip",
+                StringComparer.Ordinal));
     }
 
     [Fact]
@@ -294,6 +389,60 @@ public sealed class AdbClientTests
 
     private static CommandResult Success(string output) =>
         new("adb-test", Array.Empty<string>(), 0, output, string.Empty, TimeSpan.Zero);
+
+    private static RecordingCommandRunner WifiIdentityRunner(
+        string usbIdentity,
+        string networkIdentity,
+        string connectOutput) =>
+        new((_, arguments) =>
+        {
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "getprop", "ro.serialno"]))
+            {
+                return Success(usbIdentity + "\n");
+            }
+            if (arguments.SequenceEqual(
+                    [
+                        "-s",
+                        "192.0.2.42:5555",
+                        "shell",
+                        "getprop",
+                        "ro.serialno"
+                    ]))
+            {
+                return Success(networkIdentity + "\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "ip route"]))
+            {
+                return Success(
+                    "192.0.2.0/24 dev wlan0 proto kernel scope link " +
+                    "src 192.0.2.42 metric 303\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "tcpip", "5555"]))
+            {
+                return Success("restarting in TCP mode port: 5555\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["connect", "192.0.2.42:5555"]))
+            {
+                return Success(connectOutput);
+            }
+            if (arguments.SequenceEqual(["devices", "-l"]))
+            {
+                return Success(
+                    "List of devices attached\n" +
+                    "192.0.2.42:5555 device product:eureka model:Quest_3\n");
+            }
+            return new CommandResult(
+                "adb-test",
+                arguments,
+                1,
+                string.Empty,
+                "unexpected command",
+                TimeSpan.Zero);
+        });
 
     private sealed class RecordingCommandRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler) : ICommandRunner
