@@ -238,7 +238,10 @@ bounded failure; a backup that completed prior-commitment validation remains
 exact repair evidence. Setup also treats a thrown Windows atomic-replace call
 as potentially state-changing: it classifies destination, staged replacement,
 and backup by retained identity/hash/signer commitments, preserves exact prior
-evidence, and emits only bounded reconciliation state. A different signer is
+evidence, and emits only bounded reconciliation state. A thrown atomic rollback
+restore is also reconciled, this time across destination, rollback candidate,
+and original backup. Setup retains every unresolved recovery artifact and
+reports restored only after exact stable destination readback. A different signer is
 rejected until a separately reviewed signer-rotation policy and migration
 route exist. The machine record owns the accepted descriptor IDs and monotonic
 version high-water mark; the mutable per-user files do not. Core cannot write
@@ -287,7 +290,11 @@ rollback readback and proves that Setup fails, retains the exact validated
 backup, and can use that evidence for verified repair; uncontested rollback
 must complete exact readback. A synthetic error-1177-shaped partial replacement
 moves the prior helper to backup before throwing, then proves reconciliation,
-path redaction, and backup retention. Setup additionally uses a fresh
+path redaction, and backup retention. Rollback-specific error-1177 cases cover a
+missing destination with the candidate remaining, the candidate already moved
+into the destination, and a changed destination with the candidate remaining;
+each proves exact bounded classification and retention of the original backup
+and any remaining candidate. Setup additionally uses a fresh
 unpredictable staging directory under its protected Program Files product root
 while elevated,
 rejects reparse components, and deletes that run directory afterward. Plan-only
@@ -345,6 +352,9 @@ includes:
   preservation, and different-signer rejection;
 - partial Windows atomic-replace failure after the prior helper moved to backup,
   with bounded reconciliation and exact prior-backup retention;
+- rollback atomic-replace failures with missing, moved, and changed destination
+  states, proving path-free classification and preservation of the original
+  backup plus any remaining rollback candidate;
 - protected-authority reconstruction of missing local files, refusal to
   reconstruct missing HKLM authority from valid mutable evidence, partial and
   forged evidence rejection, and the separately named destructive reset;

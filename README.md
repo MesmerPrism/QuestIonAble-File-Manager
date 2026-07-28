@@ -238,8 +238,12 @@ otherwise the backup is retained for repair inspection and rollback remains
 failed. A backup that completed commitment validation is preserved as exact
 repair evidence. Even a failed atomic-replace call is reconciled as potentially
 state-changing; Setup classifies the destination, staged replacement, and
-backup against retained commitments before bounded failure and cleanup. Signer
-changes fail until a separately reviewed rotation mechanism exists. Elevated
+backup against retained commitments before bounded failure and cleanup. A
+thrown atomic rollback restore is reconciled the same way against the
+destination, rollback candidate, and original backup; unresolved candidate and
+backup evidence is retained, and only exact stable destination readback can
+report a successful restore. Signer changes fail until a separately reviewed
+rotation mechanism exists. Elevated
 Setup stages installer inputs in a fresh unpredictable directory under its
 protected Program Files product root,
 rejects reparse components, and removes the run directory after use; plan-only

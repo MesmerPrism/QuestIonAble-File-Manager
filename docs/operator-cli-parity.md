@@ -168,7 +168,9 @@ destructive reset, synthetic same-signer helper A-to-B replacement with
 retained identity and state preservation, verified rollback readback,
 adversarial rollback-destination substitution with validated-backup retention,
 error-1177-shaped partial replacement with bounded reconciliation and prior
-backup retention, different-signer rejection, visible guided-process retry
+backup retention, rollback-specific error-1177 missing/moved/changed states
+with candidate and backup evidence preservation, different-signer rejection,
+visible guided-process retry
 semantics, receipt redaction, process timeouts, private-stage cleanup, and
 reparse rejection.
 

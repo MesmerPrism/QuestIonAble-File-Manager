@@ -212,8 +212,11 @@ documented.
   rollback is unknown or fails; describe it as validated repair evidence only
   after exact prior-commitment validation. Treat a thrown atomic-replace call
   as potentially state-changing and reconcile destination, replacement, and
-  backup against retained commitments without deleting prior evidence. Reject
-  signer changes without a separately reviewed rotation route.
+  backup against retained commitments without deleting prior evidence. Apply
+  the same rule if rollback's atomic restore throws: reconcile the destination,
+  rollback candidate, and original backup, preserve unresolved evidence, and
+  never report restored without exact stable destination readback. Reject signer
+  changes without a separately reviewed rotation route.
   A declined, failed, or prompt-expired visible guided run remains unconsumed;
   recheck the clock immediately after guided success and require a fresh
   descriptor fetch before retry.

@@ -185,8 +185,12 @@ success. Unknown or failed rollback retains the backup for inspection; one
 that completed prior-commitment validation remains exact repair evidence.
 An atomic-replace error is treated as potentially state-changing: destination,
 replacement, and backup are reconciled against both retained commitments, and
-an exact prior backup is never deleted on unknown failure. Signer changes
-remain rejected without a reviewed rotation route. Elevated installer inputs
+an exact prior backup is never deleted on unknown failure. If rollback's own
+atomic restore throws, Setup likewise classifies the destination, rollback
+candidate, and original backup; it retains unresolved evidence and cannot
+report restoration until stable destination readback matches the candidate
+commitment exactly. Signer changes remain rejected without a reviewed rotation
+route. Elevated installer inputs
 use unpredictable protected Program Files staging with reparse rejection and
 per-run cleanup. Missing or
 coordinated-deleted files and machine-record loss after initialization fail

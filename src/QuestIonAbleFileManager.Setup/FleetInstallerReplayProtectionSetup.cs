@@ -21,6 +21,9 @@ internal sealed record ProtectedHelperCommitment(
     string Sha256,
     string SignerCertificateSha256);
 
+internal sealed class ProtectedHelperRollbackReconciliationException(
+    string message) : Exception(message);
+
 internal enum ProtectedHelperInstallAction
 {
     Installed,
@@ -33,6 +36,7 @@ internal enum ProtectedHelperArtifactMatch
     Missing,
     Prior,
     Replacement,
+    RollbackCandidate,
     Unknown
 }
 
@@ -370,6 +374,8 @@ internal static class FleetInstallerReplayProtectionSetup
             forged_partial_evidence = "rejected",
             rollback_readback =
                 "verified_or_validated_backup_retained",
+            rollback_partial_replace =
+                "reconciled_and_evidence_preserved",
             partial_replace_failure =
                 "reconciled_and_prior_backup_retained",
             result_local_paths = "absent"
@@ -930,15 +936,20 @@ internal static class FleetInstallerReplayProtectionSetup
                 FileSha256(retainedBackup),
                 signerPin);
         }
+        var preserveSelfTestRepairCandidate = false;
         RestoreProtectedHelperFromBackup(
             retainedBackups[0],
             destination,
             destination + ".self-test-repair",
             signerPin,
             retainedBackupCommitment,
+            retainedBackupCommitment,
             verifier,
             backupValidatedHook: null,
-            rollbackReadbackHook: null);
+            rollbackReadbackHook: null,
+            rollbackReplaceTestHook: null,
+            preserveRollbackCandidate:
+                ref preserveSelfTestRepairCandidate);
         if (!File.ReadAllBytes(destination).SequenceEqual(bytesB))
         {
             throw new InvalidOperationException(
@@ -972,6 +983,77 @@ internal static class FleetInstallerReplayProtectionSetup
             throw new InvalidOperationException(
                 "A rejected signer change modified the installed helper.");
         }
+
+        AssertRollbackReplacePartialFailure(
+            staging.Path,
+            "missing",
+            sourceA,
+            sourceB,
+            signerPin,
+            verifier,
+            bytesB,
+            rollbackReplace:
+            (candidate, installed) =>
+            {
+                _ = candidate;
+                File.Delete(installed);
+                throw new System.ComponentModel.Win32Exception(
+                    1177,
+                    "Synthetic partial rollback ReplaceFileW failure at " +
+                    installed);
+            },
+            expectedReconciliation:
+                "destination=missing, rollback_candidate=rollback_candidate, backup=prior",
+            expectedDestinationBytes: null,
+            expectRollbackCandidate: true);
+        AssertRollbackReplacePartialFailure(
+            staging.Path,
+            "moved",
+            sourceA,
+            sourceB,
+            signerPin,
+            verifier,
+            bytesB,
+            rollbackReplace:
+            (candidate, installed) =>
+            {
+                File.Move(
+                    candidate,
+                    installed,
+                    overwrite: true);
+                throw new System.ComponentModel.Win32Exception(
+                    1177,
+                    "Synthetic partial rollback ReplaceFileW failure at " +
+                    installed);
+            },
+            expectedReconciliation:
+                "destination=rollback_candidate, rollback_candidate=missing, backup=prior",
+            expectedDestinationBytes: bytesB,
+            expectRollbackCandidate: false);
+        AssertRollbackReplacePartialFailure(
+            staging.Path,
+            "changed",
+            sourceA,
+            sourceB,
+            signerPin,
+            verifier,
+            bytesB,
+            rollbackReplace:
+            (candidate, installed) =>
+            {
+                _ = candidate;
+                File.WriteAllBytes(
+                    installed,
+                    bytesOtherSigner);
+                throw new System.ComponentModel.Win32Exception(
+                    1177,
+                    "Synthetic partial rollback ReplaceFileW failure at " +
+                    installed);
+            },
+            expectedReconciliation:
+                "destination=unknown, rollback_candidate=rollback_candidate, backup=prior",
+            expectedDestinationBytes: bytesOtherSigner,
+            expectRollbackCandidate: true);
 
         try
         {
@@ -1026,6 +1108,112 @@ internal static class FleetInstallerReplayProtectionSetup
         {
             throw new InvalidOperationException(
                 "Partial ReplaceFileW failure lost exact prior-helper recovery evidence.");
+        }
+    }
+
+    private static void AssertRollbackReplacePartialFailure(
+        string stagingPath,
+        string caseName,
+        string sourceReplacement,
+        string sourcePrior,
+        string signerPin,
+        ISetupArtifactVerifier verifier,
+        byte[] priorBytes,
+        Action<string, string> rollbackReplace,
+        string expectedReconciliation,
+        byte[]? expectedDestinationBytes,
+        bool expectRollbackCandidate)
+    {
+        var destination = Path.Combine(
+            stagingPath,
+            "rollback-" + caseName + ".exe");
+        if (InstallProtectedHelperCore(
+                sourcePrior,
+                destination,
+                signerPin,
+                verifier) !=
+            ProtectedHelperInstallAction.Installed)
+        {
+            throw new InvalidOperationException(
+                "The rollback partial-failure prior helper was not installed.");
+        }
+
+        var rejectCommittedVerifier =
+            new RejectCommittedSetupArtifactVerifier(
+                verifier,
+                destination);
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceReplacement,
+                destination,
+                signerPin,
+                rejectCommittedVerifier,
+                rollbackReadbackTestHook: null,
+                primaryReplaceTestHook: null,
+                rollbackReplaceTestHook: rollbackReplace);
+            throw new InvalidOperationException(
+                "A partial rollback ReplaceFileW failure was accepted.");
+        }
+        catch (AggregateException exception) when (
+            exception.Message.Contains(
+                "validated backup was retained",
+                StringComparison.Ordinal) &&
+            exception.InnerExceptions.Count == 2 &&
+            exception.InnerExceptions[1].Message.StartsWith(
+                "Fleet replay helper rollback replacement failed with HRESULT",
+                StringComparison.Ordinal) &&
+            exception.InnerExceptions[1].Message.Contains(
+                expectedReconciliation,
+                StringComparison.Ordinal) &&
+            !exception.Message.Contains(
+                stagingPath,
+                StringComparison.OrdinalIgnoreCase) &&
+            exception.InnerExceptions.All(inner =>
+                !inner.Message.Contains(
+                    stagingPath,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+        }
+
+        var backups = Directory.GetFiles(
+            stagingPath,
+            "rollback-" + caseName + ".exe.*.backup",
+            SearchOption.TopDirectoryOnly);
+        var candidates = Directory.GetFiles(
+            stagingPath,
+            "rollback-" + caseName + ".exe.*.rollback",
+            SearchOption.TopDirectoryOnly);
+        if (backups.Length != 1 ||
+            !File.ReadAllBytes(backups[0]).SequenceEqual(
+                priorBytes) ||
+            verifier.VerifySignerCertificateSha256(
+                backups[0]) != signerPin ||
+            candidates.Length !=
+                (expectRollbackCandidate ? 1 : 0) ||
+            expectRollbackCandidate &&
+            (!File.ReadAllBytes(candidates[0]).SequenceEqual(
+                priorBytes) ||
+             verifier.VerifySignerCertificateSha256(
+                 candidates[0]) != signerPin))
+        {
+            throw new InvalidOperationException(
+                "Partial rollback ReplaceFileW failure did not preserve exact recovery evidence.");
+        }
+        if (expectedDestinationBytes is null)
+        {
+            if (File.Exists(destination))
+            {
+                throw new InvalidOperationException(
+                    "Partial rollback ReplaceFileW failure left an unexpected destination.");
+            }
+        }
+        else if (!File.Exists(destination) ||
+                 !File.ReadAllBytes(destination).SequenceEqual(
+                     expectedDestinationBytes))
+        {
+            throw new InvalidOperationException(
+                "Partial rollback ReplaceFileW failure destination classification was not exact.");
         }
     }
 
@@ -1717,7 +1905,8 @@ internal static class FleetInstallerReplayProtectionSetup
             string signerPin,
             ISetupArtifactVerifier verifier,
             Action<string>? rollbackReadbackTestHook = null,
-            Action<string, string, string>? primaryReplaceTestHook = null)
+            Action<string, string, string>? primaryReplaceTestHook = null,
+            Action<string, string>? rollbackReplaceTestHook = null)
     {
         EnsureDigest(signerPin);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -1802,6 +1991,7 @@ internal static class FleetInstallerReplayProtectionSetup
         FleetWindowsFileIdentity temporaryIdentity;
         ProtectedHelperCommitment? replacementCommitment = null;
         var preserveBackup = false;
+        var preserveRollbackCandidate = false;
         var backupWasValidated = false;
         var replacementAttempted = false;
         var replacementCommitted = false;
@@ -1974,9 +2164,14 @@ internal static class FleetInstallerReplayProtectionSetup
                             priorCommitment ??
                                 throw new InvalidOperationException(
                                     "The prior replay helper commitment is missing."),
+                            replacementCommitment ??
+                                throw new InvalidOperationException(
+                                    "The replacement replay helper commitment is missing."),
                             verifier,
                             () => backupWasValidated = true,
-                            rollbackReadbackTestHook);
+                            rollbackReadbackTestHook,
+                            rollbackReplaceTestHook,
+                            ref preserveRollbackCandidate);
                         preserveBackup = false;
                     }
                     else
@@ -2002,9 +2197,13 @@ internal static class FleetInstallerReplayProtectionSetup
                         BoundedLifecycleFailure(
                             "committed_validation",
                             validationException),
-                        BoundedLifecycleFailure(
-                            "rollback_readback",
-                            rollbackException));
+                        rollbackException is
+                            ProtectedHelperRollbackReconciliationException
+                            ? new InvalidOperationException(
+                                rollbackException.Message)
+                            : BoundedLifecycleFailure(
+                                "rollback_readback",
+                                rollbackException));
                 }
                 throw new AggregateException(
                     destinationExisted
@@ -2018,7 +2217,11 @@ internal static class FleetInstallerReplayProtectionSetup
         finally
         {
             BestEffortDeleteLifecycleArtifact(temporary);
-            BestEffortDeleteLifecycleArtifact(rollbackCandidate);
+            if (!preserveRollbackCandidate)
+            {
+                BestEffortDeleteLifecycleArtifact(
+                    rollbackCandidate);
+            }
             if (!preserveBackup)
             {
                 BestEffortDeleteLifecycleArtifact(backup);
@@ -2097,13 +2300,68 @@ internal static class FleetInstallerReplayProtectionSetup
                 "."));
     }
 
+    private static ProtectedHelperRollbackReconciliationException
+        ReconcileFailedProtectedHelperRollbackReplace(
+            string rollbackCandidate,
+            string destination,
+            string backup,
+            string signerPin,
+            ProtectedHelperCommitment priorCommitment,
+            ProtectedHelperCommitment replacementCommitment,
+            ProtectedHelperCommitment rollbackCandidateCommitment,
+            ISetupArtifactVerifier verifier,
+            Exception rollbackReplaceException,
+            ref bool preserveRollbackCandidate)
+    {
+        var destinationMatch = ClassifyProtectedHelperArtifact(
+            destination,
+            signerPin,
+            priorCommitment,
+            replacementCommitment,
+            verifier,
+            rollbackCandidateCommitment);
+        var rollbackCandidateMatch =
+            ClassifyProtectedHelperArtifact(
+                rollbackCandidate,
+                signerPin,
+                priorCommitment,
+                replacementCommitment,
+                verifier,
+                rollbackCandidateCommitment);
+        var backupMatch = ClassifyProtectedHelperArtifact(
+            backup,
+            signerPin,
+            priorCommitment,
+            replacementCommitment,
+            verifier,
+            rollbackCandidateCommitment);
+        preserveRollbackCandidate =
+            rollbackCandidateMatch !=
+            ProtectedHelperArtifactMatch.Missing;
+
+        return new ProtectedHelperRollbackReconciliationException(
+            "Fleet replay helper rollback replacement failed with HRESULT 0x" +
+            rollbackReplaceException.HResult.ToString(
+                "x8",
+                System.Globalization.CultureInfo.InvariantCulture) +
+            "; reconciliation: destination=" +
+            ArtifactMatchToken(destinationMatch) +
+            ", rollback_candidate=" +
+            ArtifactMatchToken(rollbackCandidateMatch) +
+            ", backup=" +
+            ArtifactMatchToken(backupMatch) +
+            ".");
+    }
+
     private static ProtectedHelperArtifactMatch
         ClassifyProtectedHelperArtifact(
             string path,
             string signerPin,
             ProtectedHelperCommitment priorCommitment,
             ProtectedHelperCommitment replacementCommitment,
-            ISetupArtifactVerifier verifier)
+            ISetupArtifactVerifier verifier,
+            ProtectedHelperCommitment? rollbackCandidateCommitment =
+                null)
     {
         if (!File.Exists(path))
         {
@@ -2157,6 +2415,19 @@ internal static class FleetInstallerReplayProtectionSetup
             {
                 return ProtectedHelperArtifactMatch.Replacement;
             }
+            if (rollbackCandidateCommitment is not null &&
+                identity == rollbackCandidateCommitment.Identity &&
+                FixedLowerHexEquals(
+                    hash,
+                    rollbackCandidateCommitment.Sha256) &&
+                FixedLowerHexEquals(
+                    signerPin,
+                    rollbackCandidateCommitment
+                        .SignerCertificateSha256))
+            {
+                return ProtectedHelperArtifactMatch
+                    .RollbackCandidate;
+            }
             return ProtectedHelperArtifactMatch.Unknown;
         }
         catch (FileNotFoundException)
@@ -2180,6 +2451,8 @@ internal static class FleetInstallerReplayProtectionSetup
             ProtectedHelperArtifactMatch.Missing => "missing",
             ProtectedHelperArtifactMatch.Prior => "prior",
             ProtectedHelperArtifactMatch.Replacement => "replacement",
+            ProtectedHelperArtifactMatch.RollbackCandidate =>
+                "rollback_candidate",
             _ => "unknown"
         };
 
@@ -2189,9 +2462,12 @@ internal static class FleetInstallerReplayProtectionSetup
         string rollbackCandidate,
         string signerPin,
         ProtectedHelperCommitment priorCommitment,
+        ProtectedHelperCommitment replacementCommitment,
         ISetupArtifactVerifier verifier,
         Action? backupValidatedHook,
-        Action<string>? rollbackReadbackHook)
+        Action<string>? rollbackReadbackHook,
+        Action<string, string>? rollbackReplaceTestHook,
+        ref bool preserveRollbackCandidate)
     {
         RequireSignerPin(
             priorCommitment.SignerCertificateSha256,
@@ -2290,12 +2566,43 @@ internal static class FleetInstallerReplayProtectionSetup
                     "The replay helper rollback candidate changed during validation.");
             }
         }
+        var rollbackCandidateCommitment =
+            new ProtectedHelperCommitment(
+                candidateIdentity,
+                priorCommitment.Sha256,
+                priorCommitment.SignerCertificateSha256);
 
-        File.Replace(
-            rollbackCandidate,
-            destination,
-            destinationBackupFileName: null,
-            ignoreMetadataErrors: false);
+        try
+        {
+            if (rollbackReplaceTestHook is null)
+            {
+                File.Replace(
+                    rollbackCandidate,
+                    destination,
+                    destinationBackupFileName: null,
+                    ignoreMetadataErrors: false);
+            }
+            else
+            {
+                rollbackReplaceTestHook(
+                    rollbackCandidate,
+                    destination);
+            }
+        }
+        catch (Exception rollbackReplaceException)
+        {
+            throw ReconcileFailedProtectedHelperRollbackReplace(
+                rollbackCandidate,
+                destination,
+                backup,
+                signerPin,
+                priorCommitment,
+                replacementCommitment,
+                rollbackCandidateCommitment,
+                verifier,
+                rollbackReplaceException,
+                ref preserveRollbackCandidate);
+        }
         rollbackReadbackHook?.Invoke(destination);
 
         using var restored =

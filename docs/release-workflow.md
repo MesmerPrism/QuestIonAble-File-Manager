@@ -220,8 +220,11 @@ the backup for repair inspection and reports a bounded rollback failure; a
 backup that completed commitment validation remains exact repair evidence.
 Any thrown Windows atomic-replace call is reconciled as potentially
 state-changing by classifying destination, staged replacement, and backup
-against both commitments before bounded failure and cleanup. Signer changes
-fail until a separately reviewed rotation mechanism exists.
+against both commitments before bounded failure and cleanup. The rollback
+restore's atomic replace has the same fail-closed contract: Setup classifies
+the destination, rollback candidate, and original backup, retains unresolved
+evidence, and cannot claim restoration without exact stable readback. Signer
+changes fail until a separately reviewed rotation mechanism exists.
 Runtime requests never carry a path or secret;
 the elevated helper re-fetches and verifies the current signed Fleet descriptor
 before it advances the protected HKLM high-water mark. Its protected
@@ -238,7 +241,10 @@ local evidence, post-update equal-version/downgrade rejection, uncontested
 verified rollback, and adversarial rollback-destination substitution with
 validated-backup retention. It also injects the Windows error-1177 partial
 failure shape—prior helper moved to backup before the call throws—and proves
-bounded path-free reconciliation plus exact backup retention.
+bounded path-free reconciliation plus exact backup retention. Separate
+rollback error-1177 cases cover missing, moved, and changed destination states
+and prove exact classification plus preservation of the original backup and
+any remaining rollback candidate.
 
 ## GitHub Configuration
 

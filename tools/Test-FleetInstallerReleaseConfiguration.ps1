@@ -258,6 +258,8 @@ function Assert-SetupSecuritySelfTest {
             $proof.forged_partial_evidence -cne 'rejected' -or
             $proof.rollback_readback -cne
                 'verified_or_validated_backup_retained' -or
+            $proof.rollback_partial_replace -cne
+                'reconciled_and_evidence_preserved' -or
             $proof.partial_replace_failure -cne
                 'reconciled_and_prior_backup_retained' -or
             $proof.result_local_paths -cne 'absent') {
