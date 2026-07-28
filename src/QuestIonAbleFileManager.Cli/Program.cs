@@ -1512,11 +1512,19 @@ internal static class CliApplication
             selects the canonical MesmerPrism Pages metadata descriptor (or an explicitly
             enabled development fixture) and pins both its descriptor key and Windows
             installer signer. Its strict v2 payload binds the exact numeric-version GitHub
-            Release URL for RustyFleet-Setup.exe; Pages never carries the binary. Embedded
-            release configuration ignores environment overrides. File Manager then invokes
-            only Fleet's fixed plan and guided setup entrypoints. It accepts no URL, program,
-            argument, credential, device, ADB, hotspot, or elevation option and reports
-            only sanitized handoff metadata.
+            Release URL for RustyFleet-Setup.exe; Pages never carries the binary. Payload
+            bytes must use RFC 8785 JCS, bind issue/expiry with a required duration, and
+            expire within 24 hours. Embedded release trust
+            comes only from reviewed checked-in source on the clean tagged release commit;
+            MSBuild, environment, script arguments, and generated files cannot add trust.
+            Replay state, its sibling file anchor, and its elevated signed-Setup-provisioned
+            protected machine record fail closed after deletion or record loss; Core is
+            read-only and has no provisioning/reset/transition API. A declined, failed, or prompt-expired
+            visible guided run remains unconsumed, with freshness checked again after
+            success. File Manager invokes only Fleet's
+            fixed plan and guided setup entrypoints. It accepts no URL, program, argument,
+            credential, device, ADB, hotspot, or elevation option and reports only sanitized
+            handoff metadata.
             """);
     }
 }

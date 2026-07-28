@@ -205,9 +205,35 @@ no runtime URL or executable argument. Core verifies the configured signed
 v2 release descriptor at the canonical MesmerPrism Pages metadata path, its
 explicit immutable numeric-version GitHub Release URL, exact
 `RustyFleet-Setup.exe` size and SHA-256, Windows signer, and Fleet's
-non-mutating plan before opening the visible Fleet-owned installer. Published
-releases embed their all-or-none trust configuration; source builds may use
-the explicit development environment fallback. Pages remains binary-free.
+non-mutating plan before opening the visible Fleet-owned installer. Signed
+payload bytes must use RFC 8785 JCS, carry a required exact duration binding
+issue to expiry, and remain valid for no more than 24 hours.
+Published releases embed their all-or-none trust configuration only through
+reviewed checked-in source on the exact clean tagged release commit; ordinary
+MSBuild/environment/script inputs and generated `obj` files cannot add trust.
+Replay state is paired with a sibling file anchor and an elevated,
+Authenticode/self-pin-verified Setup-provisioned HKLM record whose ACL grants
+write only to SYSTEM/Administrators and read to runtime Users. The protected
+record, not the per-user files, owns the accepted descriptor IDs and monotonic
+version high-water mark. Runtime Core reads it and can only request a transition
+through the pinned signed Setup copy installed under Program Files; that
+elevated helper independently re-fetches and verifies the current signed
+descriptor before advancing the record. The entire protected transition is
+serialized by a machine-wide mutex whose protected ACL grants control only to
+SYSTEM and Administrators, with exact record readback before success;
+abandoned-lock recovery always re-reads machine state. Partial or coordinated file deletion
+and machine-record loss fail closed; reinstall/repair is the explicit recovery
+action. Lifecycle reset requires signed Setup's
+`--repair-fleet-replay-protection` option, and its receipt records
+provisioning/repair/reset. Elevated Setup stages installer inputs in a fresh
+unpredictable directory under its protected Program Files product root,
+rejects reparse components, and removes the run directory after use; plan-only
+staging remains unelevated and per-run. Quiet success and failure output never
+includes those paths. A
+declined, failed, or prompt-expired visible guided run remains unconsumed; the
+clock is checked again after a successful prompt and a fresh descriptor must be
+fetched before retry. Source builds may
+use the explicit development runtime environment fallback. Pages remains binary-free.
 Receipts expose release evidence and truthful source kind but no source URL,
 local path, credential, process argument, or device data. Fleet remains the
 authority for all fleet/device/connectivity behavior.

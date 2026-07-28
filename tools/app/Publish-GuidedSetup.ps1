@@ -47,6 +47,40 @@ $outputExe = Join-Path $OutputDirectory $FileName
 Copy-Item -LiteralPath $publishedExe -Destination $outputExe -Force
 
 if (-not $Unsigned) {
+    $setupBuildRoot = Join-Path (Split-Path $project) 'bin\Release'
+    $coreAssemblies = @(
+        Get-ChildItem -LiteralPath $setupBuildRoot -Recurse `
+            -Filter 'QuestIonAbleFileManager.Core.dll' -File |
+            Where-Object FullName -Match '[\\/]win-x64[\\/]'
+    )
+    if ($coreAssemblies.Count -eq 0) {
+        throw 'The Setup publish did not expose its exact Core input assembly for pre-sign validation.'
+    }
+    $setupSigningCertificate =
+        [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
+            [IO.Path]::GetFullPath($CertificatePath),
+            $CertificatePassword,
+            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    try {
+        $setupSignerSha256 = [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData(
+                $setupSigningCertificate.RawData)
+        ).ToLowerInvariant()
+    }
+    finally {
+        $setupSigningCertificate.Dispose()
+    }
+    & (Join-Path $repoRoot `
+        'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+        -RequireOfficialRelease `
+        -ExpectedVersion $Version `
+        -AssemblyPath @($coreAssemblies.FullName) `
+        -SetupExecutablePath $outputExe `
+        -ExpectedSetupSignerCertificateSha256 $setupSignerSha256
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Unsigned Setup Fleet release trust validation failed.'
+    }
+
     $sdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
     $signTool = Get-ChildItem -LiteralPath $sdkBin -Directory |
         Where-Object Name -Match '^\d+\.\d+\.\d+\.\d+$' |

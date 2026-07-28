@@ -181,6 +181,40 @@ try {
     Copy-Item -LiteralPath $builtPackage.FullName -Destination $packageOutputPath -Force
 
     if (-not $Unsigned) {
+        # Restore the exact checked-in project inputs before the final release
+        # trust gate. The package is still unsigned at this point.
+        [IO.File]::WriteAllBytes($manifestPath, $originalManifestBytes)
+        [IO.File]::WriteAllBytes(
+            $packageProject,
+            $originalPackageProjectBytes)
+        $resolverEnvironment = [ordered]@{}
+        foreach ($name in @(
+            'DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR'
+            'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR'
+            'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER'
+        )) {
+            $resolverEnvironment[$name] =
+                [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $null)
+        }
+        try {
+            & (Join-Path $repoRoot `
+                'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+                -RequireOfficialRelease `
+                -ExpectedVersion $Version `
+                -PackagePath $packageOutputPath
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Unsigned MSIX Fleet release trust validation failed.'
+            }
+        }
+        finally {
+            foreach ($entry in $resolverEnvironment.GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable(
+                    $entry.Key,
+                    $entry.Value)
+            }
+        }
+
         $signTool = Find-WindowsSdkTool -ToolName 'signtool.exe'
         & $signTool sign /fd SHA256 /f ([IO.Path]::GetFullPath($CertificatePath)) /p $CertificatePassword /tr $TimestampUrl /td SHA256 $packageOutputPath
         if ($LASTEXITCODE -ne 0) { throw "signtool failed for $PackageFileName with exit code $LASTEXITCODE" }

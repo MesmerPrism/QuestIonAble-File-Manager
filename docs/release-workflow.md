@@ -116,24 +116,29 @@ pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
 ```
 
 For a release that exposes the optional Fleet download handoff, the release
-owner must also supply all six public trust inputs:
+owner adds the complete eight-field public `AssemblyMetadata` block documented
+in [Fleet installer handoff](fleet-installer-handoff.md) to checked-in
+`src/QuestIonAbleFileManager.Core/FleetInstallerReleaseConfiguration.cs`.
+This is an intentional reviewed release commit, not a script argument,
+environment variable, MSBuild property, or generated file. Leave that source
+inert when the handoff is not enabled.
 
-```powershell
--FleetInstallerReleaseDescriptorUri 'https://mesmerprism.com/Rusty-Fleet/metadata/<channel>/release.json' `
--FleetInstallerDescriptorPublicKeySpkiBase64 '<canonical-public-rsa-spki>' `
--FleetInstallerDescriptorSignerSpkiSha256 '<lowercase-spki-sha256>' `
--FleetInstallerSetupSignerCertificateSha256 '<lowercase-setup-certificate-sha256>' `
--FleetInstallerChannel '<channel>' `
--FleetInstallerStateRootRelativePath 'QuestIonAbleFileManager/FleetInstaller'
-```
+`Invoke-ReleaseBuild.ps1` runs the configuration gate before building. It
+requires an exact clean commit tagged `v<Version>`, verifies that the
+configuration source is tracked, parses only the closed eight-literal source
+shape, hashes it before and after isolated builds, rejects custom
+SDK/import/targets hooks, and compares every compiled value to source. The
+unsigned MSIX payload and Setup's exact Core input are revalidated immediately
+before their signing commands. A custom source build may edit source but
+cannot become an official signed QFM release.
 
-Append those arguments to `Invoke-ReleaseBuild.ps1`; do not store real
-publisher values or local paths in this repository. They are all-or-none and
-are embedded as versioned assembly metadata. The script clears ambient MSBuild
-values, validates the SPKI and pins, and restores its caller's environment.
-Omitting all six produces an inert release; a partial set fails. The canonical
-Pages location publishes only short-lived signed `release.json` metadata. Its
-v2 payload must bind
+The GitHub workflow has no branch or manual-dispatch signing route. It starts
+only for `refs/tags/v<version>`, fetches that exact existing tag from `origin`,
+and requires the authoritative tag's peeled commit to equal `GITHUB_SHA`
+before restoring signing material.
+
+The canonical Pages location publishes only signed `release.json` metadata
+valid for at most 24 hours. Its v2 payload must use RFC 8785 JCS bytes and bind
 `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`;
 never publish or derive a Pages-sibling Setup binary.
 
@@ -184,6 +189,26 @@ QuestIonAbleFileManager-Setup.exe --plan --json
 certificate or installing a package. Actual guided installation requests UAC;
 the elevation is part of the public installer contract.
 
+The signed helper alone also owns explicit Fleet replay-lifecycle repair:
+
+```powershell
+QuestIonAbleFileManager-Setup.exe --repair-fleet-replay-protection --json
+```
+
+Normal install provisions or preserves replay protection but refuses a reset.
+The repair option validates paired replay files, refuses partial evidence, and
+records its sanitized preserve/repair/reset action in the Setup result.
+Setup also installs its exact same-signed replay-authority copy under the fixed
+Program Files product directory. Runtime requests never carry a path or secret;
+the elevated helper re-fetches and verifies the current signed Fleet descriptor
+before it advances the protected HKLM high-water mark. Its protected
+SYSTEM/Administrators-only machine mutex serializes descriptor refetch through
+durable HKLM readback, including provisioning/repair and abandoned-lock
+recovery. Elevated staging uses a new unpredictable directory under the
+protected Program Files product root and rejects reparse components. Quiet
+success reports only the App Installer source kind and staged-content SHA-256;
+quiet failure is a bounded code/HRESULT result. Neither exposes a local path.
+
 ## GitHub Configuration
 
 The release workflow requires these Actions secrets:
@@ -200,6 +225,7 @@ Optional Actions variables select alternate RFC 3161 timestamp services:
 - `WINDOWS_PREVIEW_SETUP_TIMESTAMP_URL`.
 
 Private keys stay in the Windows certificate store, ignored local artifacts,
-and encrypted GitHub Actions secrets. They are never committed. Publishing a
-tag or manually dispatching the workflow builds, validates, uploads, and then
-creates a new matching GitHub Release.
+and encrypted GitHub Actions secrets. They are never committed. Pushing an
+existing authoritative `v<version>` tag builds, validates, uploads, and then
+creates a new matching GitHub Release. Branch and manual workflow runs never
+sign release assets.

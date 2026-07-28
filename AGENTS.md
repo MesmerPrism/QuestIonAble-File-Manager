@@ -171,12 +171,39 @@ documented.
   metadata-only: never publish, derive, or download a sibling Setup binary
   there. The strict v2 signed payload binds the exact immutable
   `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`
-  asset URL. Core verifies schema, product, exact three-part version/tag,
-  freshness, asset name/size/SHA-256/protocol, RSA-PSS signature,
+  asset URL. Release trust exists only as the complete eight-field metadata
+  block in checked-in `FleetInstallerReleaseConfiguration.cs`, reviewed on
+  the exact clean tagged release commit. Ordinary MSBuild, environment,
+  release-script arguments, and generated `obj` files have no trust authority.
+  Core verifies RFC 8785 JCS payload bytes, schema,
+  product, exact three-part version/tag, the
+  required duration/exact expiry relation, 24-hour maximum lifetime,
+  30-second future-skew boundary, fresh-clock post-guided-success check, asset
+  name/size/SHA-256/protocol, RSA-PSS signature,
   Authenticode, and the Fleet-owned `--plan --json` result before starting the
   exact installer with no arguments. Keep staging local, non-reparse, retained against
   substitution, create-new, and cleaned by handle. Persist replay and
-  strictly-monotonic-version state with write-through before guided launch.
+  strictly-monotonic-version state with write-through after guided success,
+  plus a sibling file anchor and an elevated signed-Setup-provisioned,
+  root-bound HKLM record with SYSTEM/Administrators write and Users read. The
+  machine record owns accepted descriptor IDs and the monotonic version
+  high-water mark; per-user files are not authoritative for those decisions.
+  Setup must verify its own Authenticode and reviewed signer pin before write;
+  Core must expose no direct machine-state writer. Its only transition route is
+  the protected signed Setup copy under Program Files, which elevates,
+  re-fetches, and independently verifies the current signed descriptor before
+  advancing the record. Serialize descriptor refetch, protected record
+  read/check/write, and exact durable readback under a machine-wide mutex with
+  a protected SYSTEM/Administrators-only DACL. Revalidate that DACL on every
+  open, use the same lock for provisioning/repair, and re-read state after
+  abandoned-lock recovery. Elevated Setup staging must be unpredictable,
+  protected under Program Files, reparse-free, per-run, and cleaned; quiet
+  success/failure output must never contain its path.
+  Missing/coordinated-deleted replay
+  files or marker loss must fail closed and require explicit reinstall/repair.
+  A declined, failed, or prompt-expired visible guided run remains unconsumed;
+  recheck the clock immediately after guided success and require a fresh
+  descriptor fetch before retry.
   Status and handoff receipts must never contain
   source URLs, local paths, process arguments, credentials, or device data.
   File Manager must not download another bootstrapper, configure Fleet,
@@ -304,6 +331,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- --help
 dotnet test tests/QuestIonAbleFileManager.Core.Tests --configuration Release --filter "FullyQualifiedName~LocalApiTests"
 pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
+pwsh -NoProfile -File ./tools/Test-FleetInstallerReleaseConfiguration.ps1
 pwsh -NoProfile -File ./tools/app/Test-BrandAssets.ps1
 pwsh -NoProfile -File ./tools/Test-FleetKioskV2ProviderArtifact.ps1
 pwsh -NoProfile -File ./tools/Test-FleetAwakeProviderArtifact.ps1
@@ -340,10 +368,11 @@ pwsh -NoProfile -File ./tools/app/Test-ConsumerInstall.ps1 `
   -RemoveAfterTest
 ```
 
-If that release enables the optional Fleet distribution handoff, append the
-complete six-argument public trust configuration documented in
-`docs/release-workflow.md`. Omit all six for an inert release; never rely on
-ambient MSBuild/environment values, and never commit real publisher values.
+If that release enables the optional Fleet distribution handoff, add the
+complete public eight-field metadata block to the checked-in release
+configuration source as documented in `docs/release-workflow.md`. Leave the
+source inert otherwise. Never rely on ambient MSBuild/environment/script
+values or generated files, and never commit private publisher material.
 
 Use `-DirectPackage` only when the agent shell cannot accept UAC. That fallback
 validates the helper plan and signed MSIX install/launch separately, and the

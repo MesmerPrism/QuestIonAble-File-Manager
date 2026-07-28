@@ -1,9 +1,14 @@
 using System.Diagnostics;
+using System.Globalization;
+using Microsoft.Win32;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Reflection;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,12 +24,14 @@ public static class FleetInstallerContract
     public const string StatusSchema = "questionable.file_manager.fleet_installer_status.v1";
     public const string HandoffSchema = "questionable.file_manager.fleet_installer_handoff.v1";
     public const string StateSchema = "questionable.file_manager.fleet_installer_state.v1";
+    public const string StateAnchorSchema =
+        "questionable.file_manager.fleet_installer_state_anchor.v1";
     public const string Product = "rusty-fleet";
     public const string AssetName = "RustyFleet-Setup.exe";
     public const string InstallerProtocol = "rusty.fleet.guided_setup.v1";
     public const int MaximumDescriptorBytes = 64 * 1024;
     public const long MaximumAssetBytes = 512L * 1024 * 1024;
-    public static readonly TimeSpan MaximumDescriptorLifetime = TimeSpan.FromDays(14);
+    public static readonly TimeSpan MaximumDescriptorLifetime = TimeSpan.FromHours(24);
     public const string PagesMetadataOrigin = "https://mesmerprism.com";
     public const string PagesMetadataRoot = "/Rusty-Fleet/metadata";
     public const string ReleaseAssetOrigin = "https://github.com";
@@ -102,9 +109,18 @@ public sealed record FleetInstallerSettings(
         "QuestIonAbleFileManager.FleetInstaller.";
 
     public static FleetInstallerSettings? FromEnvironment() =>
+        FromEmbeddedRelease() ??
         FromConfiguration(
             static name => Environment.GetEnvironmentVariable(name),
-            ReadEmbeddedConfiguration());
+            embeddedConfiguration: null);
+
+    public static FleetInstallerSettings? FromEmbeddedRelease()
+    {
+        var embedded = ReadEmbeddedConfiguration();
+        return embedded is null
+            ? null
+            : FromConfiguration(static _ => null, embedded);
+    }
 
     internal static FleetInstallerSettings? FromConfiguration(
         Func<string, string?> environment,
@@ -218,7 +234,7 @@ public sealed record FleetInstallerSettings(
             return value;
         }
 
-        if (values.Count != 7 ||
+        if (values.Count != 8 ||
             Required(values, "ConfigurationVersion") != "2")
         {
             throw new FleetInstallerException(
@@ -230,8 +246,17 @@ public sealed record FleetInstallerSettings(
         var publicKeyBase64 = Required(values, "DescriptorPublicKeySpkiBase64");
         var publicKeyDigest = Required(values, "DescriptorSignerSpkiSha256");
         var installerSigner = Required(values, "InstallerSignerCertificateSha256");
+        var provisioningSetupSigner = Required(
+            values,
+            "ProvisioningSetupSignerCertificateSha256");
         var channel = Required(values, "Channel");
         var relativeStateRoot = Required(values, "StateRootRelativePath");
+        if (!FleetInstallerValidation.IsLowerSha256(provisioningSetupSigner))
+        {
+            throw new FleetInstallerException(
+                "fleet_embedded_configuration_invalid",
+                "The embedded QFM Setup signer pin is invalid.");
+        }
 
         if (!Uri.TryCreate(descriptorUriText, UriKind.Absolute, out var descriptorUri))
         {
@@ -590,6 +615,7 @@ public sealed record FleetReleaseDescriptor(
     string Channel,
     long IssuedAtMs,
     long ExpiresAtMs,
+    long ValidityDurationMs,
     FleetReleaseAsset Asset,
     string PayloadSha256,
     string DescriptorSignerSpkiSha256);
@@ -721,12 +747,6 @@ public sealed class FleetInstallerProcessRunner : IFleetInstallerProcessRunner
             GuidedTimeout,
             visible: true,
             cancellationToken).ConfigureAwait(false);
-        if (!string.IsNullOrEmpty(result.StandardError))
-        {
-            throw new FleetInstallerException(
-                "fleet_guided_installer_stderr",
-                "The Fleet guided installer wrote unexpected standard-error output.");
-        }
         if (result.ExitCode != 0)
         {
             throw new FleetInstallerException(
@@ -743,44 +763,10 @@ public sealed class FleetInstallerProcessRunner : IFleetInstallerProcessRunner
         bool visible,
         CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executablePath,
-            WorkingDirectory = Path.GetDirectoryName(executablePath) ??
-                throw new FleetInstallerException(
-                    "fleet_installer_path_invalid",
-                    "The Fleet guided installer path is invalid."),
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = !visible,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        startInfo.Environment.Clear();
-        foreach (var name in new[]
-                 {
-                     "SystemRoot",
-                     "WINDIR",
-                     "USERPROFILE",
-                     "HOMEDRIVE",
-                     "HOMEPATH",
-                     "LOCALAPPDATA",
-                     "APPDATA",
-                     "TEMP",
-                     "TMP"
-                 })
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (!string.IsNullOrEmpty(value))
-            {
-                startInfo.Environment[name] = value;
-            }
-        }
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        var startInfo = CreateStartInfo(
+            executablePath,
+            arguments,
+            visible);
 
         using var job = WindowsProcessJob.Create();
         using var process = new Process { StartInfo = startInfo };
@@ -810,8 +796,12 @@ public sealed class FleetInstallerProcessRunner : IFleetInstallerProcessRunner
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutSource.Token);
-        var stdoutTask = ReadBoundedAsync(process.StandardOutput, linked.Token);
-        var stderrTask = ReadBoundedAsync(process.StandardError, linked.Token);
+        var stdoutTask = visible
+            ? Task.FromResult(string.Empty)
+            : ReadBoundedAsync(process.StandardOutput, linked.Token);
+        var stderrTask = visible
+            ? Task.FromResult(string.Empty)
+            : ReadBoundedAsync(process.StandardError, linked.Token);
         var exitTask = process.WaitForExitAsync(linked.Token);
         try
         {
@@ -855,6 +845,55 @@ public sealed class FleetInstallerProcessRunner : IFleetInstallerProcessRunner
             stdout,
             stderr,
             stopwatch.Elapsed);
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(
+        string executablePath,
+        IReadOnlyList<string> arguments,
+        bool visible)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            WorkingDirectory = Path.GetDirectoryName(executablePath) ??
+                throw new FleetInstallerException(
+                    "fleet_installer_path_invalid",
+                    "The Fleet guided installer path is invalid."),
+            RedirectStandardOutput = !visible,
+            RedirectStandardError = !visible,
+            UseShellExecute = false,
+            CreateNoWindow = !visible
+        };
+        if (!visible)
+        {
+            startInfo.StandardOutputEncoding = Encoding.UTF8;
+            startInfo.StandardErrorEncoding = Encoding.UTF8;
+        }
+        startInfo.Environment.Clear();
+        foreach (var name in new[]
+                 {
+                     "SystemRoot",
+                     "WINDIR",
+                     "USERPROFILE",
+                     "HOMEDRIVE",
+                     "HOMEPATH",
+                     "LOCALAPPDATA",
+                     "APPDATA",
+                     "TEMP",
+                     "TMP"
+                 })
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrEmpty(value))
+            {
+                startInfo.Environment[name] = value;
+            }
+        }
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        return startInfo;
     }
 
     private static async Task<string> ReadBoundedAsync(
@@ -1131,6 +1170,7 @@ public sealed class FleetInstallerHandoff
     private readonly IFleetInstallerArtifactTrustVerifier _artifactTrustVerifier;
     private readonly IFleetInstallerProcessRunner _processRunner;
     private readonly TimeProvider _timeProvider;
+    private readonly IFleetInstallerInitializationStore _initializationStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public FleetInstallerHandoff(
@@ -1138,12 +1178,28 @@ public sealed class FleetInstallerHandoff
         IFleetInstallerArtifactTrustVerifier? artifactTrustVerifier = null,
         IFleetInstallerProcessRunner? processRunner = null,
         TimeProvider? timeProvider = null)
+        : this(
+            settings,
+            artifactTrustVerifier,
+            processRunner,
+            timeProvider,
+            new WindowsFleetInstallerInitializationStore())
+    {
+    }
+
+    internal FleetInstallerHandoff(
+        FleetInstallerSettings? settings,
+        IFleetInstallerArtifactTrustVerifier? artifactTrustVerifier,
+        IFleetInstallerProcessRunner? processRunner,
+        TimeProvider? timeProvider,
+        IFleetInstallerInitializationStore initializationStore)
     {
         _settings = settings;
         _artifactTrustVerifier =
             artifactTrustVerifier ?? new WindowsFleetInstallerArtifactTrustVerifier();
         _processRunner = processRunner ?? new FleetInstallerProcessRunner();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _initializationStore = initializationStore;
     }
 
     public static FleetInstallerHandoff FromEnvironment() =>
@@ -1176,7 +1232,9 @@ public sealed class FleetInstallerHandoff
             var descriptor = await ReadAndVerifyDescriptorAsync(
                 _settings,
                 cancellationToken).ConfigureAwait(false);
-            using var workspace = FleetInstallerWorkspace.Open(_settings.PrivateStageRoot);
+            using var workspace = FleetInstallerWorkspace.Open(
+                _settings.PrivateStageRoot,
+                _initializationStore);
             var state = workspace.ReadState();
             var status = state.AcceptedDescriptorIds.Contains(
                 descriptor.DescriptorId,
@@ -1231,7 +1289,9 @@ public sealed class FleetInstallerHandoff
                 _settings,
                 cancellationToken).ConfigureAwait(false);
 
-            using var workspace = FleetInstallerWorkspace.Open(_settings.PrivateStageRoot);
+            using var workspace = FleetInstallerWorkspace.Open(
+                _settings.PrivateStageRoot,
+                _initializationStore);
             var state = workspace.ReadState();
             EnsureNotReplayOrDowngrade(state, descriptor);
 
@@ -1274,9 +1334,6 @@ public sealed class FleetInstallerHandoff
                 cancellationToken).ConfigureAwait(false);
             ValidatePlan(descriptor, plan);
 
-            state = state.Accept(descriptor, "plan_verified");
-            workspace.WriteState(state);
-
             progress?.Report(new OperatorProgress(
                 "fleet-guided-installer",
                 "Opening the visible Fleet-owned guided installer…",
@@ -1295,7 +1352,14 @@ public sealed class FleetInstallerHandoff
                 throw;
             }
 
-            workspace.WriteState(state with { LastOutcome = "guided_installer_completed" });
+            FleetInstallerValidation.ValidateDescriptorFreshness(
+                descriptor,
+                _timeProvider.GetUtcNow());
+            state = workspace.Accept(
+                state,
+                descriptor,
+                "guided_installer_completed");
+            workspace.WriteState(state);
             stage.Cleanup();
             progress?.Report(new OperatorProgress(
                 "fleet-handoff-complete",
@@ -1421,26 +1485,285 @@ internal sealed record FleetInstallerState(
     }
 }
 
+internal sealed record FleetInstallerStateAnchor(
+    string Schema,
+    string StateRootSha256);
+
+internal interface IFleetInstallerInitializationStore
+{
+    FleetInstallerProtectedState? Read(string stateRootSha256);
+
+    FleetInstallerProtectedState Accept(
+        string stateRootSha256,
+        FleetReleaseDescriptor descriptor);
+}
+
+internal sealed record FleetInstallerProtectedState(
+    string Schema,
+    string StateRootSha256,
+    string Status,
+    string? HighestHandoffVersion,
+    IReadOnlyList<string> AcceptedDescriptorIds)
+{
+    public static FleetInstallerProtectedState Empty(string stateRootSha256) =>
+        new(
+            WindowsFleetInstallerInitializationStore.Schema,
+            stateRootSha256,
+            "initialized",
+            null,
+            []);
+}
+
+internal sealed class WindowsFleetInstallerInitializationStore :
+    IFleetInstallerInitializationStore
+{
+    private const string KeyPrefix =
+        @"SOFTWARE\MesmerPrism\QuestIonAbleFileManager\FleetInstallerReplay\";
+    private const string RecordValue = "Record";
+    internal const string Schema =
+        "questionable.file_manager.fleet_installer_machine_initialization.v1";
+
+    public FleetInstallerProtectedState? Read(string stateRootSha256)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "Fleet installer replay protection requires Windows.");
+        }
+        EnsureDigest(stateRootSha256);
+        try
+        {
+            using var machine = RegistryKey.OpenBaseKey(
+                RegistryHive.LocalMachine,
+                RegistryView.Registry64);
+            using var key = machine.OpenSubKey(
+                KeyPrefix + stateRootSha256,
+                writable: false);
+            if (key is null)
+            {
+                return null;
+            }
+            ValidateMachineAcl(key);
+            if (key.GetValue(
+                    RecordValue,
+                    null,
+                    RegistryValueOptions.DoNotExpandEnvironmentNames)
+                is not string json ||
+                json.Length is < 2 or > 4096)
+            {
+                throw StoreInvalid();
+            }
+            var bytes = Encoding.UTF8.GetBytes(json);
+            FleetInstallerValidation.RejectDuplicateProperties(bytes);
+            try
+            {
+                using var document = JsonDocument.Parse(bytes);
+                var names = document.RootElement
+                    .EnumerateObject()
+                    .Select(static property => property.Name)
+                    .ToHashSet(StringComparer.Ordinal);
+                if (document.RootElement.ValueKind !=
+                        JsonValueKind.Object ||
+                    !names.SetEquals(
+                    [
+                        "schema",
+                        "state_root_sha256",
+                        "status",
+                        "highest_handoff_version",
+                        "accepted_descriptor_ids"
+                    ]))
+                {
+                    throw StoreInvalid();
+                }
+                var record =
+                    JsonSerializer.Deserialize<FleetInstallerProtectedState>(
+                        bytes,
+                        FleetInstallerValidation.Json) ??
+                    throw new JsonException();
+                if (record.Schema != Schema ||
+                    !FleetInstallerValidation.FixedLowerHexEquals(
+                        record.StateRootSha256,
+                        stateRootSha256) ||
+                    record.Status != "initialized" ||
+                    record.AcceptedDescriptorIds.Count > 256 ||
+                    record.AcceptedDescriptorIds
+                        .Distinct(StringComparer.Ordinal).Count() !=
+                        record.AcceptedDescriptorIds.Count ||
+                    record.AcceptedDescriptorIds.Any(
+                        static value =>
+                            !FleetInstallerValidation.IsIdentifier(
+                                value,
+                                128)) ||
+                    record.HighestHandoffVersion is not null &&
+                    !FleetInstallerValidation.IsThreePartVersion(
+                        record.HighestHandoffVersion))
+                {
+                    throw StoreInvalid();
+                }
+                return record;
+            }
+            catch (JsonException exception)
+            {
+                throw new FleetInstallerException(
+                    "fleet_installer_initialization_invalid",
+                    "The protected machine Fleet replay record is invalid.",
+                    exception);
+            }
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw StoreUnavailable(exception);
+        }
+        catch (System.Security.SecurityException exception)
+        {
+            throw StoreUnavailable(exception);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void ValidateMachineAcl(RegistryKey key)
+    {
+        var security = key.GetAccessControl(AccessControlSections.Access);
+        if (!security.AreAccessRulesProtected)
+        {
+            throw StoreInvalid();
+        }
+        var expected = new Dictionary<string, RegistryRights>(
+            StringComparer.Ordinal)
+        {
+            [new SecurityIdentifier(
+                WellKnownSidType.LocalSystemSid,
+                null).Value] = RegistryRights.FullControl,
+            [new SecurityIdentifier(
+                WellKnownSidType.BuiltinAdministratorsSid,
+                null).Value] = RegistryRights.FullControl,
+            [new SecurityIdentifier(
+                WellKnownSidType.BuiltinUsersSid,
+                null).Value] = RegistryRights.ReadKey
+        };
+        var rules = security.GetAccessRules(
+                includeExplicit: true,
+                includeInherited: false,
+                typeof(SecurityIdentifier))
+            .Cast<RegistryAccessRule>()
+            .ToArray();
+        if (rules.Length != expected.Count ||
+            rules.Any(rule =>
+                rule.AccessControlType != AccessControlType.Allow ||
+                rule.IdentityReference is not SecurityIdentifier sid ||
+                !expected.TryGetValue(sid.Value, out var rights) ||
+                rule.RegistryRights != rights))
+        {
+            throw StoreInvalid();
+        }
+    }
+
+    public FleetInstallerProtectedState Accept(
+        string stateRootSha256,
+        FleetReleaseDescriptor descriptor)
+    {
+        EnsureDigest(stateRootSha256);
+        ArgumentNullException.ThrowIfNull(descriptor);
+        var helper = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "MesmerPrism",
+            "QuestIonAbleFileManager",
+            "QuestIonAbleFileManager-ReplayAuthority.exe");
+        if (!File.Exists(helper))
+        {
+            throw StoreUnavailable(new FileNotFoundException(
+                "The signed Fleet replay authority helper is missing.",
+                helper));
+        }
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = helper,
+            UseShellExecute = true,
+            Verb = "runas"
+        };
+        startInfo.ArgumentList.Add("--fleet-replay-accept");
+        startInfo.ArgumentList.Add(stateRootSha256);
+        startInfo.ArgumentList.Add(descriptor.DescriptorId);
+        startInfo.ArgumentList.Add(descriptor.Version);
+        startInfo.ArgumentList.Add(descriptor.PayloadSha256);
+        using var process = Process.Start(startInfo) ??
+            throw StoreUnavailable(new InvalidOperationException(
+                "Windows did not start the signed Fleet replay authority."));
+        if (!process.WaitForExit(TimeSpan.FromMinutes(2)))
+        {
+            process.Kill(entireProcessTree: true);
+            throw StoreUnavailable(new TimeoutException(
+                "The signed Fleet replay authority timed out."));
+        }
+        if (process.ExitCode != 0)
+        {
+            throw StoreUnavailable(new InvalidOperationException(
+                "The signed Fleet replay authority rejected the transition."));
+        }
+        return Read(stateRootSha256) ?? throw StoreInvalid();
+    }
+
+    private static void EnsureDigest(string stateRootSha256)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "Fleet installer replay protection requires Windows.");
+        }
+        if (!FleetInstallerValidation.IsLowerSha256(stateRootSha256))
+        {
+            throw StoreInvalid();
+        }
+    }
+
+    private static FleetInstallerException StoreUnavailable(
+        Exception exception) =>
+        new(
+            "fleet_installer_initialization_unavailable",
+            "The protected machine Fleet replay record is unavailable.",
+            exception);
+
+    private static FleetInstallerException StoreInvalid() =>
+        new(
+            "fleet_installer_initialization_invalid",
+            "The protected machine Fleet replay record is invalid.");
+}
+
 internal sealed class FleetInstallerWorkspace : IDisposable
 {
     private const uint MoveFileReplaceExisting = 0x00000001;
     private const uint MoveFileWriteThrough = 0x00000008;
-    private static readonly JsonSerializerOptions Json = FleetInstallerValidation.Json;
+    private static readonly JsonSerializerOptions Json =
+        new(FleetInstallerValidation.Json)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.Never
+        };
     private readonly string _root;
+    private readonly string _anchorPath;
+    private readonly string _stateRootSha256;
+    private readonly IFleetInstallerInitializationStore _initializationStore;
     private readonly SafeFileHandle _rootHandle;
     private readonly FileStream _ownerLock;
 
     private FleetInstallerWorkspace(
         string root,
+        string anchorPath,
+        string stateRootSha256,
+        IFleetInstallerInitializationStore initializationStore,
         SafeFileHandle rootHandle,
         FileStream ownerLock)
     {
         _root = root;
+        _anchorPath = anchorPath;
+        _stateRootSha256 = stateRootSha256;
+        _initializationStore = initializationStore;
         _rootHandle = rootHandle;
         _ownerLock = ownerLock;
     }
 
-    public static FleetInstallerWorkspace Open(string configuredRoot)
+    public static FleetInstallerWorkspace Open(
+        string configuredRoot,
+        IFleetInstallerInitializationStore initializationStore)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -1455,6 +1778,8 @@ internal sealed class FleetInstallerWorkspace : IDisposable
                 "The Fleet installer state root must be a local absolute Windows path.");
         }
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configuredRoot));
+        var anchorPath = GetDurableAnchorPath(root);
+        var stateRootSha256 = StateRootDigest(root);
         var driveRoot = Path.GetPathRoot(root)
             ?? throw new FleetInstallerException(
                 "fleet_stage_root_invalid",
@@ -1477,7 +1802,13 @@ internal sealed class FleetInstallerWorkspace : IDisposable
                 ownerLock.SafeFileHandle,
                 lockPath,
                 requireSingleLink: true);
-            return new FleetInstallerWorkspace(root, rootHandle, ownerLock);
+            return new FleetInstallerWorkspace(
+                root,
+                anchorPath,
+                stateRootSha256,
+                initializationStore,
+                rootHandle,
+                ownerLock);
         }
         catch
         {
@@ -1489,10 +1820,34 @@ internal sealed class FleetInstallerWorkspace : IDisposable
     public FleetInstallerState ReadState()
     {
         var path = Path.Combine(_root, "fleet-installer.state.json");
-        if (!File.Exists(path))
+        var stateExists = File.Exists(path);
+        var anchorExists = File.Exists(_anchorPath);
+        var protectedState = _initializationStore.Read(_stateRootSha256);
+        if (protectedState is null)
         {
-            return FleetInstallerState.Empty;
+            throw new FleetInstallerException(
+                "fleet_installer_recovery_required",
+                "Fleet installer replay protection is not provisioned. Reinstall or explicitly repair QuestIonAble File Manager.");
         }
+        if (!stateExists && !anchorExists)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_state_missing",
+                "Fleet installer replay state and its file anchor are missing from an initialized root.");
+        }
+        if (!anchorExists)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_missing",
+                "Fleet installer replay state exists without its durable initialization anchor.");
+        }
+        if (!stateExists)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_state_missing",
+                "Fleet installer replay state is missing from an initialized state root.");
+        }
+        ValidateDurableAnchor();
 
         byte[] bytes;
         using (var input = FleetWindowsFileSafety.OpenReadOnlyFile(path))
@@ -1539,13 +1894,32 @@ internal sealed class FleetInstallerWorkspace : IDisposable
                 "fleet_installer_state_invalid",
                 "The Fleet installer state is invalid.");
         }
-        return state;
+        return state with
+        {
+            HighestHandoffVersion = protectedState.HighestHandoffVersion,
+            AcceptedDescriptorIds = protectedState.AcceptedDescriptorIds
+        };
     }
 
     public void WriteState(FleetInstallerState state)
     {
         FleetWindowsFileSafety.ValidateDirectory(_rootHandle, _root);
         var path = Path.Combine(_root, "fleet-installer.state.json");
+        var stateExists = File.Exists(path);
+        var anchorExists = File.Exists(_anchorPath);
+        if (_initializationStore.Read(_stateRootSha256) is null)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_recovery_required",
+                "Fleet installer replay protection is not provisioned. Reinstall or explicitly repair QuestIonAble File Manager.");
+        }
+        if (!stateExists || !anchorExists)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_state_missing",
+                "Fleet installer replay state must be initialized by signed elevated Setup before runtime writes.");
+        }
+        EnsureDurableAnchor(stateExists);
         var temporary = Path.Combine(_root, "fleet-installer.state." +
             Guid.NewGuid().ToString("N") + ".tmp");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(state, Json);
@@ -1577,6 +1951,131 @@ internal sealed class FleetInstallerWorkspace : IDisposable
             throw;
         }
     }
+
+    public FleetInstallerState Accept(
+        FleetInstallerState localState,
+        FleetReleaseDescriptor descriptor,
+        string outcome)
+    {
+        var protectedState = _initializationStore.Accept(
+            _stateRootSha256,
+            descriptor);
+        return localState with
+        {
+            HighestHandoffVersion = protectedState.HighestHandoffVersion,
+            AcceptedDescriptorIds = protectedState.AcceptedDescriptorIds,
+            LastOutcome = outcome
+        };
+    }
+
+    internal static string GetDurableAnchorPath(string configuredRoot)
+    {
+        var root = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(configuredRoot));
+        return root + ".fleet-installer.initialized.v1";
+    }
+
+    private void EnsureDurableAnchor(bool stateExists)
+    {
+        if (File.Exists(_anchorPath))
+        {
+            ValidateDurableAnchor();
+            return;
+        }
+        if (stateExists)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_missing",
+                "Fleet installer replay state exists without its durable initialization anchor.");
+        }
+
+        var anchor = new FleetInstallerStateAnchor(
+            FleetInstallerContract.StateAnchorSchema,
+            StateRootDigest(_root));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(anchor, Json);
+        try
+        {
+            using var output =
+                FleetWindowsFileSafety.CreateNewOwnedFile(_anchorPath);
+            output.Write(bytes);
+            output.Flush(flushToDisk: true);
+            FleetWindowsFileSafety.ValidateFile(
+                output.SafeFileHandle,
+                _anchorPath,
+                requireSingleLink: true);
+        }
+        catch (IOException exception)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_invalid",
+                "The Fleet installer replay-state anchor could not be initialized.",
+                exception);
+        }
+    }
+
+    private void ValidateDurableAnchor()
+    {
+        byte[] bytes;
+        try
+        {
+            using var input =
+                FleetWindowsFileSafety.OpenReadOnlyFile(_anchorPath);
+            FleetWindowsFileSafety.ValidateFile(
+                input.SafeFileHandle,
+                _anchorPath,
+                requireSingleLink: true);
+            if (input.Length is < 2 or > 4096)
+            {
+                throw new FleetInstallerException(
+                    "fleet_installer_anchor_invalid",
+                    "The Fleet installer replay-state anchor is invalid.");
+            }
+            bytes = new byte[checked((int)input.Length)];
+            input.ReadExactly(bytes);
+        }
+        catch (FleetInstallerException)
+        {
+            throw;
+        }
+        catch (IOException exception)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_invalid",
+                "The Fleet installer replay-state anchor is unavailable.",
+                exception);
+        }
+
+        FleetInstallerValidation.RejectDuplicateProperties(bytes);
+        FleetInstallerStateAnchor anchor;
+        try
+        {
+            anchor = JsonSerializer.Deserialize<FleetInstallerStateAnchor>(
+                    bytes,
+                    Json) ??
+                throw new JsonException();
+        }
+        catch (JsonException exception)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_invalid",
+                "The Fleet installer replay-state anchor is invalid.",
+                exception);
+        }
+        if (anchor.Schema != FleetInstallerContract.StateAnchorSchema ||
+            !FleetInstallerValidation.FixedLowerHexEquals(
+                anchor.StateRootSha256,
+                StateRootDigest(_root)))
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_anchor_invalid",
+                "The Fleet installer replay-state anchor does not bind this state root.");
+        }
+    }
+
+    internal static string StateRootDigest(string root) =>
+        Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(root.ToUpperInvariant())))
+            .ToLowerInvariant();
 
     public FleetInstallerStage CreateStage(string descriptorId)
     {
@@ -1863,6 +2362,14 @@ internal static class FleetInstallerValidation
                 exception);
         }
 
+        var canonicalPayload = SerializeCanonicalPayload(parsed);
+        if (!payload.AsSpan().SequenceEqual(canonicalPayload))
+        {
+            throw new FleetInstallerException(
+                "fleet_descriptor_payload_noncanonical",
+                "The signed Fleet release payload is not canonical JCS JSON.");
+        }
+
         ValidatePayload(parsed, policy, now);
         return new FleetReleaseDescriptor(
             parsed.DescriptorId,
@@ -1871,6 +2378,7 @@ internal static class FleetInstallerValidation
             parsed.Channel,
             parsed.IssuedAtMs,
             parsed.ExpiresAtMs,
+            parsed.ValidityDurationMs,
             parsed.Asset,
             Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant(),
             envelope.SignerSpkiSha256);
@@ -1939,6 +2447,106 @@ internal static class FleetInstallerValidation
         version.Minor >= 0 &&
         version.Build >= 0 &&
             string.Equals(version.ToString(3), value, StringComparison.Ordinal);
+
+    internal static byte[] SerializeCanonicalPayload(FleetReleasePayload payload)
+    {
+        const long maximumSafeInteger = 9_007_199_254_740_991;
+        if (payload.IssuedAtMs is < -maximumSafeInteger or > maximumSafeInteger ||
+            payload.ExpiresAtMs is < -maximumSafeInteger or > maximumSafeInteger ||
+            payload.ValidityDurationMs is < -maximumSafeInteger or > maximumSafeInteger ||
+            payload.Asset.SizeBytes is < -maximumSafeInteger or > maximumSafeInteger)
+        {
+            throw new FleetInstallerException(
+                "fleet_descriptor_payload_noncanonical",
+                "The signed Fleet release payload contains an integer outside the JCS I-JSON range.");
+        }
+
+        using var output = new MemoryStream(1024);
+        WriteAscii(output, "{\"asset\":{\"installer_protocol\":");
+        WriteCanonicalString(output, payload.Asset.InstallerProtocol);
+        WriteAscii(output, ",\"media_type\":");
+        WriteCanonicalString(output, payload.Asset.MediaType);
+        WriteAscii(output, ",\"name\":");
+        WriteCanonicalString(output, payload.Asset.Name);
+        WriteAscii(output, ",\"sha256\":");
+        WriteCanonicalString(output, payload.Asset.Sha256);
+        WriteAscii(output, ",\"signer_certificate_sha256\":");
+        WriteCanonicalString(output, payload.Asset.SignerCertificateSha256);
+        WriteAscii(output, ",\"size_bytes\":");
+        WriteCanonicalInteger(output, payload.Asset.SizeBytes);
+        WriteAscii(output, ",\"url\":");
+        WriteCanonicalString(output, payload.Asset.Url);
+        WriteAscii(output, "},\"channel\":");
+        WriteCanonicalString(output, payload.Channel);
+        WriteAscii(output, ",\"descriptor_id\":");
+        WriteCanonicalString(output, payload.DescriptorId);
+        WriteAscii(output, ",\"expires_at_ms\":");
+        WriteCanonicalInteger(output, payload.ExpiresAtMs);
+        WriteAscii(output, ",\"issued_at_ms\":");
+        WriteCanonicalInteger(output, payload.IssuedAtMs);
+        WriteAscii(output, ",\"product\":");
+        WriteCanonicalString(output, payload.Product);
+        WriteAscii(output, ",\"schema\":");
+        WriteCanonicalString(output, payload.Schema);
+        WriteAscii(output, ",\"validity_duration_ms\":");
+        WriteCanonicalInteger(output, payload.ValidityDurationMs);
+        WriteAscii(output, ",\"version\":");
+        WriteCanonicalString(output, payload.Version);
+        WriteAscii(output, "}");
+        return output.ToArray();
+    }
+
+    private static void WriteCanonicalString(Stream output, string value)
+    {
+        output.WriteByte((byte)'"');
+        Span<byte> utf8 = stackalloc byte[4];
+        foreach (var rune in value.EnumerateRunes())
+        {
+            switch (rune.Value)
+            {
+                case '"':
+                    WriteAscii(output, "\\\"");
+                    break;
+                case '\\':
+                    WriteAscii(output, "\\\\");
+                    break;
+                case '\b':
+                    WriteAscii(output, "\\b");
+                    break;
+                case '\t':
+                    WriteAscii(output, "\\t");
+                    break;
+                case '\n':
+                    WriteAscii(output, "\\n");
+                    break;
+                case '\f':
+                    WriteAscii(output, "\\f");
+                    break;
+                case '\r':
+                    WriteAscii(output, "\\r");
+                    break;
+                case < 0x20:
+                    WriteAscii(output, "\\u00");
+                    output.WriteByte(ToLowerHex(rune.Value >> 4));
+                    output.WriteByte(ToLowerHex(rune.Value & 0x0f));
+                    break;
+                default:
+                    var written = rune.EncodeToUtf8(utf8);
+                    output.Write(utf8[..written]);
+                    break;
+            }
+        }
+        output.WriteByte((byte)'"');
+    }
+
+    private static void WriteCanonicalInteger(Stream output, long value) =>
+        WriteAscii(output, value.ToString(CultureInfo.InvariantCulture));
+
+    private static void WriteAscii(Stream output, string value) =>
+        output.Write(Encoding.ASCII.GetBytes(value));
+
+    private static byte ToLowerHex(int value) =>
+        (byte)(value < 10 ? '0' + value : 'a' + value - 10);
 
     public static bool IsReleaseChannel(string? value) =>
         value is "stable" or "preview" or "dev";
@@ -2099,18 +2707,11 @@ internal static class FleetInstallerValidation
                 "fleet_descriptor_binding_invalid",
                 "The Fleet release descriptor product, version, channel, or identity is invalid.");
         }
-        var nowMs = now.ToUnixTimeMilliseconds();
-        if (payload.IssuedAtMs <= 0 ||
-            payload.ExpiresAtMs <= payload.IssuedAtMs ||
-            payload.ExpiresAtMs - payload.IssuedAtMs >
-                FleetInstallerContract.MaximumDescriptorLifetime.TotalMilliseconds ||
-            nowMs < payload.IssuedAtMs - 30_000 ||
-            nowMs >= payload.ExpiresAtMs)
-        {
-            throw new FleetInstallerException(
-                "fleet_descriptor_stale",
-                "The Fleet release descriptor is not fresh.");
-        }
+        ValidateFreshness(
+            payload.IssuedAtMs,
+            payload.ExpiresAtMs,
+            payload.ValidityDurationMs,
+            now);
         if (payload.Asset.Name != FleetInstallerContract.AssetName ||
             payload.Asset.SizeBytes is < 1 or > FleetInstallerContract.MaximumAssetBytes ||
             !IsLowerSha256(payload.Asset.Sha256) ||
@@ -2126,6 +2727,37 @@ internal static class FleetInstallerValidation
                 "The Fleet installer asset identity or trust binding is invalid.");
         }
         ValidateReleaseAssetUri(payload.Asset.Url, payload.Version);
+    }
+
+    internal static void ValidateDescriptorFreshness(
+        FleetReleaseDescriptor descriptor,
+        DateTimeOffset now) =>
+        ValidateFreshness(
+            descriptor.IssuedAtMs,
+            descriptor.ExpiresAtMs,
+            descriptor.ValidityDurationMs,
+            now);
+
+    private static void ValidateFreshness(
+        long issuedAtMs,
+        long expiresAtMs,
+        long validityDurationMs,
+        DateTimeOffset now)
+    {
+        var nowMs = now.ToUnixTimeMilliseconds();
+        if (issuedAtMs <= 0 ||
+            validityDurationMs < 1 ||
+            validityDurationMs >
+                FleetInstallerContract.MaximumDescriptorLifetime.TotalMilliseconds ||
+            issuedAtMs > long.MaxValue - validityDurationMs ||
+            expiresAtMs != issuedAtMs + validityDurationMs ||
+            nowMs < issuedAtMs - 30_000 ||
+            nowMs >= expiresAtMs)
+        {
+            throw new FleetInstallerException(
+                "fleet_descriptor_stale",
+                "The Fleet release descriptor is not fresh.");
+        }
     }
 
     private static byte[] DecodeBase64Url(
@@ -2189,6 +2821,7 @@ internal sealed record FleetReleasePayload(
     string Channel,
     long IssuedAtMs,
     long ExpiresAtMs,
+    long ValidityDurationMs,
     FleetReleaseAsset Asset);
 
 internal static class WindowsAuthenticode

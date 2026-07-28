@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
@@ -101,7 +102,9 @@ public sealed class FleetInstallerHandoffTests
             () => fixture.CreateService().GetStatusAsync());
         Assert.Equal("fleet_descriptor_invalid", exception.Code);
 
-        fixture.ResignPayload(payload => payload["unexpected"] = true);
+        fixture.ResignPayload(
+            payload => payload["unexpected"] = true,
+            canonical: false);
         exception = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().GetStatusAsync());
         Assert.Equal("fleet_descriptor_payload_invalid", exception.Code);
@@ -130,6 +133,42 @@ public sealed class FleetInstallerHandoffTests
         exception = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().GetStatusAsync());
         Assert.Equal("fleet_descriptor_binding_invalid", exception.Code);
+    }
+
+    [Fact]
+    public async Task SignedPayloadMustUseExactJcsSerialization()
+    {
+        using var reordered = new SignedFixture();
+        reordered.ResignCurrentPayloadOrder();
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => reordered.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_payload_noncanonical", exception.Code);
+
+        using var whitespace = new SignedFixture();
+        whitespace.ResignRawPayload(value => value.Insert(1, " "));
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => whitespace.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_payload_noncanonical", exception.Code);
+
+        using var escaped = new SignedFixture();
+        escaped.ResignRawPayload(
+            value => value.Replace(
+                "rusty-fleet",
+                "rusty\\u002dfleet",
+                StringComparison.Ordinal));
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => escaped.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_payload_noncanonical", exception.Code);
+
+        using var numeric = new SignedFixture();
+        numeric.ResignRawPayload(
+            value => value.Replace(
+                $"\"size_bytes\":{numeric.AssetBytes.LongLength}",
+                "\"size_bytes\":-0",
+                StringComparison.Ordinal));
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => numeric.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_payload_noncanonical", exception.Code);
     }
 
     [Fact]
@@ -190,7 +229,7 @@ public sealed class FleetInstallerHandoffTests
     }
 
     [Fact]
-    public async Task ExpiredFutureAndOverlongDescriptorsAreRejectedAsStale()
+    public async Task ExpiredFutureAndOverTwentyFourHourDescriptorsAreRejectedAsStale()
     {
         using var fixture = new SignedFixture();
         foreach (var mutate in new Action<JsonObject>[]
@@ -199,16 +238,25 @@ public sealed class FleetInstallerHandoffTests
                      {
                          payload["issued_at_ms"] = Now.AddDays(-2).ToUnixTimeMilliseconds();
                          payload["expires_at_ms"] = Now.AddDays(-1).ToUnixTimeMilliseconds();
+                         payload["validity_duration_ms"] =
+                             (long)TimeSpan.FromHours(24).TotalMilliseconds;
                      },
                      payload =>
                      {
                          payload["issued_at_ms"] = Now.AddMinutes(1).ToUnixTimeMilliseconds();
                          payload["expires_at_ms"] = Now.AddDays(1).ToUnixTimeMilliseconds();
+                         payload["validity_duration_ms"] =
+                             (long)TimeSpan.FromHours(23).Add(
+                                 TimeSpan.FromMinutes(59)).TotalMilliseconds;
                      },
                      payload =>
                      {
                          payload["issued_at_ms"] = Now.ToUnixTimeMilliseconds();
-                         payload["expires_at_ms"] = Now.AddDays(15).ToUnixTimeMilliseconds();
+                         payload["expires_at_ms"] =
+                             Now.AddHours(24).AddMilliseconds(1)
+                                 .ToUnixTimeMilliseconds();
+                         payload["validity_duration_ms"] =
+                             (long)TimeSpan.FromHours(24).TotalMilliseconds + 1;
                      }
                  })
         {
@@ -217,6 +265,180 @@ public sealed class FleetInstallerHandoffTests
                 () => fixture.CreateService().GetStatusAsync());
             Assert.Equal("fleet_descriptor_stale", exception.Code);
         }
+    }
+
+    [Fact]
+    public async Task LifetimeFutureSkewAndExpiryBoundariesAreExact()
+    {
+        using var exactLifetime = new SignedFixture();
+        exactLifetime.ResignPayload(payload =>
+        {
+            payload["issued_at_ms"] = Now.ToUnixTimeMilliseconds();
+            payload["expires_at_ms"] =
+                Now.AddHours(24).ToUnixTimeMilliseconds();
+            payload["validity_duration_ms"] =
+                (long)TimeSpan.FromHours(24).TotalMilliseconds;
+        });
+        Assert.Equal(
+            "ready",
+            (await exactLifetime.CreateService().GetStatusAsync()).Status);
+
+        using var exactFutureSkew = new SignedFixture();
+        exactFutureSkew.ResignPayload(payload =>
+        {
+            payload["issued_at_ms"] =
+                Now.AddSeconds(30).ToUnixTimeMilliseconds();
+            payload["expires_at_ms"] =
+                Now.AddHours(1).ToUnixTimeMilliseconds();
+            payload["validity_duration_ms"] =
+                (long)TimeSpan.FromMinutes(59.5).TotalMilliseconds;
+        });
+        Assert.Equal(
+            "ready",
+            (await exactFutureSkew.CreateService().GetStatusAsync()).Status);
+
+        using var excessFutureSkew = new SignedFixture();
+        excessFutureSkew.ResignPayload(payload =>
+        {
+            payload["issued_at_ms"] =
+                Now.AddSeconds(30).AddMilliseconds(1)
+                    .ToUnixTimeMilliseconds();
+            payload["expires_at_ms"] =
+                Now.AddHours(1).ToUnixTimeMilliseconds();
+            payload["validity_duration_ms"] =
+                (long)TimeSpan.FromMinutes(59.5).TotalMilliseconds - 1;
+        });
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => excessFutureSkew.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_stale", exception.Code);
+
+        using var exactExpiry = new SignedFixture();
+        exactExpiry.ResignPayload(payload =>
+        {
+            payload["issued_at_ms"] =
+                Now.AddHours(-1).ToUnixTimeMilliseconds();
+            payload["expires_at_ms"] = Now.ToUnixTimeMilliseconds();
+            payload["validity_duration_ms"] =
+                (long)TimeSpan.FromHours(1).TotalMilliseconds;
+        });
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => exactExpiry.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_stale", exception.Code);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(86_400_001)]
+    [InlineData(43_259_999)]
+    public async Task ValidityDurationMustBeBoundedAndExactlyBindExpiry(
+        long validityDurationMs)
+    {
+        using var fixture = new SignedFixture();
+        fixture.ResignPayload(payload =>
+            payload["validity_duration_ms"] = validityDurationMs);
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_stale", exception.Code);
+    }
+
+    [Fact]
+    public async Task InitializedRootFailsClosedWhenReplayStateIsDeleted()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture(
+            version: "2.0.0",
+            descriptorId: "release-2");
+        await fixture.CreateService().InstallAsync();
+        File.Delete(Path.Combine(
+            fixture.StateRoot,
+            "fleet-installer.state.json"));
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_installer_state_missing", exception.Code);
+
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().InstallAsync());
+        Assert.Equal("fleet_installer_state_missing", exception.Code);
+
+        fixture.ResignPayload(payload =>
+        {
+            payload["descriptor_id"] = "release-1";
+            payload["version"] = "1.0.0";
+            payload["asset"]!.AsObject()["url"] = ReleaseAssetUrl("1.0.0");
+        });
+        fixture.Plan = fixture.Plan with { Version = "1.0.0" };
+
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().InstallAsync());
+        Assert.Equal("fleet_installer_state_missing", exception.Code);
+    }
+
+    [Fact]
+    public async Task ReplayStateWithoutDurableAnchorFailsClosed()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture();
+        await fixture.CreateService().InstallAsync();
+        File.Delete(FleetInstallerWorkspace.GetDurableAnchorPath(
+            fixture.StateRoot));
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_installer_anchor_missing", exception.Code);
+
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().InstallAsync());
+        Assert.Equal("fleet_installer_anchor_missing", exception.Code);
+    }
+
+    [Fact]
+    public async Task CoordinatedReplayFileDeletionAndCredentialLossDoNotReset()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var deletedFiles = new SignedFixture();
+        await deletedFiles.CreateService().InstallAsync();
+        File.Delete(Path.Combine(
+            deletedFiles.StateRoot,
+            "fleet-installer.state.json"));
+        File.Delete(FleetInstallerWorkspace.GetDurableAnchorPath(
+            deletedFiles.StateRoot));
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => deletedFiles.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_installer_state_missing", exception.Code);
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => deletedFiles.CreateService().InstallAsync());
+        Assert.Equal("fleet_installer_state_missing", exception.Code);
+
+        deletedFiles.SetupRepairReplay();
+        Assert.Equal(
+            "ready",
+            (await deletedFiles.CreateService().GetStatusAsync()).Status);
+
+        using var deletedCredential = new SignedFixture();
+        await deletedCredential.CreateService().InstallAsync();
+        deletedCredential.InitializationStore.Clear();
+
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => deletedCredential.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_installer_recovery_required", exception.Code);
+        exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => deletedCredential.CreateService().InstallAsync());
+        Assert.Equal("fleet_installer_recovery_required", exception.Code);
     }
 
     [Fact]
@@ -301,7 +523,45 @@ public sealed class FleetInstallerHandoffTests
     }
 
     [Fact]
-    public async Task GuidedTimeoutConsumesTheVerifiedDescriptorAndCleansPrivateStage()
+    public async Task SameUserReplayFileRewriteCannotResetProtectedHighWaterMark()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture(
+            version: "2.0.0",
+            descriptorId: "release-2");
+        await fixture.CreateService().InstallAsync();
+
+        File.WriteAllText(
+            Path.Combine(
+                fixture.StateRoot,
+                "fleet-installer.state.json"),
+            """
+            {"schema":"questionable.file_manager.fleet_installer_state.v1","highest_handoff_version":null,"accepted_descriptor_ids":[],"last_outcome":"attacker_reset"}
+            """);
+
+        var status = await fixture.CreateService().GetStatusAsync();
+        Assert.Equal("already_handed_off", status.Status);
+        Assert.Equal("2.0.0", status.HighestHandoffVersion);
+
+        fixture.ResignPayload(payload =>
+        {
+            payload["descriptor_id"] = "release-1";
+            payload["version"] = "1.9.9";
+            payload["asset"]!.AsObject()["url"] =
+                ReleaseAssetUrl("1.9.9");
+        });
+        fixture.Plan = fixture.Plan with { Version = "1.9.9" };
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().InstallAsync());
+        Assert.Equal("fleet_release_downgrade_rejected", exception.Code);
+    }
+
+    [Fact]
+    public async Task GuidedTimeoutLeavesExactDescriptorRetryableUntilSuccess()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -314,12 +574,63 @@ public sealed class FleetInstallerHandoffTests
             () => fixture.CreateService(runner: timeout).InstallAsync());
 
         Assert.Empty(Directory.EnumerateDirectories(fixture.StateRoot, "fleet-*"));
+        var status = await fixture.CreateService().GetStatusAsync();
+        Assert.Equal("ready", status.Status);
+        Assert.Equal("guided_installer_failed", status.LastOutcome);
+
+        await fixture.CreateService().InstallAsync();
         var replay = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().InstallAsync());
         Assert.Equal("fleet_descriptor_replay", replay.Code);
-        var status = await fixture.CreateService().GetStatusAsync();
-        Assert.Equal("already_handed_off", status.Status);
-        Assert.Equal("guided_installer_failed", status.LastOutcome);
+    }
+
+    [Fact]
+    public async Task DescriptorExpiringDuringGuidedPromptRemainsRetryableAfterRefetch()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture();
+        fixture.ResignPayload(payload =>
+        {
+            payload["expires_at_ms"] = Now.AddMinutes(1).ToUnixTimeMilliseconds();
+            payload["validity_duration_ms"] =
+                (long)TimeSpan.FromMinutes(2).TotalMilliseconds;
+        });
+        var clock = new MutableTimeProvider(Now);
+        var runner = new CallbackInstallerRunner(
+            fixture.Plan,
+            () => clock.UtcNow = Now.AddMinutes(2));
+
+        var stale = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService(
+                runner: runner,
+                timeProvider: clock).InstallAsync());
+        Assert.Equal("fleet_descriptor_stale", stale.Code);
+
+        clock.UtcNow = Now;
+        Assert.Equal(
+            "ready",
+            (await fixture.CreateService(
+                timeProvider: clock).GetStatusAsync()).Status);
+        await fixture.CreateService(timeProvider: clock).InstallAsync();
+        var replay = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService(timeProvider: clock).InstallAsync());
+        Assert.Equal("fleet_descriptor_replay", replay.Code);
+    }
+
+    [Fact]
+    public void RuntimeInitializationStoreHasNoProvisioningSurface()
+    {
+        Assert.Equal(
+            ["Accept", "Read"],
+            typeof(IFleetInstallerInitializationStore)
+                .GetMethods()
+                .Select(static method => method.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
     }
 
     [Fact]
@@ -344,6 +655,33 @@ public sealed class FleetInstallerHandoffTests
                 visible: false,
                 CancellationToken.None));
         Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(8));
+    }
+
+    [Fact]
+    public void GuidedStartIsVisibleAndPlanStartRemainsHeadlessAndCaptured()
+    {
+        var executable = Path.Combine(
+            Path.GetTempPath(),
+            FleetInstallerContract.AssetName);
+        var guided = FleetInstallerProcessRunner.CreateStartInfo(
+            executable,
+            [],
+            visible: true);
+        Assert.False(guided.UseShellExecute);
+        Assert.False(guided.CreateNoWindow);
+        Assert.False(guided.RedirectStandardOutput);
+        Assert.False(guided.RedirectStandardError);
+        Assert.Empty(guided.ArgumentList);
+
+        var plan = FleetInstallerProcessRunner.CreateStartInfo(
+            executable,
+            ["--plan", "--json"],
+            visible: false);
+        Assert.False(plan.UseShellExecute);
+        Assert.True(plan.CreateNoWindow);
+        Assert.True(plan.RedirectStandardOutput);
+        Assert.True(plan.RedirectStandardError);
+        Assert.Equal(["--plan", "--json"], plan.ArgumentList);
     }
 
     [Fact]
@@ -613,7 +951,8 @@ public sealed class FleetInstallerHandoffTests
                     fixture.StateRoot),
                 new FixedVerifier(InstallerSigner),
                 new RecordingInstallerRunner(fixture.Plan),
-                new FixedTimeProvider(Now));
+                new FixedTimeProvider(Now),
+                fixture.InitializationStore);
 
             var receipt = await service.InstallAsync();
             Assert.Equal("guided_installer_completed", receipt.Status);
@@ -794,7 +1133,9 @@ public sealed class FleetInstallerHandoffTests
             Assert.NotNull(process);
             process.WaitForExit();
             Assert.Equal(0, process.ExitCode);
-            Assert.ThrowsAny<Exception>(() => FleetInstallerWorkspace.Open(link));
+            Assert.ThrowsAny<Exception>(() => FleetInstallerWorkspace.Open(
+                link,
+                new MemoryInitializationStore()));
         }
         finally
         {
@@ -836,6 +1177,10 @@ public sealed class FleetInstallerHandoffTests
             StateRoot = Path.Combine(
                 Path.GetTempPath(),
                 $"qfm-fleet-state-{Guid.NewGuid():N}");
+            InitializationStore = new MemoryInitializationStore();
+            InitializationStore.SetupRepair(
+                FleetInstallerWorkspace.StateRootDigest(StateRoot));
+            InitializeReplayFiles();
             var spki = _rsa.ExportSubjectPublicKeyInfo();
             var spkiHash = Sha256(spki);
             Policy = new FleetInstallerTrustPolicy(
@@ -851,7 +1196,10 @@ public sealed class FleetInstallerHandoffTests
                 ["version"] = version,
                 ["channel"] = "stable",
                 ["issued_at_ms"] = Now.AddMinutes(-1).ToUnixTimeMilliseconds(),
-                ["expires_at_ms"] = Now.AddDays(1).ToUnixTimeMilliseconds(),
+                ["expires_at_ms"] = Now.AddHours(12).ToUnixTimeMilliseconds(),
+                ["validity_duration_ms"] =
+                    (long)TimeSpan.FromHours(12).Add(
+                        TimeSpan.FromMinutes(1)).TotalMilliseconds,
                 ["asset"] = new JsonObject
                 {
                     ["name"] = FleetInstallerContract.AssetName,
@@ -885,16 +1233,37 @@ public sealed class FleetInstallerHandoffTests
 
         public FleetInstallerPlanReceipt Plan { get; set; }
 
-        public void ResignPayload(Action<JsonObject> mutate)
+        public MemoryInitializationStore InitializationStore { get; }
+
+        public void SetupRepairReplay()
+        {
+            InitializationStore.SetupRepair(
+                FleetInstallerWorkspace.StateRootDigest(StateRoot));
+            InitializeReplayFiles();
+        }
+
+        public void ResignPayload(
+            Action<JsonObject> mutate,
+            bool canonical = true)
         {
             mutate(_payload);
-            SignPayload();
+            SignPayload(canonical);
+        }
+
+        public void ResignCurrentPayloadOrder() =>
+            SignPayload(canonical: false);
+
+        public void ResignRawPayload(Func<string, string> mutate)
+        {
+            var canonical = Encoding.UTF8.GetString(CanonicalPayloadBytes());
+            SignPayloadBytes(Encoding.UTF8.GetBytes(mutate(canonical)));
         }
 
         public FleetInstallerHandoff CreateService(
             FleetInstallerTrustPolicy? policy = null,
             IFleetInstallerArtifactTrustVerifier? verifier = null,
-            IFleetInstallerProcessRunner? runner = null)
+            IFleetInstallerProcessRunner? runner = null,
+            TimeProvider? timeProvider = null)
         {
             var source = new MemorySource(this);
             var settings = new FleetInstallerSettings(
@@ -905,7 +1274,8 @@ public sealed class FleetInstallerHandoffTests
                 settings,
                 verifier ?? new FixedVerifier(InstallerSigner),
                 runner ?? new RecordingInstallerRunner(Plan),
-                new FixedTimeProvider(Now));
+                timeProvider ?? new FixedTimeProvider(Now),
+                InitializationStore);
         }
 
         public void Dispose()
@@ -915,12 +1285,52 @@ public sealed class FleetInstallerHandoffTests
             {
                 Directory.Delete(StateRoot, recursive: true);
             }
+            File.Delete(FleetInstallerWorkspace.GetDurableAnchorPath(
+                StateRoot));
         }
 
-        private void SignPayload()
+        private void SignPayload(bool canonical = true)
         {
-            var payloadBytes = Encoding.UTF8.GetBytes(
-                _payload.ToJsonString());
+            var payloadBytes = canonical
+                ? CanonicalPayloadBytes()
+                : Encoding.UTF8.GetBytes(_payload.ToJsonString());
+            SignPayloadBytes(payloadBytes);
+        }
+
+        private void InitializeReplayFiles()
+        {
+            Directory.CreateDirectory(StateRoot);
+            File.WriteAllText(
+                Path.Combine(StateRoot, "fleet-installer.state.json"),
+                JsonSerializer.Serialize(
+                    FleetInstallerState.Empty,
+                    new JsonSerializerOptions(
+                        FleetInstallerValidation.Json)
+                    {
+                        DefaultIgnoreCondition =
+                            JsonIgnoreCondition.Never
+                    }));
+            File.WriteAllText(
+                FleetInstallerWorkspace.GetDurableAnchorPath(StateRoot),
+                JsonSerializer.Serialize(
+                    new FleetInstallerStateAnchor(
+                        FleetInstallerContract.StateAnchorSchema,
+                        FleetInstallerWorkspace.StateRootDigest(StateRoot)),
+                    FleetInstallerValidation.Json));
+        }
+
+        private byte[] CanonicalPayloadBytes()
+        {
+            var payload = JsonSerializer.Deserialize<FleetReleasePayload>(
+                _payload.ToJsonString(),
+                FleetInstallerValidation.Json) ??
+                throw new InvalidOperationException(
+                    "The test Fleet payload is invalid.");
+            return FleetInstallerValidation.SerializeCanonicalPayload(payload);
+        }
+
+        private void SignPayloadBytes(byte[] payloadBytes)
+        {
             var signature = _rsa.SignData(
                 payloadBytes,
                 HashAlgorithmName.SHA256,
@@ -1017,9 +1427,87 @@ public sealed class FleetInstallerHandoffTests
             throw new TimeoutException("fixture timeout");
     }
 
+    private sealed class CallbackInstallerRunner(
+        FleetInstallerPlanReceipt plan,
+        Action onGuided) : IFleetInstallerProcessRunner
+    {
+        public Task<FleetInstallerPlanReceipt> RunPlanAsync(
+            string executablePath,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(plan);
+
+        public Task<int> RunGuidedAsync(
+            string executablePath,
+            CancellationToken cancellationToken)
+        {
+            onGuided();
+            return Task.FromResult(0);
+        }
+    }
+
+    private sealed class MemoryInitializationStore :
+        IFleetInstallerInitializationStore
+    {
+        private string? _stateRootSha256;
+        private FleetInstallerProtectedState? _state;
+
+        public FleetInstallerProtectedState? Read(
+            string stateRootSha256) =>
+            _stateRootSha256 == stateRootSha256
+                ? _state
+                : null;
+
+        public FleetInstallerProtectedState Accept(
+            string stateRootSha256,
+            FleetReleaseDescriptor descriptor)
+        {
+            var current = Read(stateRootSha256) ??
+                throw new InvalidOperationException(
+                    "The fixture replay authority is missing.");
+            if (current.AcceptedDescriptorIds.Contains(
+                    descriptor.DescriptorId,
+                    StringComparer.Ordinal) ||
+                current.HighestHandoffVersion is not null &&
+                Version.Parse(descriptor.Version) <=
+                Version.Parse(current.HighestHandoffVersion))
+            {
+                throw new InvalidOperationException(
+                    "The fixture replay authority rejected the transition.");
+            }
+            _state = current with
+            {
+                HighestHandoffVersion = descriptor.Version,
+                AcceptedDescriptorIds = current.AcceptedDescriptorIds
+                    .Append(descriptor.DescriptorId)
+                    .TakeLast(256)
+                    .ToArray()
+            };
+            return _state;
+        }
+
+        public void SetupRepair(string stateRootSha256)
+        {
+            _stateRootSha256 = stateRootSha256;
+            _state = FleetInstallerProtectedState.Empty(stateRootSha256);
+        }
+
+        public void Clear()
+        {
+            _stateRootSha256 = null;
+            _state = null;
+        }
+    }
+
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = now;
+
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 
     private sealed class SequenceHandler(
@@ -1072,6 +1560,8 @@ public sealed class FleetInstallerHandoffTests
             ["DescriptorPublicKeySpkiBase64"] = Convert.ToBase64String(spki),
             ["DescriptorSignerSpkiSha256"] = Sha256(spki),
             ["InstallerSignerCertificateSha256"] = InstallerSigner,
+            ["ProvisioningSetupSignerCertificateSha256"] =
+                new string('c', 64),
             ["Channel"] = "stable",
             ["StateRootRelativePath"] =
                 "QuestIonAbleFileManager/FleetInstaller"

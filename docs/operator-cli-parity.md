@@ -157,9 +157,14 @@ argument vectors above, install requires the same explicit confirmation as the
 WPF dialog, and neither route initializes ADB. Offline contract tests cover
 strict/duplicate JSON, signatures and signer pins, product/channel/asset
 binding, v1 rejection, exact immutable URL/version tag, size and digest,
-freshness, replay/downgrade, Pages-binary rejection, redirect escape, embedded
-configuration precedence/completeness, receipt redaction, process timeouts,
-private-stage cleanup, and reparse rejection.
+JCS byte canonicalization, exact 24-hour/future-skew/expiry boundaries,
+replay/downgrade and fail-closed state/anchor deletion, Pages-binary rejection,
+redirect escape, embedded configuration precedence/completeness, generated
+trust absence from ordinary build inputs, checked-in release-source authority,
+protected machine-record lifecycle loss, same-user replay-file rewrite,
+visible guided-process retry semantics,
+receipt redaction, process timeouts, private-stage cleanup, and reparse
+rejection.
 
 Connectivity-profile parity proves status/list receipts contain only IDs and
 sanitized state, both import sources reach the same strict parser and

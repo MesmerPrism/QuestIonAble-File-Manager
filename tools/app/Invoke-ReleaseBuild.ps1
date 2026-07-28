@@ -27,110 +27,18 @@ param(
     [string]$ExpectedKioskSourceRevision,
 
     [string]$ApkSignerPath,
-    [string]$FleetInstallerReleaseDescriptorUri,
-    [string]$FleetInstallerDescriptorPublicKeySpkiBase64,
-    [string]$FleetInstallerDescriptorSignerSpkiSha256,
-    [string]$FleetInstallerSetupSignerCertificateSha256,
-    [string]$FleetInstallerChannel,
-    [string]$FleetInstallerStateRootRelativePath,
     [switch]$SkipBuildAndTest
 )
 
 $ErrorActionPreference = 'Stop'
-$fleetInstallerBuildConfiguration = [ordered]@{
-    FleetInstallerReleaseDescriptorUri = $FleetInstallerReleaseDescriptorUri
-    FleetInstallerDescriptorPublicKeySpkiBase64 = $FleetInstallerDescriptorPublicKeySpkiBase64
-    FleetInstallerDescriptorSignerSpkiSha256 = $FleetInstallerDescriptorSignerSpkiSha256
-    FleetInstallerSetupSignerCertificateSha256 = $FleetInstallerSetupSignerCertificateSha256
-    FleetInstallerChannel = $FleetInstallerChannel
-    FleetInstallerStateRootRelativePath = $FleetInstallerStateRootRelativePath
-}
-$configuredFleetInstallerValues = @(
-    $fleetInstallerBuildConfiguration.Values |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-).Count
-if ($configuredFleetInstallerValues -notin @(0, $fleetInstallerBuildConfiguration.Count)) {
-    throw 'Fleet installer release trust configuration is all-or-none.'
-}
-if ($configuredFleetInstallerValues -gt 0) {
-    if ($FleetInstallerChannel -cnotin @('stable', 'preview', 'dev')) {
-        throw 'The Fleet installer release channel must be stable, preview, or dev.'
-    }
-    $expectedDescriptorUri =
-        "https://mesmerprism.com/Rusty-Fleet/metadata/$FleetInstallerChannel/release.json"
-    if ($FleetInstallerReleaseDescriptorUri -cne $expectedDescriptorUri) {
-        throw 'The Fleet installer descriptor must use the canonical MesmerPrism Pages metadata path.'
-    }
-    if ($FleetInstallerDescriptorSignerSpkiSha256 -notmatch '^[0-9a-f]{64}$' -or
-        $FleetInstallerSetupSignerCertificateSha256 -notmatch '^[0-9a-f]{64}$') {
-        throw 'Fleet installer signer pins must be lowercase SHA-256 values.'
-    }
-    if ([IO.Path]::IsPathFullyQualified($FleetInstallerStateRootRelativePath)) {
-        throw 'The Fleet installer state root must be a safe relative per-user path.'
-    }
-    $fleetStateSegments = @(
-        $FleetInstallerStateRootRelativePath -split '[/\\]' |
-            Where-Object { $_ -ne '' }
-    )
-    if ($fleetStateSegments.Count -lt 1 -or
-        $fleetStateSegments.Count -gt 4 -or
-        ($fleetStateSegments | Where-Object {
-            $stem = ($_ -split '\.')[0]
-            $_ -notmatch '^[A-Za-z0-9._-]{1,64}$' -or
-            $_ -in @('.', '..') -or
-            $_.EndsWith('.') -or
-            $stem -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$'
-        }).Count -gt 0 -or
-        ($fleetStateSegments -join '/') -cne
-            $FleetInstallerStateRootRelativePath.Replace('\', '/')) {
-        throw 'The Fleet installer state root must be a safe canonical relative path.'
-    }
-    try {
-        $fleetDescriptorSpki =
-            [Convert]::FromBase64String($FleetInstallerDescriptorPublicKeySpkiBase64)
-        if ([Convert]::ToBase64String($fleetDescriptorSpki) -cne
-            $FleetInstallerDescriptorPublicKeySpkiBase64) {
-            throw 'The Fleet installer descriptor SPKI must use canonical base64.'
-        }
-        $fleetDescriptorSpkiPin = [Convert]::ToHexString(
-            [Security.Cryptography.SHA256]::HashData($fleetDescriptorSpki)
-        ).ToLowerInvariant()
-        if ($fleetDescriptorSpkiPin -cne
-            $FleetInstallerDescriptorSignerSpkiSha256) {
-            throw 'The Fleet installer descriptor SPKI does not match its pin.'
-        }
-        $fleetDescriptorRsa = [Security.Cryptography.RSA]::Create()
-        try {
-            $fleetDescriptorBytesRead = 0
-            $fleetDescriptorRsa.ImportSubjectPublicKeyInfo(
-                $fleetDescriptorSpki,
-                [ref]$fleetDescriptorBytesRead)
-            if ($fleetDescriptorBytesRead -ne $fleetDescriptorSpki.Length) {
-                throw 'The Fleet installer descriptor SPKI contains trailing data.'
-            }
-        }
-        finally {
-            $fleetDescriptorRsa.Dispose()
-        }
-    }
-    catch {
-        throw "The Fleet installer descriptor SPKI is invalid: $($_.Exception.Message)"
-    }
-}
-
-# MSBuild imports process environment variables as properties. Clear ambient
-# values when this invocation is inert, and restore the caller environment on
-# every exit so only explicit release arguments can affect published binaries.
-$priorFleetInstallerBuildEnvironment = @{}
-foreach ($entry in $fleetInstallerBuildConfiguration.GetEnumerator()) {
-    $priorFleetInstallerBuildEnvironment[$entry.Key] =
-        [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
-    $value = if ($configuredFleetInstallerValues -gt 0) { $entry.Value } else { $null }
-    [Environment]::SetEnvironmentVariable($entry.Key, $value, 'Process')
-}
-
-try {
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+& (Join-Path $repoRoot 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+    -RequireOfficialRelease `
+    -ExpectedVersion $Version
+if ($LASTEXITCODE -ne 0) {
+    throw 'Fleet installer checked-in release configuration validation failed.'
+}
+
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts'))
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $OutputDirectory.StartsWith($artifactsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -339,12 +247,3 @@ Get-ChildItem -LiteralPath $OutputDirectory -File |
     Set-Content -LiteralPath (Join-Path $OutputDirectory 'SHA256SUMS.txt') -Encoding utf8
 
 Get-ChildItem -LiteralPath $OutputDirectory -File | Sort-Object Name | Select-Object Name, Length, FullName
-}
-finally {
-    foreach ($entry in $priorFleetInstallerBuildEnvironment.GetEnumerator()) {
-        [Environment]::SetEnvironmentVariable(
-            $entry.Key,
-            $entry.Value,
-            'Process')
-    }
-}

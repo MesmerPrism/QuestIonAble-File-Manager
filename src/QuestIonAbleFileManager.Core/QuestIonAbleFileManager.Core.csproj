@@ -3,64 +3,13 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <FleetInstallerEmbeddedConfigurationAny
-      Condition="'$(FleetInstallerReleaseDescriptorUri)$(FleetInstallerDescriptorPublicKeySpkiBase64)$(FleetInstallerDescriptorSignerSpkiSha256)$(FleetInstallerSetupSignerCertificateSha256)$(FleetInstallerChannel)$(FleetInstallerStateRootRelativePath)' != ''">true</FleetInstallerEmbeddedConfigurationAny>
-    <FleetInstallerEmbeddedConfigurationComplete
-      Condition="'$(FleetInstallerReleaseDescriptorUri)' != '' and
-                 '$(FleetInstallerDescriptorPublicKeySpkiBase64)' != '' and
-                 '$(FleetInstallerDescriptorSignerSpkiSha256)' != '' and
-                 '$(FleetInstallerSetupSignerCertificateSha256)' != '' and
-                 '$(FleetInstallerChannel)' != '' and
-                 '$(FleetInstallerStateRootRelativePath)' != ''">true</FleetInstallerEmbeddedConfigurationComplete>
-  </PropertyGroup>
-
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>QuestIonAbleFileManager.Setup</_Parameter1>
+    </AssemblyAttribute>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>QuestIonAbleFileManager.ProviderCapabilityDiscoveryVersion</_Parameter1>
       <_Parameter2>$(Version)</_Parameter2>
     </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.ConfigurationVersion</_Parameter1>
-      <_Parameter2>2</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.DescriptorUri</_Parameter1>
-      <_Parameter2>$(FleetInstallerReleaseDescriptorUri)</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.DescriptorPublicKeySpkiBase64</_Parameter1>
-      <_Parameter2>$(FleetInstallerDescriptorPublicKeySpkiBase64)</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.DescriptorSignerSpkiSha256</_Parameter1>
-      <_Parameter2>$(FleetInstallerDescriptorSignerSpkiSha256)</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.InstallerSignerCertificateSha256</_Parameter1>
-      <_Parameter2>$(FleetInstallerSetupSignerCertificateSha256)</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.Channel</_Parameter1>
-      <_Parameter2>$(FleetInstallerChannel)</_Parameter2>
-    </AssemblyAttribute>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute"
-                       Condition="'$(FleetInstallerEmbeddedConfigurationComplete)' == 'true'">
-      <_Parameter1>QuestIonAbleFileManager.FleetInstaller.StateRootRelativePath</_Parameter1>
-      <_Parameter2>$(FleetInstallerStateRootRelativePath)</_Parameter2>
-    </AssemblyAttribute>
   </ItemGroup>
-
-  <Target Name="ValidateFleetInstallerEmbeddedConfiguration"
-          BeforeTargets="CoreCompile">
-    <Error Condition="'$(FleetInstallerEmbeddedConfigurationAny)' == 'true' and
-                      '$(FleetInstallerEmbeddedConfigurationComplete)' != 'true'"
-           Text="Fleet installer embedded trust configuration is all-or-none." />
-  </Target>
 </Project>

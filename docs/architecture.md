@@ -161,11 +161,27 @@ GitHub Release URL/version plus installer size/hash/name/protocol, pinned
 Authenticode signer, a private retained stage, replay/downgrade state, and
 Fleet's fixed non-mutating plan contract. The canonical MesmerPrism Pages path
 owns metadata only; it is never an installer origin. Published builds use
-release-owned embedded trust metadata and ignore developer environment
-overrides. Fleet's guided installer owns installation behavior and any visible
-Windows consent. Neither the WPF nor CLI can choose a source, executable,
-argument vector, credential, device, ADB action, network action, or elevation
-mode. See [Fleet installer handoff](fleet-installer-handoff.md).
+release-owned embedded trust metadata present only in reviewed checked-in
+source on the exact clean tagged release commit. MSBuild, environment,
+release-script, and generated-object inputs cannot add trust. Signed payloads
+must be RFC 8785 JCS, carry an exact duration that binds issue and expiry, and
+expire within 24 hours. Replay state has both a root-bound sibling file anchor
+and an elevated signed-Setup-provisioned, administrator-write HKLM record.
+That protected record owns the descriptor IDs and version high-water mark.
+Core cannot write it directly: a transition is routed to the protected,
+self-pin-verifying Setup copy, which re-verifies the current signed descriptor
+before a monotonic update. Descriptor fetch through exact durable readback is
+one machine-wide transaction under a protected SYSTEM/Administrators-only
+mutex shared with provisioning/repair; abandoned-lock recovery re-reads state
+before deciding. Elevated installer inputs use unpredictable protected
+Program Files staging with reparse rejection and per-run cleanup.
+Missing/coordinated-deleted
+files or machine-record loss after
+initialization fail closed. Runtime embedded trust ignores developer
+environment overrides. Fleet's guided installer owns installation
+behavior and any visible Windows consent. Neither the WPF nor CLI can choose a
+source, executable, argument vector, credential, device, ADB action, network
+action, or elevation mode. See [Fleet installer handoff](fleet-installer-handoff.md).
 
 The shipped CLI has no push or cancellation authority. A Core host may
 advertise push only when it injects a verifier for the current Quest identity

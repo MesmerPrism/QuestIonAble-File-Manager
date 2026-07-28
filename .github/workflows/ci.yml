@@ -50,6 +50,10 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
 
+      - name: Fleet installer release configuration boundary
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/Test-FleetInstallerReleaseConfiguration.ps1
+
       - name: Kiosk release-bundle verifier
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/app/Test-RustyKioskReleaseBundle.ps1 -SelfTest

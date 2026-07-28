@@ -4,17 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Semantic version without v, for example 0.3.1"
-        required: true
-        type: string
-      rusty_kiosk_version:
-        description: "Published Rusty Kiosk release without v, for example 0.6.4"
-        required: true
-        default: "0.6.4"
-        type: string
 
 permissions:
   contents: write
@@ -41,17 +30,30 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $semanticVersion = '${{ inputs.version }}'
-            $tagName = "v$semanticVersion"
-          }
-          else {
-            $tagName = '${{ github.ref_name }}'
-            $semanticVersion = $tagName -replace '^v', ''
+          $tagName = '${{ github.ref_name }}'
+          $ref = '${{ github.ref }}'
+          if ($ref -cne "refs/tags/$tagName" -or
+              $tagName -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Release signing requires refs/tags/v<version>; got $ref."
           }
 
+          $semanticVersion = $tagName.Substring(1)
           if ($semanticVersion -notmatch '^\d+\.\d+\.\d+$') {
             throw "Version must look like 0.3.1, got $semanticVersion"
+          }
+
+          # Replace checkout's local tag with the authoritative remote tag,
+          # then require its peeled commit to be this tag-push workflow SHA.
+          git tag -d $tagName 2>$null
+          git fetch --force --no-tags origin `
+            "refs/tags/$tagName`:refs/tags/$tagName"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not fetch authoritative tag $tagName from origin."
+          }
+          $peeledCommit = (git rev-parse "$tagName^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or
+              $peeledCommit -cne $env:GITHUB_SHA) {
+            throw "Authoritative tag $tagName does not peel to GITHUB_SHA."
           }
 
           "semantic_version=$semanticVersion" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
@@ -82,13 +84,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          KIOSK_VERSION_INPUT: ${{ inputs.rusty_kiosk_version }}
           KIOSK_VERSION_DEFAULT: ${{ vars.RUSTY_KIOSK_VERSION }}
         run: |
-          $kioskVersion = if ($env:KIOSK_VERSION_INPUT) {
-            $env:KIOSK_VERSION_INPUT
-          }
-          elseif ($env:KIOSK_VERSION_DEFAULT) {
+          $kioskVersion = if ($env:KIOSK_VERSION_DEFAULT) {
             $env:KIOSK_VERSION_DEFAULT
           }
           else {
