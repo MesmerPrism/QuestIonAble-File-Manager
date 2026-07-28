@@ -256,6 +256,10 @@ function Assert-SetupSecuritySelfTest {
             $proof.missing_machine_repair -cne 'fail_closed' -or
             $proof.destructive_reset -cne 'explicit_only' -or
             $proof.forged_partial_evidence -cne 'rejected' -or
+            $proof.rollback_readback -cne
+                'verified_or_validated_backup_retained' -or
+            $proof.partial_replace_failure -cne
+                'reconciled_and_prior_backup_retained' -or
             $proof.result_local_paths -cne 'absent') {
             throw 'The Setup replay-security self-test proof is invalid.'
         }

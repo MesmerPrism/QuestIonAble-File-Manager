@@ -207,8 +207,13 @@ documented.
   `--destructive-reset-fleet-replay-protection` route, mutually exclusive with
   repair. Replace the Program Files helper atomically only when the retained
   old and new artifacts share the reviewed signer pin; preserve replay state,
-  roll back a failed committed readback, and reject signer changes without a
-  separately reviewed rotation route.
+  and report rollback only after the prior backup identity/hash/signer and the
+  restored destination receive exact retained readback. Retain the backup when
+  rollback is unknown or fails; describe it as validated repair evidence only
+  after exact prior-commitment validation. Treat a thrown atomic-replace call
+  as potentially state-changing and reconcile destination, replacement, and
+  backup against retained commitments without deleting prior evidence. Reject
+  signer changes without a separately reviewed rotation route.
   A declined, failed, or prompt-expired visible guided run remains unconsumed;
   recheck the clock immediately after guided success and require a fresh
   descriptor fetch before retry.

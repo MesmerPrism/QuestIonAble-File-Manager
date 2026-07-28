@@ -16,11 +16,24 @@ internal sealed record FleetReplayProtectionSetupResult(
     string Action,
     string? StateRootSha256);
 
+internal sealed record ProtectedHelperCommitment(
+    FleetWindowsFileIdentity Identity,
+    string Sha256,
+    string SignerCertificateSha256);
+
 internal enum ProtectedHelperInstallAction
 {
     Installed,
     Preserved,
     UpgradedSameSigner
+}
+
+internal enum ProtectedHelperArtifactMatch
+{
+    Missing,
+    Prior,
+    Replacement,
+    Unknown
 }
 
 internal interface ISetupArtifactVerifier
@@ -355,6 +368,10 @@ internal static class FleetInstallerReplayProtectionSetup
             missing_machine_repair = "fail_closed",
             destructive_reset = "explicit_only",
             forged_partial_evidence = "rejected",
+            rollback_readback =
+                "verified_or_validated_backup_retained",
+            partial_replace_failure =
+                "reconciled_and_prior_backup_retained",
             result_local_paths = "absent"
         }));
         return 0;
@@ -833,9 +850,9 @@ internal static class FleetInstallerReplayProtectionSetup
             throw new InvalidOperationException(
                 "A failed committed helper readback was accepted.");
         }
-        catch (InvalidOperationException exception) when (
+        catch (AggregateException exception) when (
             exception.Message.Contains(
-                "previous helper was restored",
+                "previous helper was restored and verified",
                 StringComparison.Ordinal))
         {
         }
@@ -843,6 +860,95 @@ internal static class FleetInstallerReplayProtectionSetup
         {
             throw new InvalidOperationException(
                 "Failed helper readback did not restore release B.");
+        }
+
+        var adversarialVerifier =
+            new RejectCommittedSetupArtifactVerifier(
+                verifier,
+                destination);
+        var rollbackAttackCount = 0;
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceA,
+                destination,
+                signerPin,
+                adversarialVerifier,
+                rollbackDestination =>
+                {
+                    var injected = rollbackDestination + "." +
+                        Guid.NewGuid().ToString("N") + ".attack";
+                    File.WriteAllBytes(injected, bytesOtherSigner);
+                    File.Move(
+                        injected,
+                        rollbackDestination,
+                        overwrite: true);
+                    rollbackAttackCount++;
+                });
+            throw new InvalidOperationException(
+                "A substituted rollback readback was accepted.");
+        }
+        catch (AggregateException exception) when (
+            exception.Message.Contains(
+                "validated backup was retained",
+                StringComparison.Ordinal) &&
+            exception.InnerExceptions.Count == 2 &&
+            exception.InnerExceptions.All(static inner =>
+                inner.Message.StartsWith(
+                    "Fleet replay helper ",
+                    StringComparison.Ordinal) &&
+                !inner.Message.Contains(
+                    Path.DirectorySeparatorChar)))
+        {
+        }
+        var retainedBackups = Directory.GetFiles(
+            staging.Path,
+            "replay-authority.exe.*.backup",
+            SearchOption.TopDirectoryOnly);
+        if (rollbackAttackCount != 1 ||
+            retainedBackups.Length != 1 ||
+            !File.ReadAllBytes(retainedBackups[0])
+                .SequenceEqual(bytesB) ||
+            verifier.VerifySignerCertificateSha256(
+                retainedBackups[0]) != signerPin)
+        {
+            throw new InvalidOperationException(
+                "Failed rollback readback did not retain exact validated repair evidence.");
+        }
+        ProtectedHelperCommitment retainedBackupCommitment;
+        using (var retainedBackup =
+               FleetWindowsFileSafety.OpenRetainedStagedReadOnlyFile(
+                   retainedBackups[0]))
+        {
+            FleetWindowsFileSafety.ValidateFile(
+                retainedBackup.SafeFileHandle,
+                retainedBackups[0],
+                requireSingleLink: true);
+            retainedBackupCommitment = new ProtectedHelperCommitment(
+                FleetWindowsFileSafety.GetIdentity(
+                    retainedBackup.SafeFileHandle),
+                FileSha256(retainedBackup),
+                signerPin);
+        }
+        RestoreProtectedHelperFromBackup(
+            retainedBackups[0],
+            destination,
+            destination + ".self-test-repair",
+            signerPin,
+            retainedBackupCommitment,
+            verifier,
+            backupValidatedHook: null,
+            rollbackReadbackHook: null);
+        if (!File.ReadAllBytes(destination).SequenceEqual(bytesB))
+        {
+            throw new InvalidOperationException(
+                "Validated rollback repair evidence could not restore release B.");
+        }
+        File.Delete(retainedBackups[0]);
+        if (File.Exists(retainedBackups[0]))
+        {
+            throw new InvalidOperationException(
+                "The rollback repair self-test backup was not cleaned.");
         }
 
         try
@@ -865,6 +971,61 @@ internal static class FleetInstallerReplayProtectionSetup
         {
             throw new InvalidOperationException(
                 "A rejected signer change modified the installed helper.");
+        }
+
+        try
+        {
+            _ = InstallProtectedHelperCore(
+                sourceA,
+                destination,
+                signerPin,
+                verifier,
+                rollbackReadbackTestHook: null,
+                primaryReplaceTestHook:
+                (replacement, installed, backup) =>
+                {
+                    _ = replacement;
+                    File.Move(
+                        installed,
+                        backup,
+                        overwrite: false);
+                    throw new System.ComponentModel.Win32Exception(
+                        1177,
+                        "Synthetic partial ReplaceFileW failure at " +
+                        installed);
+                });
+            throw new InvalidOperationException(
+                "A partial ReplaceFileW failure was accepted.");
+        }
+        catch (AggregateException exception) when (
+            exception.Message.Contains(
+                "validated prior backup was retained",
+                StringComparison.Ordinal) &&
+            exception.InnerExceptions.Count == 2 &&
+            exception.InnerExceptions[0].Message.StartsWith(
+                "Fleet replay helper replacement failed with HRESULT",
+                StringComparison.Ordinal) &&
+            exception.InnerExceptions[1].Message.Contains(
+                "destination=missing, temporary=replacement, backup=prior",
+                StringComparison.Ordinal) &&
+            !exception.Message.Contains(
+                staging.Path,
+                StringComparison.OrdinalIgnoreCase))
+        {
+        }
+        var partialFailureBackups = Directory.GetFiles(
+            staging.Path,
+            "replay-authority.exe.*.backup",
+            SearchOption.TopDirectoryOnly);
+        if (File.Exists(destination) ||
+            partialFailureBackups.Length != 1 ||
+            !File.ReadAllBytes(partialFailureBackups[0])
+                .SequenceEqual(bytesB) ||
+            verifier.VerifySignerCertificateSha256(
+                partialFailureBackups[0]) != signerPin)
+        {
+            throw new InvalidOperationException(
+                "Partial ReplaceFileW failure lost exact prior-helper recovery evidence.");
         }
     }
 
@@ -1554,7 +1715,9 @@ internal static class FleetInstallerReplayProtectionSetup
             string source,
             string destination,
             string signerPin,
-            ISetupArtifactVerifier verifier)
+            ISetupArtifactVerifier verifier,
+            Action<string>? rollbackReadbackTestHook = null,
+            Action<string, string, string>? primaryReplaceTestHook = null)
     {
         EnsureDigest(signerPin);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -1592,6 +1755,7 @@ internal static class FleetInstallerReplayProtectionSetup
         }
 
         var destinationExisted = File.Exists(destinationPath);
+        ProtectedHelperCommitment? priorCommitment = null;
         if (destinationExisted)
         {
             using var retainedDestination =
@@ -1619,6 +1783,10 @@ internal static class FleetInstallerReplayProtectionSetup
                 throw new InvalidOperationException(
                     "The installed replay helper identity changed during validation.");
             }
+            priorCommitment = new ProtectedHelperCommitment(
+                destinationIdentity,
+                destinationHash,
+                signerPin);
             if (FixedLowerHexEquals(sourceHash, destinationHash))
             {
                 return ProtectedHelperInstallAction.Preserved;
@@ -1629,8 +1797,13 @@ internal static class FleetInstallerReplayProtectionSetup
             Guid.NewGuid().ToString("N") + ".tmp";
         var backup = destinationPath + "." +
             Guid.NewGuid().ToString("N") + ".backup";
+        var rollbackCandidate = destinationPath + "." +
+            Guid.NewGuid().ToString("N") + ".rollback";
         FleetWindowsFileIdentity temporaryIdentity;
+        ProtectedHelperCommitment? replacementCommitment = null;
         var preserveBackup = false;
+        var backupWasValidated = false;
+        var replacementAttempted = false;
         var replacementCommitted = false;
         try
         {
@@ -1691,16 +1864,32 @@ internal static class FleetInstallerReplayProtectionSetup
                     throw new InvalidOperationException(
                         "The staged replay helper changed during signature validation.");
                 }
+                replacementCommitment = new ProtectedHelperCommitment(
+                    temporaryIdentity,
+                    sourceHash,
+                    signerPin);
             }
             try
             {
                 if (destinationExisted)
                 {
-                    File.Replace(
-                        temporary,
-                        destinationPath,
-                        backup,
-                        ignoreMetadataErrors: false);
+                    replacementAttempted = true;
+                    preserveBackup = true;
+                    if (primaryReplaceTestHook is null)
+                    {
+                        File.Replace(
+                            temporary,
+                            destinationPath,
+                            backup,
+                            ignoreMetadataErrors: false);
+                    }
+                    else
+                    {
+                        primaryReplaceTestHook(
+                            temporary,
+                            destinationPath,
+                            backup);
+                    }
                 }
                 else
                 {
@@ -1743,26 +1932,61 @@ internal static class FleetInstallerReplayProtectionSetup
                     throw new InvalidOperationException(
                         "The committed replay helper identity changed during validation.");
                 }
+                preserveBackup = false;
             }
             catch (Exception validationException)
             {
                 if (!replacementCommitted)
                 {
-                    throw;
+                    if (destinationExisted &&
+                        replacementAttempted)
+                    {
+                        throw ReconcileFailedProtectedHelperReplace(
+                            temporary,
+                            destinationPath,
+                            backup,
+                            signerPin,
+                            priorCommitment ??
+                                throw new InvalidOperationException(
+                                    "The prior replay helper commitment is missing."),
+                            replacementCommitment ??
+                                throw new InvalidOperationException(
+                                    "The replacement replay helper commitment is missing."),
+                            verifier,
+                            validationException,
+                            ref preserveBackup);
+                    }
+                    throw new AggregateException(
+                        "The new replay helper replacement failed before a commit could be verified.",
+                        BoundedLifecycleFailure(
+                            "replacement",
+                            validationException));
                 }
                 try
                 {
                     if (destinationExisted)
                     {
-                        File.Replace(
+                        RestoreProtectedHelperFromBackup(
                             backup,
                             destinationPath,
-                            destinationBackupFileName: null,
-                            ignoreMetadataErrors: false);
+                            rollbackCandidate,
+                            signerPin,
+                            priorCommitment ??
+                                throw new InvalidOperationException(
+                                    "The prior replay helper commitment is missing."),
+                            verifier,
+                            () => backupWasValidated = true,
+                            rollbackReadbackTestHook);
+                        preserveBackup = false;
                     }
                     else
                     {
                         File.Delete(destinationPath);
+                        if (File.Exists(destinationPath))
+                        {
+                            throw new InvalidOperationException(
+                                "The rejected new replay helper remains installed.");
+                        }
                     }
                 }
                 catch (Exception rollbackException)
@@ -1770,26 +1994,366 @@ internal static class FleetInstallerReplayProtectionSetup
                     preserveBackup = destinationExisted &&
                         File.Exists(backup);
                     throw new AggregateException(
-                        "The committed replay helper failed validation and rollback also failed.",
-                        validationException,
-                        rollbackException);
+                        preserveBackup
+                            ? backupWasValidated
+                                ? "The committed replay helper failed validation and rollback could not be verified; the validated backup was retained."
+                                : "The committed replay helper failed validation and rollback could not be verified; the backup was retained for repair inspection."
+                            : "The committed replay helper failed validation and rollback could not be verified.",
+                        BoundedLifecycleFailure(
+                            "committed_validation",
+                            validationException),
+                        BoundedLifecycleFailure(
+                            "rollback_readback",
+                            rollbackException));
                 }
-                throw new InvalidOperationException(
-                    "The committed replay helper failed validation and the previous helper was restored.",
-                    validationException);
+                throw new AggregateException(
+                    destinationExisted
+                        ? "The committed replay helper failed validation and the previous helper was restored and verified."
+                        : "The committed replay helper failed validation and the new helper was removed and verified.",
+                    BoundedLifecycleFailure(
+                        "committed_validation",
+                        validationException));
             }
         }
         finally
         {
-            File.Delete(temporary);
+            BestEffortDeleteLifecycleArtifact(temporary);
+            BestEffortDeleteLifecycleArtifact(rollbackCandidate);
             if (!preserveBackup)
             {
-                File.Delete(backup);
+                BestEffortDeleteLifecycleArtifact(backup);
             }
         }
         return destinationExisted
             ? ProtectedHelperInstallAction.UpgradedSameSigner
             : ProtectedHelperInstallAction.Installed;
+    }
+
+    private static AggregateException
+        ReconcileFailedProtectedHelperReplace(
+            string temporary,
+            string destination,
+            string backup,
+            string signerPin,
+            ProtectedHelperCommitment priorCommitment,
+            ProtectedHelperCommitment replacementCommitment,
+            ISetupArtifactVerifier verifier,
+            Exception replacementException,
+            ref bool preserveBackup)
+    {
+        var destinationMatch = ClassifyProtectedHelperArtifact(
+            destination,
+            signerPin,
+            priorCommitment,
+            replacementCommitment,
+            verifier);
+        var temporaryMatch = ClassifyProtectedHelperArtifact(
+            temporary,
+            signerPin,
+            priorCommitment,
+            replacementCommitment,
+            verifier);
+        var backupMatch = ClassifyProtectedHelperArtifact(
+            backup,
+            signerPin,
+            priorCommitment,
+            replacementCommitment,
+            verifier);
+        preserveBackup =
+            backupMatch != ProtectedHelperArtifactMatch.Missing;
+
+        string message;
+        if (backupMatch == ProtectedHelperArtifactMatch.Prior)
+        {
+            message =
+                "The replay helper replacement failed after an attempted atomic replace; the validated prior backup was retained.";
+        }
+        else if (destinationMatch ==
+                 ProtectedHelperArtifactMatch.Prior)
+        {
+            message = preserveBackup
+                ? "The replay helper replacement failed; the prior helper remains verified and the backup was retained for repair inspection."
+                : "The replay helper replacement failed; the prior helper remains verified.";
+        }
+        else
+        {
+            message = preserveBackup
+                ? "The replay helper replacement failed and filesystem state could not be verified; the backup was retained for repair inspection."
+                : "The replay helper replacement failed and filesystem state could not be verified.";
+        }
+
+        return new AggregateException(
+            message,
+            BoundedLifecycleFailure(
+                "replacement",
+                replacementException),
+            new InvalidOperationException(
+                "Fleet replay helper reconciliation: destination=" +
+                ArtifactMatchToken(destinationMatch) +
+                ", temporary=" +
+                ArtifactMatchToken(temporaryMatch) +
+                ", backup=" +
+                ArtifactMatchToken(backupMatch) +
+                "."));
+    }
+
+    private static ProtectedHelperArtifactMatch
+        ClassifyProtectedHelperArtifact(
+            string path,
+            string signerPin,
+            ProtectedHelperCommitment priorCommitment,
+            ProtectedHelperCommitment replacementCommitment,
+            ISetupArtifactVerifier verifier)
+    {
+        if (!File.Exists(path))
+        {
+            return ProtectedHelperArtifactMatch.Missing;
+        }
+        try
+        {
+            using var retained =
+                FleetWindowsFileSafety
+                    .OpenAuthenticodeCompatibleReadOnlyFile(path);
+            FleetWindowsFileSafety.ValidateFile(
+                retained.SafeFileHandle,
+                path,
+                requireSingleLink: true);
+            var identity = FleetWindowsFileSafety.GetIdentity(
+                retained.SafeFileHandle);
+            var hash = FileSha256(retained);
+            RequireSignerPin(
+                verifier.VerifySignerCertificateSha256(path),
+                signerPin);
+            FleetWindowsFileSafety.ValidateFile(
+                retained.SafeFileHandle,
+                path,
+                requireSingleLink: true);
+            if (FleetWindowsFileSafety.GetIdentity(
+                    retained.SafeFileHandle) != identity ||
+                !FixedLowerHexEquals(
+                    FileSha256(retained),
+                    hash))
+            {
+                return ProtectedHelperArtifactMatch.Unknown;
+            }
+            if (identity == priorCommitment.Identity &&
+                FixedLowerHexEquals(
+                    hash,
+                    priorCommitment.Sha256) &&
+                FixedLowerHexEquals(
+                    signerPin,
+                    priorCommitment.SignerCertificateSha256))
+            {
+                return ProtectedHelperArtifactMatch.Prior;
+            }
+            if (identity == replacementCommitment.Identity &&
+                FixedLowerHexEquals(
+                    hash,
+                    replacementCommitment.Sha256) &&
+                FixedLowerHexEquals(
+                    signerPin,
+                    replacementCommitment
+                        .SignerCertificateSha256))
+            {
+                return ProtectedHelperArtifactMatch.Replacement;
+            }
+            return ProtectedHelperArtifactMatch.Unknown;
+        }
+        catch (FileNotFoundException)
+        {
+            return ProtectedHelperArtifactMatch.Missing;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ProtectedHelperArtifactMatch.Missing;
+        }
+        catch (Exception)
+        {
+            return ProtectedHelperArtifactMatch.Unknown;
+        }
+    }
+
+    private static string ArtifactMatchToken(
+        ProtectedHelperArtifactMatch match) =>
+        match switch
+        {
+            ProtectedHelperArtifactMatch.Missing => "missing",
+            ProtectedHelperArtifactMatch.Prior => "prior",
+            ProtectedHelperArtifactMatch.Replacement => "replacement",
+            _ => "unknown"
+        };
+
+    private static void RestoreProtectedHelperFromBackup(
+        string backup,
+        string destination,
+        string rollbackCandidate,
+        string signerPin,
+        ProtectedHelperCommitment priorCommitment,
+        ISetupArtifactVerifier verifier,
+        Action? backupValidatedHook,
+        Action<string>? rollbackReadbackHook)
+    {
+        RequireSignerPin(
+            priorCommitment.SignerCertificateSha256,
+            signerPin);
+        using (var retainedBackup =
+               FleetWindowsFileSafety
+                   .OpenRetainedStagedReadOnlyFile(backup))
+        {
+            FleetWindowsFileSafety.ValidateFile(
+                retainedBackup.SafeFileHandle,
+                backup,
+                requireSingleLink: true);
+            if (FleetWindowsFileSafety.GetIdentity(
+                    retainedBackup.SafeFileHandle) !=
+                priorCommitment.Identity ||
+                !FixedLowerHexEquals(
+                    FileSha256(retainedBackup),
+                    priorCommitment.Sha256))
+            {
+                throw new InvalidOperationException(
+                    "The replay helper backup differs from the prior commitment.");
+            }
+            RequireSignerPin(
+                verifier.VerifySignerCertificateSha256(backup),
+                priorCommitment.SignerCertificateSha256);
+            FleetWindowsFileSafety.ValidateFile(
+                retainedBackup.SafeFileHandle,
+                backup,
+                requireSingleLink: true);
+            if (FleetWindowsFileSafety.GetIdentity(
+                    retainedBackup.SafeFileHandle) !=
+                priorCommitment.Identity ||
+                !FixedLowerHexEquals(
+                    FileSha256(retainedBackup),
+                    priorCommitment.Sha256))
+            {
+                throw new InvalidOperationException(
+                    "The replay helper backup changed during validation.");
+            }
+            backupValidatedHook?.Invoke();
+
+            using var candidateWriter =
+                FleetWindowsFileSafety.CreateNewRetainedReadableFile(
+                    rollbackCandidate);
+            retainedBackup.Position = 0;
+            retainedBackup.CopyTo(candidateWriter);
+            candidateWriter.Flush(flushToDisk: true);
+            FleetWindowsFileSafety.ValidateFile(
+                candidateWriter.SafeFileHandle,
+                rollbackCandidate,
+                requireSingleLink: true);
+            if (!FixedLowerHexEquals(
+                    FileSha256(candidateWriter),
+                    priorCommitment.Sha256))
+            {
+                throw new InvalidOperationException(
+                    "The replay helper rollback candidate differs from the validated backup.");
+            }
+        }
+
+        FleetWindowsFileIdentity candidateIdentity;
+        using (var retainedCandidate =
+               FleetWindowsFileSafety
+                   .OpenAuthenticodeCompatibleReadOnlyFile(
+                       rollbackCandidate))
+        {
+            FleetWindowsFileSafety.ValidateFile(
+                retainedCandidate.SafeFileHandle,
+                rollbackCandidate,
+                requireSingleLink: true);
+            candidateIdentity = FleetWindowsFileSafety.GetIdentity(
+                retainedCandidate.SafeFileHandle);
+            if (!FixedLowerHexEquals(
+                    FileSha256(retainedCandidate),
+                    priorCommitment.Sha256))
+            {
+                throw new InvalidOperationException(
+                    "The replay helper rollback candidate changed before validation.");
+            }
+            RequireSignerPin(
+                verifier.VerifySignerCertificateSha256(
+                    rollbackCandidate),
+                priorCommitment.SignerCertificateSha256);
+            FleetWindowsFileSafety.ValidateFile(
+                retainedCandidate.SafeFileHandle,
+                rollbackCandidate,
+                requireSingleLink: true);
+            if (FleetWindowsFileSafety.GetIdentity(
+                    retainedCandidate.SafeFileHandle) !=
+                candidateIdentity ||
+                !FixedLowerHexEquals(
+                    FileSha256(retainedCandidate),
+                    priorCommitment.Sha256))
+            {
+                throw new InvalidOperationException(
+                    "The replay helper rollback candidate changed during validation.");
+            }
+        }
+
+        File.Replace(
+            rollbackCandidate,
+            destination,
+            destinationBackupFileName: null,
+            ignoreMetadataErrors: false);
+        rollbackReadbackHook?.Invoke(destination);
+
+        using var restored =
+            FleetWindowsFileSafety
+                .OpenAuthenticodeCompatibleReadOnlyFile(destination);
+        FleetWindowsFileSafety.ValidateFile(
+            restored.SafeFileHandle,
+            destination,
+            requireSingleLink: true);
+        if (FleetWindowsFileSafety.GetIdentity(
+                restored.SafeFileHandle) != candidateIdentity ||
+            !FixedLowerHexEquals(
+                FileSha256(restored),
+                priorCommitment.Sha256))
+        {
+            throw new InvalidOperationException(
+                "The restored replay helper differs from the validated rollback candidate.");
+        }
+        RequireSignerPin(
+            verifier.VerifySignerCertificateSha256(destination),
+            priorCommitment.SignerCertificateSha256);
+        FleetWindowsFileSafety.ValidateFile(
+            restored.SafeFileHandle,
+            destination,
+            requireSingleLink: true);
+        if (FleetWindowsFileSafety.GetIdentity(
+                restored.SafeFileHandle) != candidateIdentity ||
+            !FixedLowerHexEquals(
+                FileSha256(restored),
+                priorCommitment.Sha256))
+        {
+            throw new InvalidOperationException(
+                "The restored replay helper changed during committed readback.");
+        }
+    }
+
+    private static InvalidOperationException BoundedLifecycleFailure(
+        string phase,
+        Exception exception) =>
+        new(
+            "Fleet replay helper " + phase +
+            " failed with HRESULT 0x" +
+            exception.HResult.ToString(
+                "x8",
+                System.Globalization.CultureInfo.InvariantCulture) +
+            ".");
+
+    private static void BestEffortDeleteLifecycleArtifact(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // Cleanup failure must not mask the bounded validation/rollback
+            // result that determined authority.
+        }
     }
 
     private static RegistrySecurity CreateMachineAcl()

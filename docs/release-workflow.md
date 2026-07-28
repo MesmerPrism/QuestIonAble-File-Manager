@@ -213,9 +213,16 @@ the fixed Program Files product directory. A later helper is an ordinary
 atomic update only when both the retained installed artifact and staged new
 artifact match the reviewed signer pin; Setup re-hashes retained staged bytes
 after path-based Authenticode validation, and failed committed validation
-restores the prior helper without changing replay state. Signer changes fail
-until a separately reviewed rotation mechanism exists. Runtime requests never
-carry a path or secret;
+restores the prior helper without changing replay state only after the backup
+matches its prior identity/hash/signer commitment and the restored destination
+passes stable retained identity/hash/signer readback. Otherwise Setup retains
+the backup for repair inspection and reports a bounded rollback failure; a
+backup that completed commitment validation remains exact repair evidence.
+Any thrown Windows atomic-replace call is reconciled as potentially
+state-changing by classifying destination, staged replacement, and backup
+against both commitments before bounded failure and cleanup. Signer changes
+fail until a separately reviewed rotation mechanism exists.
+Runtime requests never carry a path or secret;
 the elevated helper re-fetches and verifies the current signed Fleet descriptor
 before it advances the protected HKLM high-water mark. Its protected
 SYSTEM/Administrators-only machine mutex serializes descriptor refetch through
@@ -227,7 +234,11 @@ quiet failure is a bounded code/HRESULT result. Neither exposes a local path.
 The release gate executes a signed-synthetic A-to-B same-signer lifecycle proof
 covering retained substitution attempts, nonempty state preservation,
 different-signer rejection, missing-machine repair refusal, forged/partial
-local evidence, and post-update equal-version/downgrade rejection.
+local evidence, post-update equal-version/downgrade rejection, uncontested
+verified rollback, and adversarial rollback-destination substitution with
+validated-backup retention. It also injects the Windows error-1177 partial
+failure shape—prior helper moved to backup before the call throws—and proves
+bounded path-free reconciliation plus exact backup retention.
 
 ## GitHub Configuration
 

@@ -178,10 +178,17 @@ protected record and preserves its root digest, accepted IDs, and high-water
 mark. A missing protected record is never reconstructed from local evidence;
 only the separately named destructive-reset route may explicitly discard
 history. Setup updates its protected helper atomically only when the retained
-old and new artifacts share the reviewed signer pin, restores the prior helper
-on failed committed validation, and rejects signer changes without a reviewed
-rotation route. Elevated installer inputs use unpredictable protected Program
-Files staging with reparse rejection and per-run cleanup. Missing or
+old and new artifacts share the reviewed signer pin. It confirms the exact
+prior backup identity, hash, and signer, restores through a separate candidate,
+and reopens and revalidates the restored destination before reporting rollback
+success. Unknown or failed rollback retains the backup for inspection; one
+that completed prior-commitment validation remains exact repair evidence.
+An atomic-replace error is treated as potentially state-changing: destination,
+replacement, and backup are reconciled against both retained commitments, and
+an exact prior backup is never deleted on unknown failure. Signer changes
+remain rejected without a reviewed rotation route. Elevated installer inputs
+use unpredictable protected Program Files staging with reparse rejection and
+per-run cleanup. Missing or
 coordinated-deleted files and machine-record loss after initialization fail
 closed. Runtime embedded trust ignores developer
 environment overrides. Fleet's guided installer owns installation

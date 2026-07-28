@@ -231,9 +231,17 @@ outcome; the separately named
 explicitly discards replay history. Setup receipts distinguish provisioning,
 preservation, repair, and destructive reset. Ordinary helper updates atomically
 replace the Program Files copy only when both artifacts match the reviewed
-signer pin; signer changes fail until a separately reviewed rotation mechanism
-exists. Elevated Setup stages installer inputs in a fresh
-unpredictable directory under its protected Program Files product root,
+signer pin. A failed committed validation is successful rollback only after
+Setup verifies the exact prior identity, hash, and signer in the backup,
+restores from a separate candidate, and revalidates the restored destination;
+otherwise the backup is retained for repair inspection and rollback remains
+failed. A backup that completed commitment validation is preserved as exact
+repair evidence. Even a failed atomic-replace call is reconciled as potentially
+state-changing; Setup classifies the destination, staged replacement, and
+backup against retained commitments before bounded failure and cleanup. Signer
+changes fail until a separately reviewed rotation mechanism exists. Elevated
+Setup stages installer inputs in a fresh unpredictable directory under its
+protected Program Files product root,
 rejects reparse components, and removes the run directory after use; plan-only
 staging remains unelevated and per-run. Quiet success and failure output never
 includes those paths. A

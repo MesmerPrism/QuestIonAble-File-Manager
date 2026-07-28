@@ -228,11 +228,21 @@ helper update only when the retained old and new artifacts both match that
 same signer pin. It stages and verifies the new helper by retained identity,
 re-hashes the retained bytes after path-based Authenticode validation,
 atomically replaces the old helper from the protected directory with rollback
-on failed committed readback, and does not touch replay state. A different
-signer is rejected until a separately reviewed signer-rotation policy and
-migration route exist. The machine record owns the accepted
-descriptor IDs and monotonic version high-water mark; the mutable per-user
-files do not. Core cannot write the record. After guided success it may invoke
+on failed committed readback, and does not touch replay state. Rollback first
+checks that the backup retains the exact prior identity, bytes/hash, and signer,
+copies it to a separately validated candidate, atomically restores that
+candidate, then reopens the destination with reparse/hardlink checks and stable
+identity/hash/signer readback. Only that exact readback is reported restored.
+Unknown or failed rollback retains the backup for inspection and returns a
+bounded failure; a backup that completed prior-commitment validation remains
+exact repair evidence. Setup also treats a thrown Windows atomic-replace call
+as potentially state-changing: it classifies destination, staged replacement,
+and backup by retained identity/hash/signer commitments, preserves exact prior
+evidence, and emits only bounded reconciliation state. A different signer is
+rejected until a separately reviewed signer-rotation policy and migration
+route exist. The machine record owns the accepted descriptor IDs and monotonic
+version high-water mark; the mutable per-user files do not. Core cannot write
+the record. After guided success it may invoke
 only the installed helper's fixed accept route; the elevated helper verifies
 its own Authenticode and pinned signer, re-fetches and independently verifies
 the current signed descriptor, requires an exact request match, and applies
@@ -272,8 +282,14 @@ synthetic release-A to release-B same-signer helper replacement with nonempty
 state preservation, retained-file substitution rejection, different-signer
 rejection, missing-machine-authority repair refusal, partial/forged local
 evidence, and equal-version/downgrade refusal after the update and repair
-semantics. Setup additionally uses a fresh unpredictable staging
-directory under its protected Program Files product root while elevated,
+semantics. It also substitutes the restored destination during an adversarial
+rollback readback and proves that Setup fails, retains the exact validated
+backup, and can use that evidence for verified repair; uncontested rollback
+must complete exact readback. A synthetic error-1177-shaped partial replacement
+moves the prior helper to backup before throwing, then proves reconciliation,
+path redaction, and backup retention. Setup additionally uses a fresh
+unpredictable staging directory under its protected Program Files product root
+while elevated,
 rejects reparse components, and deletes that run directory afterward. Plan-only
 staging is unelevated and per-run. Quiet output is bounded and contains no
 local staging path on success or failure.
@@ -324,8 +340,11 @@ includes:
   coordinated replay-file deletion, protected machine-record loss, and
   lower-version replay after state deletion;
 - signed-synthetic same-signer helper A-to-B replacement with retained
-  identity, atomic readback/rollback, nonempty state preservation, and
-  different-signer rejection;
+  identity, atomic readback/rollback, adversarial rollback-destination
+  substitution, validated-backup retention and repair evidence, nonempty state
+  preservation, and different-signer rejection;
+- partial Windows atomic-replace failure after the prior helper moved to backup,
+  with bounded reconciliation and exact prior-backup retention;
 - protected-authority reconstruction of missing local files, refusal to
   reconstruct missing HKLM authority from valid mutable evidence, partial and
   forged evidence rejection, and the separately named destructive reset;
