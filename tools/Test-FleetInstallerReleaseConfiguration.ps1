@@ -4,6 +4,7 @@ param(
 
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$ExpectedVersion,
+    [string]$ExpectedTag,
 
     [string[]]$AssemblyPath = @(),
 
@@ -331,7 +332,7 @@ function Assert-ConfiguredMetadata {
         throw 'Checked-in Fleet installer release trust must contain exactly eight fields.'
     }
     if ($Values.ConfigurationVersion -cne '2' -or
-        $Values.Channel -cnotin @('stable', 'preview', 'dev')) {
+        $Values.Channel -cnotin @('stable', 'labs')) {
         throw 'Checked-in Fleet installer release trust has an invalid version or channel.'
     }
     $expectedUri =
@@ -568,7 +569,10 @@ if ($RequireOfficialRelease) {
     if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
         throw 'Official release builds require an exact clean source commit.'
     }
-    $expectedTag = "v$ExpectedVersion"
+    $expectedTag = if ($ExpectedTag) { $ExpectedTag } else { "v$ExpectedVersion" }
+    if ($expectedTag -notmatch '^v\d+\.\d+\.\d+(?:-alpha\.[1-9]\d*)?$') {
+        throw 'Official Fleet release validation received a non-canonical tag.'
+    }
     $tags = @(& git -C $repoRoot tag --points-at HEAD)
     if ($LASTEXITCODE -ne 0 -or $tags -cnotcontains $expectedTag) {
         throw "Official release commit must carry exact tag $expectedTag."

@@ -1,0 +1,235 @@
+name: Release Windows Labs
+
+on:
+  push:
+    tags:
+      - "v*.*.*-alpha.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-labs:
+    environment: labs
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.201
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
+
+      - name: Validate Labs distribution contract
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/app/Test-LabsDistributionContract.ps1
+
+      - name: Resolve exact alpha version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ('${{ github.ref }}' -cne "refs/tags/$tag" -or
+              $tag -notmatch '^v(?<base>\d+\.\d+\.\d+)-alpha\.(?<alpha>[1-9]\d*)$') {
+            throw "Labs release requires the alpha-maturity tag refs/tags/vX.Y.Z-alpha.N; got ${{ github.ref }}."
+          }
+          git tag -d $tag 2>$null
+          git fetch --force --no-tags origin "refs/tags/$tag`:refs/tags/$tag"
+          if ($LASTEXITCODE -ne 0 -or (git rev-parse "$tag^{commit}").Trim() -cne $env:GITHUB_SHA) {
+            throw 'The authoritative alpha tag does not peel to GITHUB_SHA.'
+          }
+          "tag=$tag" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "base=$($Matches.base)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "alpha=$($Matches.alpha)" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore Labs signing material
+        shell: pwsh
+        env:
+          PACKAGE_PFX_BASE64: ${{ secrets.WINDOWS_LABS_PACKAGE_CERTIFICATE_BASE64 }}
+          SETUP_PFX_BASE64: ${{ secrets.WINDOWS_LABS_SETUP_CERTIFICATE_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PACKAGE_PFX_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:SETUP_PFX_BASE64)) {
+            throw 'Labs signing credentials are absent.'
+          }
+          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP 'labs-package.pfx'), [Convert]::FromBase64String($env:PACKAGE_PFX_BASE64))
+          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP 'labs-setup.pfx'), [Convert]::FromBase64String($env:SETUP_PFX_BASE64))
+
+      - name: Acquire exact Rusty Kiosk Labs owner bundle
+        id: kiosk
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIOSK_TAG: ${{ vars.RUSTY_KIOSK_LABS_TAG }}
+          KIOSK_MANIFEST_SHA256: ${{ vars.RUSTY_KIOSK_LABS_MANIFEST_SHA256 }}
+          KIOSK_SIGNER_SHA256: ${{ vars.RUSTY_KIOSK_LABS_SIGNER_SHA256 }}
+          KIOSK_MAIN_PACKAGE: ${{ vars.RUSTY_KIOSK_LABS_MAIN_PACKAGE }}
+          KIOSK_HELPER_PACKAGE: ${{ vars.RUSTY_KIOSK_LABS_HELPER_PACKAGE }}
+          KIOSK_SOURCE_TREE: ${{ vars.RUSTY_KIOSK_LABS_SOURCE_TREE }}
+          KIOSK_VERSION_CODE: ${{ vars.RUSTY_KIOSK_LABS_VERSION_CODE }}
+          KIOSK_RELEASE_URL: ${{ vars.RUSTY_KIOSK_LABS_RELEASE_URL }}
+        run: |
+          $tagMatch = [regex]::Match(
+            $env:KIOSK_TAG,
+            '^v(?<major>0|[1-9]\d{0,3})\.(?<minor>0|[1-9]\d?)\.(?<patch>0|[1-9]\d?)-alpha\.(?<alpha>[1-9]|[1-8]\d|9[0-8])$')
+          if (-not $tagMatch.Success -or
+              [int64]$tagMatch.Groups['major'].Value -gt 2099 -or
+              $env:KIOSK_MANIFEST_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+              $env:KIOSK_SIGNER_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+              $env:KIOSK_SOURCE_TREE -notmatch '^[0-9a-f]{40}$' -or
+              $env:KIOSK_VERSION_CODE -notmatch '^[1-9]\d*$' -or
+              $env:KIOSK_RELEASE_URL -cne "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$($env:KIOSK_TAG)" -or
+              [string]::IsNullOrWhiteSpace($env:KIOSK_MAIN_PACKAGE) -or
+              [string]::IsNullOrWhiteSpace($env:KIOSK_HELPER_PACKAGE)) {
+            throw 'The protected Labs environment is missing an exact Kiosk tag, manifest hash, signer, or package identity.'
+          }
+          $mappedVersionCode =
+            [int64]$tagMatch.Groups['major'].Value * 1000000L +
+            [int64]$tagMatch.Groups['minor'].Value * 10000L +
+            [int64]$tagMatch.Groups['patch'].Value * 100L +
+            [int64]$tagMatch.Groups['alpha'].Value
+          if ([int64]$env:KIOSK_VERSION_CODE -ne $mappedVersionCode) {
+            throw 'The reviewed Kiosk versionCode does not match its canonical alpha tag.'
+          }
+          $release = gh release view $env:KIOSK_TAG --repo MesmerPrism/Rusty-Kiosk --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tagName -cne $env:KIOSK_TAG -or
+              $release.isDraft -or -not $release.isPrerelease) {
+            throw 'The exact Kiosk alpha tag is not a published prerelease.'
+          }
+          $expectedAssets = @('RUSTY-KIOSK-LICENSE.txt','RUSTY-KIOSK-SOURCE.txt','bundle-manifest.json','rusty-kiosk-labs-owner-release.json','rusty-kiosk-setup-helper.apk','rusty-kiosk.apk')
+          $actualAssets = @($release.assets.name | Sort-Object)
+          if (@(Compare-Object $expectedAssets $actualAssets).Count -ne 0) {
+            throw 'The Kiosk Labs release asset set is incomplete or contains unreviewed assets.'
+          }
+          $revision = (gh api "repos/MesmerPrism/Rusty-Kiosk/commits/$($env:KIOSK_TAG)" --jq .sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the exact Kiosk alpha tag commit.' }
+          $sourceTree = (gh api "repos/MesmerPrism/Rusty-Kiosk/git/commits/$revision" --jq .tree.sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceTree -cne $env:KIOSK_SOURCE_TREE) {
+            throw 'The reviewed Kiosk source tree does not match the exact tag commit.'
+          }
+          $directory = Join-Path $env:GITHUB_WORKSPACE 'artifacts\kiosk-bundle'
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          gh release download $env:KIOSK_TAG --repo MesmerPrism/Rusty-Kiosk --dir $directory
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Kiosk alpha bundle acquisition failed.' }
+          foreach ($asset in $release.assets) {
+            $path = Join-Path $directory $asset.name
+            $digest = "sha256:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant())"
+            if ((Get-Item -LiteralPath $path).Length -ne [long]$asset.size -or
+                [string]$asset.digest -cne $digest) {
+              throw "Downloaded Kiosk asset failed release API size/digest readback: $($asset.name)"
+            }
+          }
+          "version=$($env:KIOSK_TAG.Substring(1))" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "revision=$revision" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Build and validate complete Labs product
+        shell: pwsh
+        env:
+          PACKAGE_PASSWORD: ${{ secrets.WINDOWS_LABS_PACKAGE_CERTIFICATE_PASSWORD }}
+          SETUP_PASSWORD: ${{ secrets.WINDOWS_LABS_SETUP_CERTIFICATE_PASSWORD }}
+          PUBLISHER: ${{ secrets.WINDOWS_LABS_PACKAGE_PUBLISHER }}
+          KIOSK_MANIFEST_SHA256: ${{ vars.RUSTY_KIOSK_LABS_MANIFEST_SHA256 }}
+          KIOSK_SIGNER_SHA256: ${{ vars.RUSTY_KIOSK_LABS_SIGNER_SHA256 }}
+          KIOSK_MAIN_PACKAGE: ${{ vars.RUSTY_KIOSK_LABS_MAIN_PACKAGE }}
+          KIOSK_HELPER_PACKAGE: ${{ vars.RUSTY_KIOSK_LABS_HELPER_PACKAGE }}
+          KIOSK_TAG: ${{ vars.RUSTY_KIOSK_LABS_TAG }}
+          KIOSK_SOURCE_TREE: ${{ vars.RUSTY_KIOSK_LABS_SOURCE_TREE }}
+          KIOSK_VERSION_CODE: ${{ vars.RUSTY_KIOSK_LABS_VERSION_CODE }}
+          KIOSK_RELEASE_URL: ${{ vars.RUSTY_KIOSK_LABS_RELEASE_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PACKAGE_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:SETUP_PASSWORD) -or
+              [string]::IsNullOrWhiteSpace($env:PUBLISHER)) {
+            throw 'Labs signing credentials are absent.'
+          }
+          ./tools/app/Invoke-ReleaseBuild.ps1 `
+            -Version '${{ steps.version.outputs.base }}' -AlphaNumber '${{ steps.version.outputs.alpha }}' `
+            -ProductChannel labs -Maturity alpha -DistributionTrack github-prerelease -ReleaseTag '${{ steps.version.outputs.tag }}' `
+            -PackageCertificatePath (Join-Path $env:RUNNER_TEMP 'labs-package.pfx') -PackageCertificatePassword $env:PACKAGE_PASSWORD `
+            -SetupCertificatePath (Join-Path $env:RUNNER_TEMP 'labs-setup.pfx') -SetupCertificatePassword $env:SETUP_PASSWORD `
+            -Publisher $env:PUBLISHER `
+            -ExpectedKioskVersion '${{ steps.kiosk.outputs.version }}' -ExpectedKioskTag $env:KIOSK_TAG `
+            -ExpectedKioskReleaseUrl $env:KIOSK_RELEASE_URL `
+            -ExpectedKioskSourceTree $env:KIOSK_SOURCE_TREE -ExpectedKioskVersionCode $env:KIOSK_VERSION_CODE `
+            -ExpectedKioskSourceRevision '${{ steps.kiosk.outputs.revision }}' `
+            -ExpectedKioskManifestSha256 $env:KIOSK_MANIFEST_SHA256 -ExpectedKioskSignerSha256 $env:KIOSK_SIGNER_SHA256 `
+            -ExpectedKioskMainPackageName $env:KIOSK_MAIN_PACKAGE -ExpectedKioskHelperPackageName $env:KIOSK_HELPER_PACKAGE `
+            -ExpectedKioskOwnerMetadataPath artifacts/kiosk-bundle/rusty-kiosk-labs-owner-release.json
+
+      - name: Verify Labs owner-release catalog asset
+        shell: pwsh
+        run: |
+          $sourceTree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceTree -notmatch '^[0-9a-f]{40}$') {
+            throw 'Could not resolve the exact QFM Labs source tree.'
+          }
+          $releaseVersion = '${{ steps.version.outputs.tag }}'.Substring(1)
+          ./tools/app/Test-LabsOwnerReleaseMetadata.ps1 `
+            -MetadataPath artifacts/release/questionable-file-manager-labs-owner-release.json `
+            -SetupPath artifacts/release/QuestIonAbleFileManager-Labs-Setup.exe `
+            -ExpectedTag '${{ steps.version.outputs.tag }}' `
+            -ExpectedVersion $releaseVersion `
+            -ExpectedWindowsPackageVersion '${{ steps.version.outputs.base }}.${{ steps.version.outputs.alpha }}' `
+            -ExpectedSourceRevision $env:GITHUB_SHA -ExpectedSourceTree $sourceTree `
+            -ExpectedPackageIdentity MesmerPrism.QuestIonAbleFileManager.Labs | Out-Null
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: QuestIonAbleFileManager-windows-labs
+          path: artifacts/release
+
+      - name: Publish immutable GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.version.outputs.tag }}'
+          $absence = gh api --include "repos/${{ github.repository }}/releases/tags/$tag" 2>&1
+          if ($LASTEXITCODE -eq 0 -or
+              ($absence -join "`n") -notmatch '(?im)^HTTP/\S+\s+404\b') {
+            throw "Release $tag absence was not proven by a GitHub API 404."
+          }
+          $assets = Get-ChildItem artifacts/release -File | ForEach-Object FullName
+          gh release create $tag $assets --title "QuestIonAble File Manager Labs $tag" --generate-notes --prerelease --latest=false --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Labs release creation failed." }
+
+          $release = gh api "repos/${{ github.repository }}/releases/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tag_name -cne $tag -or
+              $release.draft -ne $false -or $release.prerelease -ne $true) {
+            throw 'Published Labs release flags/tag failed API readback.'
+          }
+          $ref = gh api "repos/${{ github.repository }}/git/ref/tags/$tag" | ConvertFrom-Json
+          while ($ref.object.type -ceq 'tag') {
+            $tagObject = gh api "repos/${{ github.repository }}/git/tags/$($ref.object.sha)" | ConvertFrom-Json
+            $ref = [pscustomobject]@{ object = $tagObject.object }
+          }
+          if ($ref.object.type -cne 'commit' -or $ref.object.sha -cne $env:GITHUB_SHA) {
+            throw 'Published Labs tag ref does not peel to GITHUB_SHA.'
+          }
+          $expected = @(Get-ChildItem artifacts/release -File | Sort-Object Name)
+          $published = @($release.assets | Sort-Object name)
+          if ($published.Count -ne $expected.Count) {
+            throw 'Published Labs asset count differs from the validated local set.'
+          }
+          for ($index = 0; $index -lt $expected.Count; $index++) {
+            $digest = "sha256:$((Get-FileHash -LiteralPath $expected[$index].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            if ($published[$index].name -cne $expected[$index].Name -or
+                [long]$published[$index].size -ne $expected[$index].Length -or
+                [string]$published[$index].digest -cne $digest) {
+              throw "Published Labs asset readback differs: $($expected[$index].Name)"
+            }
+          }
+          $latest = gh api "repos/${{ github.repository }}/releases/latest" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $latest.tag_name -ceq $tag) {
+            throw 'Labs publication changed or could not distinguish the stable latest release.'
+          }
+
+      - name: Remove temporary signing files
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'labs-package.pfx') -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'labs-setup.pfx') -Force -ErrorAction SilentlyContinue

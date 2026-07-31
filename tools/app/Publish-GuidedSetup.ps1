@@ -9,6 +9,16 @@ param(
     [string]$CertificatePath,
     [string]$CertificatePassword,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$Maturity = 'released',
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$DistributionTrack = 'github-release',
+    [string]$ReleaseTag = 'stable',
+    [string]$PackageIdentity = 'MesmerPrism.MetaQuestFileManager',
+    [string]$DisplayName = 'QuestIonAble File Manager',
+    [string]$AssetStem = 'QuestIonAbleFileManager',
     [switch]$Unsigned
 )
 
@@ -39,6 +49,13 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:Version=$Version `
+    -p:QfmProductChannel=$ProductChannel `
+    -p:QfmMaturity=$Maturity `
+    -p:QfmDistributionTrack=$DistributionTrack `
+    -p:QfmReleaseTag=$ReleaseTag `
+    -p:QfmPackageIdentity=$PackageIdentity `
+    -p:QfmDistributionDisplayName="$DisplayName" `
+    -p:QfmSetupAssetStem=$AssetStem `
     --output $publishDirectory
 if ($LASTEXITCODE -ne 0) { throw "Setup publish failed with exit code $LASTEXITCODE" }
 
@@ -74,6 +91,7 @@ if (-not $Unsigned) {
         'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
         -RequireOfficialRelease `
         -ExpectedVersion $Version `
+        -ExpectedTag $ReleaseTag `
         -AssemblyPath @($coreAssemblies.FullName) `
         -SetupExecutablePath $outputExe `
         -ExpectedSetupSignerCertificateSha256 $setupSignerSha256

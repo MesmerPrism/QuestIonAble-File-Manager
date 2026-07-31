@@ -93,7 +93,16 @@ as enabled state.
 ## Distribution
 
 The Windows repository is MIT-licensed. Rusty Kiosk is a separate
-AGPL-3.0-or-later work. Official Windows packages aggregate its release-signed
-APK pair with the Kiosk license, source URL/revision, and SHA-256 manifest. The
-release build rejects debug Kiosk bundles and any version, source revision,
-byte count, SHA-256, source-pointer, or APK-signer mismatch.
+AGPL-3.0-or-later work. Official Windows packages aggregate the owner-issued
+bundle-v2 APK set with the Kiosk license, source URL/revision, and SHA-256
+manifest. QFM validates exact `product_channel`, `maturity`, and bounded
+`distribution_track` axes (`github-release` for Stable and
+`github-prerelease` for Labs). Labs requires pinned, mutually distinct,
+separate-coinstallable core and setup-helper identities plus exact Kiosk owner
+metadata. The separate Meta Store launcher package
+`io.github.mesmerprism.rustykiosk.launcher.labs` is not a GitHub bundle asset
+and QFM does not hash or signer-bind it. Stable validation remains on the
+Stable axes. The release build rejects debug bundles and any
+axis, identity, version, source, byte-count, hash, source-pointer, or signer
+mismatch. Kiosk retains package, signer, updater, permission, installation,
+and receipt authority.

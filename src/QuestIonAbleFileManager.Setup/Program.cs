@@ -3,6 +3,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
+using System.Reflection;
 using System.Text.Json;
 using System.Xml.Linq;
 using QuestIonAbleFileManager.Core;
@@ -10,6 +11,73 @@ using Windows.Foundation;
 using Windows.Management.Deployment;
 
 namespace QuestIonAbleFileManager.Setup;
+
+internal static class DistributionIdentity
+{
+    private static readonly IReadOnlyDictionary<string, string> Metadata =
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .ToDictionary(attribute => attribute.Key, attribute => attribute.Value ?? string.Empty);
+
+    internal static string ProductChannel => Required("QuestIonAbleFileManager.ProductChannel");
+    internal static string Maturity => Required("QuestIonAbleFileManager.Maturity");
+    internal static string DistributionTrack => Required("QuestIonAbleFileManager.DistributionTrack");
+    internal static string PackageIdentity => Required("QuestIonAbleFileManager.PackageIdentity");
+    internal static string DisplayName => Required("QuestIonAbleFileManager.DistributionDisplayName");
+    internal static string AssetStem => Required("QuestIonAbleFileManager.SetupAssetStem");
+    internal static string ReleaseTag => Required("QuestIonAbleFileManager.ReleaseTag");
+    internal static bool IsLabs
+    {
+        get
+        {
+            ValidateAxes();
+            return ProductChannel == "labs";
+        }
+    }
+    internal static bool FleetReplayProtectionEnabled => !IsLabs;
+
+    private static void ValidateAxes()
+    {
+        if (ProductChannel is not ("stable" or "labs") ||
+            Maturity is not ("alpha" or "beta" or "rc" or "released") ||
+            DistributionTrack is not ("github-release" or "github-prerelease") ||
+            (ProductChannel == "stable" && DistributionTrack != "github-release") ||
+            (ProductChannel == "labs" && DistributionTrack != "github-prerelease"))
+        {
+            throw new InvalidOperationException(
+                "The embedded product_channel, maturity, and distribution_track axes are invalid.");
+        }
+    }
+
+    internal static void RejectLabsFleetReplayOperation(
+        bool repair,
+        bool destructiveReset)
+    {
+        if (IsLabs && (repair || destructiveReset))
+        {
+            throw new ArgumentException(
+                "Labs Setup cannot read, repair, reset, or provision the stable Fleet replay authority.");
+        }
+    }
+
+    internal static void RejectLabsFleetReplayArguments(string[] args)
+    {
+        if (IsLabs &&
+            args.Any(argument =>
+                argument.StartsWith(
+                    "--fleet-replay",
+                    StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Labs Setup cannot invoke stable Fleet replay authority routes.");
+        }
+    }
+
+    private static string Required(string key) =>
+        Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new InvalidOperationException($"Required closed distribution metadata is missing: {key}.");
+}
 
 internal sealed record InstallerOptions(
     string CertificateSource,
@@ -21,11 +89,16 @@ internal sealed record InstallerOptions(
     bool DestructiveResetFleetReplayProtection,
     bool Json)
 {
-    private const string DefaultCertificateSource =
-        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.cer";
+    private static string DefaultCertificateSource => DistributionIdentity.IsLabs
+        ? ExactLabsAssetUri($"{DistributionIdentity.AssetStem}.cer")
+        : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.cer";
 
-    private const string DefaultAppInstallerSource =
-        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller";
+    private static string DefaultAppInstallerSource => DistributionIdentity.IsLabs
+        ? ExactLabsAssetUri($"{DistributionIdentity.AssetStem}.appinstaller")
+        : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller";
+
+    private static string ExactLabsAssetUri(string asset) =>
+        $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/{asset}";
 
     public static InstallerOptions Parse(string[] args)
     {
@@ -79,6 +152,20 @@ internal sealed record InstallerOptions(
             throw new ArgumentException(
                 "Fleet replay repair and destructive reset are mutually exclusive.");
         }
+        DistributionIdentity.RejectLabsFleetReplayOperation(
+            repairFleetReplayProtection,
+            destructiveResetFleetReplayProtection);
+        if (DistributionIdentity.IsLabs)
+        {
+            ValidateLabsSource(
+                certificateSource,
+                DefaultCertificateSource,
+                planOnly);
+            ValidateLabsSource(
+                appInstallerSource,
+                DefaultAppInstallerSource,
+                planOnly);
+        }
 
         return new InstallerOptions(
             certificateSource,
@@ -89,6 +176,28 @@ internal sealed record InstallerOptions(
             repairFleetReplayProtection,
             destructiveResetFleetReplayProtection,
             json);
+    }
+
+    private static void ValidateLabsSource(
+        string source,
+        string exactSource,
+        bool planOnly)
+    {
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps)
+        {
+            if (!string.Equals(source, exactSource, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Labs Setup accepts only its embedded exact-tag HTTPS asset URL.");
+            }
+            return;
+        }
+        if (!planOnly)
+        {
+            throw new ArgumentException(
+                "Local Labs assets are accepted only by the non-mutating plan route.");
+        }
     }
 
     public static string HelpText => """
@@ -183,21 +292,25 @@ internal sealed class SetupStagingDirectory : IDisposable
             return new SetupStagingDirectory(unprotectedPath, parent);
         }
 
-        var programFiles = System.IO.Path.GetFullPath(
+        var root = System.IO.Path.GetFullPath(
             Environment.GetFolderPath(
-                Environment.SpecialFolder.ProgramFiles));
+                DistributionIdentity.IsLabs
+                    ? Environment.SpecialFolder.LocalApplicationData
+                    : Environment.SpecialFolder.ProgramFiles));
         var vendorDirectory = System.IO.Path.Combine(
-            programFiles,
+            root,
             "MesmerPrism");
         var productDirectory = System.IO.Path.Combine(
             vendorDirectory,
-            "QuestIonAbleFileManager");
+            DistributionIdentity.IsLabs
+                ? "QuestIonAbleFileManagerLabs"
+                : "QuestIonAbleFileManager");
         var parentDirectory = System.IO.Path.Combine(
             productDirectory,
             "SetupStaging");
         Directory.CreateDirectory(parentDirectory);
         ValidatePathChain(
-            programFiles,
+            root,
             vendorDirectory,
             productDirectory,
             parentDirectory);
@@ -319,7 +432,7 @@ internal sealed class SetupStagingDirectory : IDisposable
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    "The protected Setup staging path escaped Program Files.");
+                    "The protected Setup staging path escaped its distribution root.");
             }
             RejectReparse(fullPath);
         }
@@ -338,9 +451,11 @@ internal sealed class SetupStagingDirectory : IDisposable
 internal sealed class GuidedInstaller
 {
     // Stable signed identity retained from releases published before the rename.
-    internal const string ExpectedPackageName = "MesmerPrism.MetaQuestFileManager";
+    internal static string ExpectedPackageName => DistributionIdentity.PackageIdentity;
     internal const string ExpectedPublisher = "CN=MesmerPrism";
-    private const string DownloadDirectoryName = "QuestIonAbleFileManagerSetup";
+    private static string DownloadDirectoryName => DistributionIdentity.IsLabs
+        ? "QuestIonAbleFileManagerLabsSetup"
+        : "QuestIonAbleFileManagerSetup";
 
     public async Task<InstallerResult> RunAsync(
         InstallerOptions options,
@@ -351,8 +466,8 @@ internal sealed class GuidedInstaller
             DownloadDirectoryName,
             protectedMachineStaging: IsAdministrator());
         var stagingDirectory = staging.Path;
-        var certificatePath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.cer");
-        var appInstallerPath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.appinstaller");
+        var certificatePath = Path.Combine(stagingDirectory, $"{DistributionIdentity.AssetStem}.cer");
+        var appInstallerPath = Path.Combine(stagingDirectory, $"{DistributionIdentity.AssetStem}.appinstaller");
 
         progress?.Report(new InstallerProgress("Preparing setup", "Creating the local staging area.", 5));
         using var httpClient = new HttpClient();
@@ -402,11 +517,14 @@ internal sealed class GuidedInstaller
             .FirstOrDefault()
             ?? throw new InvalidOperationException("Windows completed setup but the installed package registration could not be found.");
 
-        var fleetReplayProtection =
-            FleetInstallerReplayProtectionSetup
+        var fleetReplayProtection = DistributionIdentity.FleetReplayProtectionEnabled
+            ? FleetInstallerReplayProtectionSetup
                 .ProvisionOrRepairEmbeddedRelease(
                     options.RepairFleetReplayProtection,
-                    options.DestructiveResetFleetReplayProtection);
+                    options.DestructiveResetFleetReplayProtection)
+            : new FleetReplayProtectionSetupResult(
+                "labs_disabled",
+                StateRootSha256: null);
 
         var launched = false;
         if (!options.NoLaunch)
@@ -447,6 +565,21 @@ internal sealed class GuidedInstaller
         {
             throw new InvalidOperationException(
                 $"The feed identity is not the expected public package ({ExpectedPackageName}, {ExpectedPublisher}).");
+        }
+        if (DistributionIdentity.IsLabs)
+        {
+            var exactPrefix =
+                $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/";
+            var feedUri = root.Attribute("Uri")?.Value.Trim() ?? string.Empty;
+            var packageUri = mainPackage.Attribute("Uri")?.Value.Trim() ?? string.Empty;
+            if (!feedUri.StartsWith(exactPrefix, StringComparison.Ordinal) ||
+                !packageUri.StartsWith(exactPrefix, StringComparison.Ordinal) ||
+                feedUri.Contains("/latest/", StringComparison.Ordinal) ||
+                packageUri.Contains("/latest/", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The Labs feed is not bound to its embedded exact release tag.");
+            }
         }
 
         return identity;
@@ -626,6 +759,7 @@ internal static class Program
     {
         try
         {
+            DistributionIdentity.RejectLabsFleetReplayArguments(args);
             if (args is ["--fleet-release-configuration-proof"])
             {
                 return FleetInstallerReleaseProof.Write();

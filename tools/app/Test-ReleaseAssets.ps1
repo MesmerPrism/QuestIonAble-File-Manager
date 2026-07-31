@@ -4,15 +4,29 @@ param(
     [string]$ExpectedPackageName = 'MesmerPrism.MetaQuestFileManager',
     [string]$ExpectedPublisher = 'CN=MesmerPrism',
     [string]$KioskBundleManifestPath,
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$Maturity = 'released',
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$DistributionTrack = 'github-release',
+    [string]$ReleaseTag,
     [switch]$AllowSelfIssuedTrustFailure
 )
 
 $ErrorActionPreference = 'Stop'
 $ReleaseDirectory = [IO.Path]::GetFullPath($ReleaseDirectory)
-$setupPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-Setup.exe'
-$packagePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-win-x64.msix'
-$appInstallerPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.appinstaller'
-$certificatePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.cer'
+$assetStem = if ($ProductChannel -eq 'labs') { 'QuestIonAbleFileManager-Labs' } else { 'QuestIonAbleFileManager' }
+if (($ProductChannel -eq 'labs' -and
+        ($Maturity -cne 'alpha' -or $DistributionTrack -cne 'github-prerelease')) -or
+    ($ProductChannel -eq 'stable' -and
+        ($Maturity -cne 'released' -or $DistributionTrack -cne 'github-release'))) {
+    throw 'The release distribution axes are inconsistent.'
+}
+$setupPath = Join-Path $ReleaseDirectory "$assetStem-Setup.exe"
+$packagePath = Join-Path $ReleaseDirectory "$assetStem-win-x64.msix"
+$appInstallerPath = Join-Path $ReleaseDirectory "$assetStem.appinstaller"
+$certificatePath = Join-Path $ReleaseDirectory "$assetStem.cer"
 $providerPath = Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.exe'
 $providerReceiptPath =
     Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json'
@@ -174,7 +188,7 @@ if ($connectivityProviderReceipt.schema -cne
     [int]$connectivityProviderReceipt.stderr_bytes -ne 0) {
     throw 'Fleet connectivity provider artifact receipt does not match the validated executable.'
 }
-foreach ($entry in $legacyAliases.GetEnumerator()) {
+foreach ($entry in $(if ($ProductChannel -eq 'labs') { @() } else { $legacyAliases.GetEnumerator() })) {
     $legacyPath = Join-Path $ReleaseDirectory $entry.Key
     $canonicalPath = Join-Path $ReleaseDirectory $entry.Value
     if (-not (Test-Path -LiteralPath $legacyPath -PathType Leaf)) {
@@ -183,6 +197,32 @@ foreach ($entry in $legacyAliases.GetEnumerator()) {
     if ((Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash) {
         throw "Compatibility alias differs from its canonical asset: $($entry.Key)"
+    }
+}
+
+[xml]$appInstallerDocument = Get-Content -Raw -LiteralPath $appInstallerPath
+$appInstallerNamespace = [Xml.XmlNamespaceManager]::new($appInstallerDocument.NameTable)
+$appInstallerNamespace.AddNamespace('ai', 'http://schemas.microsoft.com/appx/appinstaller/2018')
+$appInstallerRoot = $appInstallerDocument.DocumentElement
+$mainPackage = $appInstallerDocument.SelectSingleNode('/ai:AppInstaller/ai:MainPackage', $appInstallerNamespace)
+if ($null -eq $appInstallerRoot -or $null -eq $mainPackage -or
+    $mainPackage.GetAttribute('Name') -cne $ExpectedPackageName) {
+    throw 'The App Installer feed package identity does not match this distribution channel.'
+}
+if ($ProductChannel -eq 'labs') {
+    if ($ReleaseTag -notmatch '^v\d+\.\d+\.\d+-alpha\.[1-9]\d*$') {
+        throw 'Labs alpha-maturity asset validation requires a canonical exact tag.'
+    }
+    $exactPrefix =
+        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/"
+    foreach ($uri in @(
+        $appInstallerRoot.GetAttribute('Uri'),
+        $mainPackage.GetAttribute('Uri')
+    )) {
+        if (-not ([string]$uri).StartsWith($exactPrefix, [StringComparison]::Ordinal) -or
+            [string]$uri -match '/latest(?:/|$)') {
+            throw 'Labs App Installer URLs must bind the exact immutable prerelease tag.'
+        }
     }
 }
 
@@ -238,8 +278,8 @@ finally {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 foreach ($portableArchiveName in @(
-    'QuestIonAbleFileManager-win-x64.zip',
-    'questionable-file-manager-cli-win-x64.zip'
+    $(if ($ProductChannel -eq 'labs') { 'QuestIonAbleFileManager-Labs-win-x64.zip' } else { 'QuestIonAbleFileManager-win-x64.zip' }),
+    $(if ($ProductChannel -eq 'labs') { 'questionable-file-manager-labs-cli-win-x64.zip' } else { 'questionable-file-manager-cli-win-x64.zip' })
 )) {
     $portableArchivePath = Join-Path $ReleaseDirectory $portableArchiveName
     $portableArchive = [IO.Compression.ZipFile]::OpenRead($portableArchivePath)
@@ -296,8 +336,17 @@ if ($KioskBundleManifestPath) {
         throw "The verified Rusty Kiosk manifest was not found: $KioskBundleManifestPath"
     }
     $kioskManifest = Get-Content -Raw -LiteralPath $KioskBundleManifestPath | ConvertFrom-Json
+    if ($kioskManifest.schema -cne 'meta.quest.file_manager.rusty_kiosk_bundle.v2' -or
+        $kioskManifest.product_channel -cne $ProductChannel -or
+        $kioskManifest.maturity -cne $Maturity -or
+        $kioskManifest.distribution_track -cne $DistributionTrack) {
+        throw 'The release and Rusty Kiosk bundle distribution axes differ.'
+    }
     $kioskReceipt = [ordered]@{
         version = $kioskManifest.version
+        product_channel = $kioskManifest.product_channel
+        maturity = $kioskManifest.maturity
+        distribution_track = $kioskManifest.distribution_track
         source_url = $kioskManifest.source_url
         source_revision = $kioskManifest.source_revision
         signer_sha256 = $kioskManifest.signer_sha256
@@ -307,7 +356,10 @@ if ($KioskBundleManifestPath) {
 }
 
 $receipt = [ordered]@{
-    schema = 'questionable-file-manager.release-validation.v1'
+    schema = 'questionable-file-manager.release-validation.v2'
+    product_channel = $ProductChannel
+    maturity = $Maturity
+    distribution_track = $DistributionTrack
     validated_at_utc = [DateTime]::UtcNow.ToString('o')
     package_name = $ExpectedPackageName
     package_version = $mainPackage.Version
@@ -403,10 +455,10 @@ $receipt = [ordered]@{
         stderr_bytes = 0
     }
     required_assets = @(
-        'QuestIonAbleFileManager-Setup.exe',
-        'QuestIonAbleFileManager-win-x64.msix',
-        'QuestIonAbleFileManager.appinstaller',
-        'QuestIonAbleFileManager.cer',
+        "$assetStem-Setup.exe",
+        "$assetStem-win-x64.msix",
+        "$assetStem.appinstaller",
+        "$assetStem.cer",
         'questionable-file-manager-kiosk-v2-provider.exe',
         'questionable-file-manager-kiosk-v2-provider.receipt.json',
         'questionable-file-manager-awake-provider.exe',
@@ -414,7 +466,11 @@ $receipt = [ordered]@{
         'questionable-file-manager-connectivity-provider.exe',
         'questionable-file-manager-connectivity-provider.receipt.json'
     )
-    compatibility_aliases = $legacyAliases
+    compatibility_aliases = if ($ProductChannel -eq 'labs') {
+        [ordered]@{}
+    } else {
+        $legacyAliases
+    }
 }
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding utf8
 $receipt

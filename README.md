@@ -382,6 +382,20 @@ A base APK and its split APKs are submitted together as one session.
 4. Add diagnostics bundles and no-device UI verification.
 5. Define portable contracts for future Android and Apple host clients.
 
+## Stable and Labs distribution
+
+The persistent `product_channel` is `stable` by default; `labs` is an explicit
+opt-in. Maturity is independent (`alpha|beta|rc|released`), so an existing
+`vX.Y.Z-alpha.N` tag means alpha maturity, not an Alpha product channel.
+`distribution_track` is independently bounded to
+`github-release|github-prerelease`; Stable uses `github-release` and Labs uses
+`github-prerelease`. Labs uses Windows identity
+`MesmerPrism.QuestIonAbleFileManager.Labs`, display name
+`QuestIonAble File Manager Labs`, `QuestIonAbleFileManager-Labs-*` assets, and
+immutable exact-tag URLs. Labs prereleases are never latest. Stable identity,
+assets, workflow, default behavior, and update feed remain unchanged. See
+[the release workflow](docs/release-workflow.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Android Platform Tools and other optional external

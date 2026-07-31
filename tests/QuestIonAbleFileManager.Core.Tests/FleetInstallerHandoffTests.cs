@@ -1010,6 +1010,7 @@ public sealed class FleetInstallerHandoffTests
     [InlineData("https://mesmerprism.github.io/rusty-fleet/metadata/stable/release.json")]
     [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/stable/RustyFleet-Setup.exe")]
     [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/preview/release.json")]
+    [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/dev/release.json")]
     [InlineData("https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/release.json")]
     [InlineData("https://mesmerprism.com/Rusty-Fleet/metadata/stable/release.json?latest=1")]
     public void DescriptorSourceRejectsEveryNoncanonicalMetadataPath(string value)
@@ -1024,8 +1025,7 @@ public sealed class FleetInstallerHandoffTests
 
     [Theory]
     [InlineData("stable")]
-    [InlineData("preview")]
-    [InlineData("dev")]
+    [InlineData("labs")]
     public void DescriptorSourceAcceptsOnlyCanonicalAllowlistedChannel(string channel)
     {
         using var source = new HttpsFleetReleaseSource(
@@ -1038,6 +1038,8 @@ public sealed class FleetInstallerHandoffTests
 
     [Theory]
     [InlineData("prod")]
+    [InlineData("preview")]
+    [InlineData("dev")]
     [InlineData("Stable")]
     [InlineData("nightly")]
     public void DescriptorSourceRejectsUnallowlistedChannel(string channel)

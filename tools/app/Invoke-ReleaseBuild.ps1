@@ -19,7 +19,7 @@ param(
     [string]$KioskBundleDirectory = (Join-Path $PSScriptRoot '..\..\artifacts\kiosk-bundle'),
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-alpha\.[1-9]\d*)?$')]
     [string]$ExpectedKioskVersion,
 
     [Parameter(Mandatory = $true)]
@@ -28,14 +28,67 @@ param(
 
     [string]$ApkSignerPath,
     [string]$FleetInstallerLifecycleInputPath,
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$Maturity = 'released',
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$DistributionTrack = 'github-release',
+    [string]$ReleaseTag,
+    [int]$AlphaNumber,
+    [string]$ExpectedKioskTag,
+    [string]$ExpectedKioskReleaseUrl,
+    [string]$ExpectedKioskSourceTree,
+    [long]$ExpectedKioskVersionCode,
+    [string]$ExpectedKioskMainPackageName,
+    [string]$ExpectedKioskHelperPackageName,
+    [string]$ExpectedKioskOwnerMetadataPath,
+    [string]$ExpectedKioskSignerSha256,
+    [string]$ExpectedKioskManifestSha256,
     [switch]$SkipBuildAndTest
 )
 
 $ErrorActionPreference = 'Stop'
+$isLabs = $ProductChannel -eq 'labs'
+if ($isLabs) {
+    if ($AlphaNumber -lt 1 -or
+        $Maturity -cne 'alpha' -or
+        $DistributionTrack -cne 'github-prerelease' -or
+        $ReleaseTag -cne "v$Version-alpha.$AlphaNumber") {
+        throw 'Labs alpha-maturity releases require the exact canonical vX.Y.Z-alpha.N tag and github-prerelease distribution track.'
+    }
+}
+elseif ($Maturity -cne 'released' -or $DistributionTrack -cne 'github-release' -or
+    ($ReleaseTag -and $ReleaseTag -cne "v$Version")) {
+    throw 'Stable release tag does not match the numeric version.'
+}
+$packageVersion = if ($isLabs) { "$Version.$AlphaNumber" } else { "$Version.0" }
+$assetStem = if ($isLabs) { 'QuestIonAbleFileManager-Labs' } else { 'QuestIonAbleFileManager' }
+$packageIdentity = if ($isLabs) {
+    'MesmerPrism.QuestIonAbleFileManager.Labs'
+} else {
+    'MesmerPrism.MetaQuestFileManager'
+}
+$displayName = if ($isLabs) {
+    'QuestIonAble File Manager Labs'
+} else {
+    'QuestIonAble File Manager'
+}
+$packageUri = if ($isLabs) {
+    "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/$assetStem-win-x64.msix"
+} else {
+    'https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager-win-x64.msix'
+}
+$appInstallerUri = if ($isLabs) {
+    "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/$assetStem.appinstaller"
+} else {
+    'https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller'
+}
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 & (Join-Path $repoRoot 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
     -RequireOfficialRelease `
-    -ExpectedVersion $Version
+    -ExpectedVersion $Version `
+    -ExpectedTag $ReleaseTag
 if ($LASTEXITCODE -ne 0) {
     throw 'Fleet installer checked-in release configuration validation failed.'
 }
@@ -66,6 +119,18 @@ $kioskVerification = & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps
     -BundleDirectory $KioskBundleDirectory `
     -ExpectedVersion $ExpectedKioskVersion `
     -ExpectedSourceRevision $ExpectedKioskSourceRevision `
+    -ExpectedProductChannel $ProductChannel `
+    -ExpectedMaturity $Maturity `
+    -ExpectedDistributionTrack $DistributionTrack `
+    -ExpectedTag $ExpectedKioskTag `
+    -ExpectedReleaseUrl $ExpectedKioskReleaseUrl `
+    -ExpectedSourceTree $ExpectedKioskSourceTree `
+    -ExpectedVersionCode $ExpectedKioskVersionCode `
+    -ExpectedMainPackageName $ExpectedKioskMainPackageName `
+    -ExpectedHelperPackageName $ExpectedKioskHelperPackageName `
+    -ExpectedOwnerMetadataPath $ExpectedKioskOwnerMetadataPath `
+    -ExpectedSignerSha256 $ExpectedKioskSignerSha256 `
+    -ExpectedManifestSha256 $ExpectedKioskManifestSha256 `
     -ApkSignerPath $ApkSignerPath
 $defaultKioskBundle = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts\kiosk-bundle'))
 if (-not $KioskBundleDirectory.Equals($defaultKioskBundle, [StringComparison]::OrdinalIgnoreCase)) {
@@ -189,12 +254,23 @@ Copy-Item -LiteralPath (
 Copy-Item -LiteralPath (
     Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.receipt.json') `
     -Destination $combined -Force
-Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory 'QuestIonAbleFileManager-win-x64.zip')
-Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory 'questionable-file-manager-cli-win-x64.zip')
+$portableName = if ($isLabs) { "$assetStem-win-x64.zip" } else { 'QuestIonAbleFileManager-win-x64.zip' }
+$cliName = if ($isLabs) { 'questionable-file-manager-labs-cli-win-x64.zip' } else { 'questionable-file-manager-cli-win-x64.zip' }
+Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory $portableName)
+Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory $cliName)
 
 & (Join-Path $PSScriptRoot 'Build-App-Package.ps1') `
     -Version $Version `
+    -PackageVersion $packageVersion `
+    -ReleaseTag $ReleaseTag `
     -OutputDirectory $OutputDirectory `
+    -PackageName $packageIdentity `
+    -DisplayName $displayName `
+    -PackageFileName "$assetStem-win-x64.msix" `
+    -AppInstallerFileName "$assetStem.appinstaller" `
+    -CertificateFileName "$assetStem.cer" `
+    -PackageUri $packageUri `
+    -AppInstallerUri $appInstallerUri `
     -Publisher $Publisher `
     -CertificatePath $PackageCertificatePath `
     -CertificatePassword $PackageCertificatePassword `
@@ -204,6 +280,14 @@ if ($LASTEXITCODE -ne 0) { throw 'MSIX package build failed.' }
 & (Join-Path $PSScriptRoot 'Publish-GuidedSetup.ps1') `
     -Version $Version `
     -OutputDirectory $OutputDirectory `
+    -FileName "$assetStem-Setup.exe" `
+    -ProductChannel $ProductChannel `
+    -Maturity $Maturity `
+    -DistributionTrack $DistributionTrack `
+    -ReleaseTag $ReleaseTag `
+    -PackageIdentity $packageIdentity `
+    -DisplayName $displayName `
+    -AssetStem $assetStem `
     -CertificatePath $SetupCertificatePath `
     -CertificatePassword $SetupCertificatePassword `
     -TimestampUrl $SetupTimestampUrl
@@ -216,7 +300,7 @@ if (-not [string]::IsNullOrWhiteSpace(
         -InputPath $FleetInstallerLifecycleInputPath `
         -QfmSetupExecutablePath (
             Join-Path $OutputDirectory `
-                'QuestIonAbleFileManager-Setup.exe')
+                "$assetStem-Setup.exe")
     if ($LASTEXITCODE -ne 0) {
         throw 'Fleet installer handoff lifecycle validation failed.'
     }
@@ -224,14 +308,14 @@ if (-not [string]::IsNullOrWhiteSpace(
 
 # Releases keep byte-identical former-name aliases so 0.3.x App Installer
 # subscriptions and pinned automation download URLs migrate without breaking.
-$compatibilityAliases = [ordered]@{
+$compatibilityAliases = if ($isLabs) { [ordered]@{} } else { [ordered]@{
     'MetaQuestFileManager-Setup.exe' = 'QuestIonAbleFileManager-Setup.exe'
     'MetaQuestFileManager-win-x64.msix' = 'QuestIonAbleFileManager-win-x64.msix'
     'MetaQuestFileManager.appinstaller' = 'QuestIonAbleFileManager.appinstaller'
     'MetaQuestFileManager.cer' = 'QuestIonAbleFileManager.cer'
     'MetaQuestFileManager-win-x64.zip' = 'QuestIonAbleFileManager-win-x64.zip'
     'meta-quest-file-manager-cli-win-x64.zip' = 'questionable-file-manager-cli-win-x64.zip'
-}
+} }
 foreach ($entry in $compatibilityAliases.GetEnumerator()) {
     Copy-Item -LiteralPath (Join-Path $OutputDirectory $entry.Value) `
         -Destination (Join-Path $OutputDirectory $entry.Key) -Force
@@ -243,16 +327,51 @@ foreach ($entry in $compatibilityAliases.GetEnumerator()) {
     (Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe'),
     (Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe'),
     (Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe'),
-    (Join-Path $OutputDirectory 'QuestIonAbleFileManager-Setup.exe')
+    (Join-Path $OutputDirectory "$assetStem-Setup.exe")
 )
 if ($LASTEXITCODE -ne 0) { throw 'Brand asset validation failed.' }
 
 & (Join-Path $PSScriptRoot 'Test-ReleaseAssets.ps1') `
     -ReleaseDirectory $OutputDirectory `
     -ExpectedPublisher $Publisher `
+    -ExpectedPackageName $packageIdentity `
+    -ProductChannel $ProductChannel `
+    -Maturity $Maturity `
+    -DistributionTrack $DistributionTrack `
+    -ReleaseTag $ReleaseTag `
     -KioskBundleManifestPath (Join-Path $KioskBundleDirectory 'bundle-manifest.json') `
     -AllowSelfIssuedTrustFailure
 if ($LASTEXITCODE -ne 0) { throw 'Release asset validation failed.' }
+
+if ($isLabs) {
+    $sourceRevision = (& git -C $repoRoot rev-parse HEAD).Trim()
+    $sourceTree = (& git -C $repoRoot rev-parse 'HEAD^{tree}').Trim()
+    if ($LASTEXITCODE -ne 0 -or
+        $sourceRevision -notmatch '^[0-9a-f]{40}$' -or
+        $sourceTree -notmatch '^[0-9a-f]{40}$') {
+        throw 'Could not resolve the exact QFM Labs source revision and tree.'
+    }
+    $metadataPath = & (Join-Path $PSScriptRoot 'New-LabsOwnerReleaseMetadata.ps1') `
+        -ReleaseDirectory $OutputDirectory `
+        -ReleaseTag $ReleaseTag `
+        -ReleaseVersion "$Version-alpha.$AlphaNumber" `
+        -WindowsPackageVersion $packageVersion `
+        -SourceRevision $sourceRevision `
+        -SourceTree $sourceTree `
+        -PackageIdentity $packageIdentity
+    & (Join-Path $PSScriptRoot 'Test-LabsOwnerReleaseMetadata.ps1') `
+        -MetadataPath $metadataPath `
+        -SetupPath (Join-Path $OutputDirectory "$assetStem-Setup.exe") `
+        -ExpectedTag $ReleaseTag `
+        -ExpectedVersion "$Version-alpha.$AlphaNumber" `
+        -ExpectedWindowsPackageVersion $packageVersion `
+        -ExpectedSourceRevision $sourceRevision `
+        -ExpectedSourceTree $sourceTree `
+        -ExpectedPackageIdentity $packageIdentity | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Labs owner-release metadata validation failed.'
+    }
+}
 
 Get-ChildItem -LiteralPath $OutputDirectory -File |
     Where-Object Name -ne 'SHA256SUMS.txt' |

@@ -17,6 +17,8 @@ param(
     [string]$CertificatePath,
     [string]$CertificatePassword,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    [string]$PackageVersion,
+    [string]$ReleaseTag,
     [switch]$Unsigned
 )
 
@@ -27,7 +29,10 @@ $manifestPath = Join-Path $repoRoot 'src\QuestIonAbleFileManager.App.Package\Pac
 $appInstallerTemplatePath = Join-Path $repoRoot 'src\QuestIonAbleFileManager.App.Package\QuestIonAbleFileManager.appinstaller.template'
 $entryProject = Join-Path $repoRoot 'src\QuestIonAbleFileManager.App\QuestIonAbleFileManager.App.csproj'
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$packageVersion = "$Version.0"
+$packageVersion = if ($PackageVersion) { $PackageVersion } else { "$Version.0" }
+if ($packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+    throw "PackageVersion must be a four-part numeric version; got $packageVersion."
+}
 
 function Find-MSBuild {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -202,6 +207,7 @@ try {
                 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
                 -RequireOfficialRelease `
                 -ExpectedVersion $Version `
+                -ExpectedTag $ReleaseTag `
                 -PackagePath $packageOutputPath
             if ($LASTEXITCODE -ne 0) {
                 throw 'Unsigned MSIX Fleet release trust validation failed.'

@@ -1,5 +1,56 @@
 # Release Workflow
 
+## Stable and Labs product channels
+
+`product_channel` is persistent and exactly `stable` or `labs`; Stable is the
+default and Labs requires explicit opt-in. `maturity` is a separate
+`alpha|beta|rc|released` axis, and `distribution_track` is independently
+bounded to `github-release|github-prerelease`. Stable uses `github-release` and
+Labs uses `github-prerelease`. Existing `vX.Y.Z-alpha.N` tags continue to describe
+alpha maturity only. The dedicated `.github/workflows/release-labs.yml`
+accepts that tag grammar, maps it to Windows version `X.Y.Z.N`, and creates a
+prerelease with `--latest=false`.
+
+Labs uses identity `MesmerPrism.QuestIonAbleFileManager.Labs`, display name
+`QuestIonAble File Manager Labs`, and `QuestIonAbleFileManager-Labs-*` assets.
+Setup stages below
+`%LOCALAPPDATA%\MesmerPrism\QuestIonAbleFileManagerLabs\SetupStaging` and
+rejects Stable feed identity. Labs URLs use only exact-tag release paths;
+`latest/download` is rejected. Stable retains its existing identity, filenames,
+aliases, workflow, default behavior, and feed.
+
+The protected `labs` environment supplies the exact Rusty Kiosk Labs tag,
+bundle-v2 manifest SHA-256, APK signer SHA-256, separate-coinstallable
+core/helper Android package identities, exact Kiosk owner metadata, and Windows
+signing inputs. QFM validates
+the owner's exact `product_channel`, `maturity`, and `distribution_track`
+axes plus source, signer, version, and per-APK facts. Kiosk retains package,
+signer, updater, permissions, and receipt authority.
+
+Before publication, the workflow requires a positive GitHub API 404 for the
+tag. After creation it reads back the exact tag and peeled commit, draft and
+prerelease flags, every asset name/size/SHA-256 digest, and proves the
+repository's latest release has a different tag.
+
+Labs Setup rejects repair, destructive reset, protected accept, lock-test,
+and security-self-test replay routes before they can read or mutate the stable
+Fleet replay registry, Program Files helper, or per-user state. Normal Labs
+installation also skips stable Fleet replay provisioning. Stable Setup retains
+its existing replay behavior.
+
+Each Labs prerelease also publishes
+`questionable-file-manager-labs-owner-release.json`, a deterministic QFM-owned
+catalog asset using `questionable-file-manager.owner-release.v2`. It binds the
+exact tag and semantic/Windows versions, source commit and tree, all three
+distribution axes, the `MesmerPrism.QuestIonAbleFileManager.Labs` installation
+identity, and the primary Labs Setup filename, lowercase SHA-256, and byte count. It names the
+release-validation receipt as supporting evidence; neither that receipt nor
+any Actions artifact substitutes for the tag, source, or published-release
+authority. The stable release workflow and stable asset set are unchanged.
+
+Run `pwsh -NoProfile -File tools/app/Test-LabsDistributionContract.ps1` for
+the synthetic Labs contract suite.
+
 GitHub Pages is the stable human-facing install surface. GitHub Releases is the
 binary source of truth. Pages links target `releases/latest/download`, so a new
 release does not require new website URLs.

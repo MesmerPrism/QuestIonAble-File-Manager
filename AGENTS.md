@@ -455,6 +455,26 @@ The signed package identity `MesmerPrism.MetaQuestFileManager` remains stable
 for update continuity. Rebranded releases publish canonical asset names plus
 byte-identical former-name aliases for the documented migration window; do not
 remove those aliases without a separately reviewed update-compatibility release.
+`product_channel` is persistent `stable|labs`, defaults to Stable, and requires
+explicit opt-in for Labs. `maturity` is independently
+`alpha|beta|rc|released`; canonical `vX.Y.Z-alpha.N` tags denote maturity only
+and map to numeric `X.Y.Z.N` Windows versions. `distribution_track` is a third,
+independently bounded `github-release|github-prerelease` axis. Stable uses
+`github-release`; Labs uses `github-prerelease` and exact-tag URLs, the
+`MesmerPrism.QuestIonAbleFileManager.Labs` identity, and
+`QuestIonAbleFileManager-Labs-*` assets and staging names. It consumes only an
+exact published Rusty Kiosk bundle-v2 release whose product channel, maturity,
+distribution track, tag, revision, URL, signer, manifest hash, coinstallable
+core/helper package identities, Kiosk owner metadata, and closed asset set match protected
+release policy. Labs Setup must reject every Fleet replay repair/reset/accept/test route and
+skip normal replay provisioning so it cannot touch stable registry, Program
+Files helper, or state namespaces.
+Labs releases also publish the QFM-owned
+`questionable-file-manager-labs-owner-release.json` v2 catalog asset. Keep it
+deterministic and Labs-only, binding all three axes, exact tag/versions, source
+commit and tree, Labs package identity, and primary Setup name/hash/bytes. Supporting
+workflow receipts are evidence, not release authority.
+
 Private signing material is supplied only through the
 Windows certificate store, ignored `artifacts`, and GitHub Actions secrets.
 Never commit private certificate material or generated release assets.
