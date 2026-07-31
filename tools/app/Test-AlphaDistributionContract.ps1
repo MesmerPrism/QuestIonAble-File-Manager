@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$StableWorkflowBaseline =
+        '7e582af48c62e67573ce492601717427942c733c'
+)
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
@@ -206,10 +209,19 @@ Tag: $tag
         throw 'Alpha workflow contains a mutable latest/download URL.'
     }
 
-    $stableWorkflow = git -C $repoRoot show HEAD:.github/workflows/release.yml
+    git -C $repoRoot rev-parse --verify "$StableWorkflowBaseline^{commit}" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Stable workflow baseline is unavailable: $StableWorkflowBaseline"
+    }
+    $stableWorkflow = git -C $repoRoot show (
+        "$StableWorkflowBaseline`:.github/workflows/release.yml"
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw "Stable release workflow is unavailable at $StableWorkflowBaseline."
+    }
     $workingStableWorkflow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.github\workflows\release.yml')
     if (($stableWorkflow -join "`n").TrimEnd() -cne $workingStableWorkflow.TrimEnd()) {
-        throw 'The stable release workflow changed while adding alpha.'
+        throw "The stable release workflow changed from $StableWorkflowBaseline while adding alpha."
     }
 
     $alphaSetup = Join-Path $testRoot 'alpha-setup'
