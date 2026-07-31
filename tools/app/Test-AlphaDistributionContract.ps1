@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$StableWorkflowBaseline =
-        '7e582af48c62e67573ce492601717427942c733c'
+    [ValidatePattern('^[0-9a-f]{64}$')]
+    [string]$ExpectedStableWorkflowSha256 =
+        '5382f772fc5adc57886fa29f84ea7d75e0a722a69efdc9dd2fe6a7ac5d7567b8'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -209,19 +210,15 @@ Tag: $tag
         throw 'Alpha workflow contains a mutable latest/download URL.'
     }
 
-    git -C $repoRoot rev-parse --verify "$StableWorkflowBaseline^{commit}" *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Stable workflow baseline is unavailable: $StableWorkflowBaseline"
-    }
-    $stableWorkflow = git -C $repoRoot show (
-        "$StableWorkflowBaseline`:.github/workflows/release.yml"
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw "Stable release workflow is unavailable at $StableWorkflowBaseline."
-    }
-    $workingStableWorkflow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.github\workflows\release.yml')
-    if (($stableWorkflow -join "`n").TrimEnd() -cne $workingStableWorkflow.TrimEnd()) {
-        throw "The stable release workflow changed from $StableWorkflowBaseline while adding alpha."
+    $stableWorkflowPath = Join-Path $repoRoot '.github\workflows\release.yml'
+    $stableWorkflowSha256 = (
+        Get-FileHash -LiteralPath $stableWorkflowPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    if ($stableWorkflowSha256 -cne $ExpectedStableWorkflowSha256) {
+        throw (
+            'The stable release workflow differs from the reviewed ' +
+            "SHA-256 $ExpectedStableWorkflowSha256."
+        )
     }
 
     $alphaSetup = Join-Path $testRoot 'alpha-setup'

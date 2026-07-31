@@ -23,6 +23,10 @@ jobs:
           java-version: "17"
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
+      - name: Validate alpha distribution contract
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/app/Test-AlphaDistributionContract.ps1
+
       - name: Resolve exact alpha version
         id: version
         shell: pwsh
