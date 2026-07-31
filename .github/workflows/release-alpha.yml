@@ -64,13 +64,31 @@ jobs:
           KIOSK_SIGNER_SHA256: ${{ vars.RUSTY_KIOSK_ALPHA_SIGNER_SHA256 }}
           KIOSK_MAIN_PACKAGE: ${{ vars.RUSTY_KIOSK_ALPHA_MAIN_PACKAGE }}
           KIOSK_HELPER_PACKAGE: ${{ vars.RUSTY_KIOSK_ALPHA_HELPER_PACKAGE }}
+          KIOSK_SOURCE_TREE: ${{ vars.RUSTY_KIOSK_ALPHA_SOURCE_TREE }}
+          KIOSK_VERSION_CODE: ${{ vars.RUSTY_KIOSK_ALPHA_VERSION_CODE }}
+          KIOSK_RELEASE_URL: ${{ vars.RUSTY_KIOSK_ALPHA_RELEASE_URL }}
         run: |
-          if ($env:KIOSK_TAG -notmatch '^v\d+\.\d+\.\d+-alpha\.[1-9]\d*$' -or
+          $tagMatch = [regex]::Match(
+            $env:KIOSK_TAG,
+            '^v(?<major>0|[1-9]\d{0,3})\.(?<minor>0|[1-9]\d?)\.(?<patch>0|[1-9]\d?)-alpha\.(?<alpha>[1-9]|[1-8]\d|9[0-8])$')
+          if (-not $tagMatch.Success -or
+              [int64]$tagMatch.Groups['major'].Value -gt 2099 -or
               $env:KIOSK_MANIFEST_SHA256 -notmatch '^[0-9a-f]{64}$' -or
               $env:KIOSK_SIGNER_SHA256 -notmatch '^[0-9a-f]{64}$' -or
+              $env:KIOSK_SOURCE_TREE -notmatch '^[0-9a-f]{40}$' -or
+              $env:KIOSK_VERSION_CODE -notmatch '^[1-9]\d*$' -or
+              $env:KIOSK_RELEASE_URL -cne "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$($env:KIOSK_TAG)" -or
               [string]::IsNullOrWhiteSpace($env:KIOSK_MAIN_PACKAGE) -or
               [string]::IsNullOrWhiteSpace($env:KIOSK_HELPER_PACKAGE)) {
             throw 'The protected alpha environment is missing an exact Kiosk tag, manifest hash, signer, or package identity.'
+          }
+          $mappedVersionCode =
+            [int64]$tagMatch.Groups['major'].Value * 1000000L +
+            [int64]$tagMatch.Groups['minor'].Value * 10000L +
+            [int64]$tagMatch.Groups['patch'].Value * 100L +
+            [int64]$tagMatch.Groups['alpha'].Value
+          if ([int64]$env:KIOSK_VERSION_CODE -ne $mappedVersionCode) {
+            throw 'The reviewed Kiosk versionCode does not match its canonical alpha tag.'
           }
           $release = gh release view $env:KIOSK_TAG --repo MesmerPrism/Rusty-Kiosk --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or $release.tagName -cne $env:KIOSK_TAG -or
@@ -84,10 +102,22 @@ jobs:
           }
           $revision = (gh api "repos/MesmerPrism/Rusty-Kiosk/commits/$($env:KIOSK_TAG)" --jq .sha).Trim()
           if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the exact Kiosk alpha tag commit.' }
+          $sourceTree = (gh api "repos/MesmerPrism/Rusty-Kiosk/git/commits/$revision" --jq .tree.sha).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceTree -cne $env:KIOSK_SOURCE_TREE) {
+            throw 'The reviewed Kiosk source tree does not match the exact tag commit.'
+          }
           $directory = Join-Path $env:GITHUB_WORKSPACE 'artifacts\kiosk-bundle'
           New-Item -ItemType Directory -Path $directory -Force | Out-Null
           gh release download $env:KIOSK_TAG --repo MesmerPrism/Rusty-Kiosk --dir $directory
           if ($LASTEXITCODE -ne 0) { throw 'Exact Kiosk alpha bundle acquisition failed.' }
+          foreach ($asset in $release.assets) {
+            $path = Join-Path $directory $asset.name
+            $digest = "sha256:$((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant())"
+            if ((Get-Item -LiteralPath $path).Length -ne [long]$asset.size -or
+                [string]$asset.digest -cne $digest) {
+              throw "Downloaded Kiosk asset failed release API size/digest readback: $($asset.name)"
+            }
+          }
           "version=$($env:KIOSK_TAG.Substring(1))" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "revision=$revision" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
@@ -102,6 +132,9 @@ jobs:
           KIOSK_MAIN_PACKAGE: ${{ vars.RUSTY_KIOSK_ALPHA_MAIN_PACKAGE }}
           KIOSK_HELPER_PACKAGE: ${{ vars.RUSTY_KIOSK_ALPHA_HELPER_PACKAGE }}
           KIOSK_TAG: ${{ vars.RUSTY_KIOSK_ALPHA_TAG }}
+          KIOSK_SOURCE_TREE: ${{ vars.RUSTY_KIOSK_ALPHA_SOURCE_TREE }}
+          KIOSK_VERSION_CODE: ${{ vars.RUSTY_KIOSK_ALPHA_VERSION_CODE }}
+          KIOSK_RELEASE_URL: ${{ vars.RUSTY_KIOSK_ALPHA_RELEASE_URL }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PACKAGE_PASSWORD) -or
               [string]::IsNullOrWhiteSpace($env:SETUP_PASSWORD) -or
@@ -115,7 +148,8 @@ jobs:
             -SetupCertificatePath (Join-Path $env:RUNNER_TEMP 'alpha-setup.pfx') -SetupCertificatePassword $env:SETUP_PASSWORD `
             -Publisher $env:PUBLISHER `
             -ExpectedKioskVersion '${{ steps.kiosk.outputs.version }}' -ExpectedKioskTag $env:KIOSK_TAG `
-            -ExpectedKioskReleaseUrl "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$($env:KIOSK_TAG)" `
+            -ExpectedKioskReleaseUrl $env:KIOSK_RELEASE_URL `
+            -ExpectedKioskSourceTree $env:KIOSK_SOURCE_TREE -ExpectedKioskVersionCode $env:KIOSK_VERSION_CODE `
             -ExpectedKioskSourceRevision '${{ steps.kiosk.outputs.revision }}' `
             -ExpectedKioskManifestSha256 $env:KIOSK_MANIFEST_SHA256 -ExpectedKioskSignerSha256 $env:KIOSK_SIGNER_SHA256 `
             -ExpectedKioskMainPackageName $env:KIOSK_MAIN_PACKAGE -ExpectedKioskHelperPackageName $env:KIOSK_HELPER_PACKAGE
@@ -131,10 +165,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ steps.version.outputs.tag }}'
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; alpha assets are immutable." }
+          $absence = gh api --include "repos/${{ github.repository }}/releases/tags/$tag" 2>&1
+          if ($LASTEXITCODE -eq 0 -or
+              ($absence -join "`n") -notmatch '(?im)^HTTP/\S+\s+404\b') {
+            throw "Release $tag absence was not proven by a GitHub API 404."
+          }
           $assets = Get-ChildItem artifacts/release -File | ForEach-Object FullName
           gh release create $tag $assets --title "QuestIonAble File Manager Alpha $tag" --generate-notes --prerelease --latest=false --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "GitHub alpha release creation failed." }
+
+          $release = gh api "repos/${{ github.repository }}/releases/tags/$tag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tag_name -cne $tag -or
+              $release.draft -ne $false -or $release.prerelease -ne $true) {
+            throw 'Published alpha release flags/tag failed API readback.'
+          }
+          $ref = gh api "repos/${{ github.repository }}/git/ref/tags/$tag" | ConvertFrom-Json
+          while ($ref.object.type -ceq 'tag') {
+            $tagObject = gh api "repos/${{ github.repository }}/git/tags/$($ref.object.sha)" | ConvertFrom-Json
+            $ref = [pscustomobject]@{ object = $tagObject.object }
+          }
+          if ($ref.object.type -cne 'commit' -or $ref.object.sha -cne $env:GITHUB_SHA) {
+            throw 'Published alpha tag ref does not peel to GITHUB_SHA.'
+          }
+          $expected = @(Get-ChildItem artifacts/release -File | Sort-Object Name)
+          $published = @($release.assets | Sort-Object name)
+          if ($published.Count -ne $expected.Count) {
+            throw 'Published alpha asset count differs from the validated local set.'
+          }
+          for ($index = 0; $index -lt $expected.Count; $index++) {
+            $digest = "sha256:$((Get-FileHash -LiteralPath $expected[$index].FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+            if ($published[$index].name -cne $expected[$index].Name -or
+                [long]$published[$index].size -ne $expected[$index].Length -or
+                [string]$published[$index].digest -cne $digest) {
+              throw "Published alpha asset readback differs: $($expected[$index].Name)"
+            }
+          }
+          $latest = gh api "repos/${{ github.repository }}/releases/latest" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $latest.tag_name -ceq $tag) {
+            throw 'Alpha publication changed or could not distinguish the stable latest release.'
+          }
 
       - name: Remove temporary signing files
         if: always()

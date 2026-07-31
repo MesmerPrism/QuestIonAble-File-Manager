@@ -4,7 +4,7 @@ param(
     [string]$BundleDirectory,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
-    [ValidatePattern('^\d+\.\d+\.\d+(?:-alpha\.[1-9]\d*)?$')]
+    [ValidatePattern('^(0|[1-9]\d{0,3})\.(0|[1-9]\d?)\.(0|[1-9]\d?)(?:-alpha\.([1-9]|[1-8]\d|9[0-8]))?$')]
     [string]$ExpectedVersion,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
@@ -20,6 +20,12 @@ param(
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ExpectedReleaseUrl,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedSourceTree,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [long]$ExpectedVersionCode,
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ExpectedMainPackageName,
@@ -147,26 +153,42 @@ if ($manifest.version -ne $ExpectedVersion) {
     throw "Rusty Kiosk bundle version '$($manifest.version)' does not match requested release '$ExpectedVersion'."
 }
 if ($ExpectedChannel -eq 'alpha') {
-    if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+-alpha\.\d+$' -or
+    $versionMatch = [regex]::Match(
+        $ExpectedVersion,
+        '^(?<major>0|[1-9]\d{0,3})\.(?<minor>0|[1-9]\d?)\.(?<patch>0|[1-9]\d?)-alpha\.(?<alpha>[1-9]|[1-8]\d|9[0-8])$')
+    if (-not $versionMatch.Success -or
+        [int64]$versionMatch.Groups['major'].Value -gt 2099 -or
         $ExpectedTag -cne "v$ExpectedVersion") {
         throw 'Alpha Kiosk input requires an exact canonical vX.Y.Z-alpha.N tag/version pair.'
     }
+    $mappedVersionCode =
+        [int64]$versionMatch.Groups['major'].Value * 1000000L +
+        [int64]$versionMatch.Groups['minor'].Value * 10000L +
+        [int64]$versionMatch.Groups['patch'].Value * 100L +
+        [int64]$versionMatch.Groups['alpha'].Value
     if ($manifest.channel -cne 'alpha' -or
+        $manifest.prerelease -ne $true -or
         $manifest.tag -cne $ExpectedTag) {
         throw 'The Rusty Kiosk bundle channel/tag does not match the requested alpha prerelease.'
     }
     $canonicalReleaseUrl =
         "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$ExpectedTag"
     if ($ExpectedReleaseUrl -cne $canonicalReleaseUrl -or
-        $manifest.release_url -cne $canonicalReleaseUrl -or
-        $manifest.release_url -match '/latest(?:/|$)') {
-        throw 'The Rusty Kiosk alpha source provenance must be its exact immutable release URL.'
+        $ExpectedReleaseUrl -match '/latest(?:/|$)') {
+        throw 'The reviewed Rusty Kiosk alpha release URL must identify the exact immutable tag.'
     }
-    if ([string]::IsNullOrWhiteSpace($ExpectedMainPackageName) -or
-        [string]::IsNullOrWhiteSpace($ExpectedHelperPackageName) -or
-        $manifest.package_identity.main -cne $ExpectedMainPackageName -or
-        $manifest.package_identity.setup_helper -cne $ExpectedHelperPackageName) {
-        throw 'The Rusty Kiosk alpha Android package identities do not match the closed consumer policy.'
+    if ($ExpectedVersionCode -ne $mappedVersionCode -or
+        [long]$manifest.version_code -ne $ExpectedVersionCode) {
+        throw 'The Rusty Kiosk alpha Android versionCode does not match the reviewed deterministic mapping.'
+    }
+    if ($manifest.identity_mode -cne 'same-package-in-place' -or
+        $manifest.exit_policy -cne
+            'in-place; install a later same-signer stable build with a higher versionCode') {
+        throw 'The Rusty Kiosk alpha bundle is not the reviewed same-package in-place update policy.'
+    }
+    if ($ExpectedSourceTree -notmatch '^[0-9a-f]{40}$' -or
+        $manifest.source_tree -cne $ExpectedSourceTree) {
+        throw 'The Rusty Kiosk alpha source tree does not match the reviewed owner tree.'
     }
     if ($ExpectedSignerSha256 -notmatch '^[0-9a-f]{64}$' -or
         $manifest.signer_sha256 -cne $ExpectedSignerSha256) {
@@ -211,14 +233,36 @@ foreach ($file in $manifestFiles) {
     if ($actualBytes -ne [long]$file.bytes -or $actualHash -ine [string]$file.sha256) {
         throw "Rusty Kiosk payload does not match its manifest: $($file.name)."
     }
+    if ($ExpectedChannel -eq 'alpha' -and
+        $file.name -in @('rusty-kiosk.apk', 'rusty-kiosk-setup-helper.apk')) {
+        $expectedPackage = if ($file.name -ceq 'rusty-kiosk.apk') {
+            $ExpectedMainPackageName
+        } else {
+            $ExpectedHelperPackageName
+        }
+        if ([string]::IsNullOrWhiteSpace($expectedPackage) -or
+            $file.package_name -cne $expectedPackage -or
+            $file.version_name -cne $ExpectedVersion -or
+            [long]$file.version_code -ne $ExpectedVersionCode) {
+            throw "Rusty Kiosk APK identity does not match the pinned owner manifest: $($file.name)."
+        }
+    }
 }
 
 $sourceLines = @(Get-Content -LiteralPath (Join-Path $BundleDirectory 'RUSTY-KIOSK-SOURCE.txt'))
-foreach ($requiredLine in @(
+$requiredSourceLines = @(
     "Rusty Kiosk source: $expectedSourceUrl",
     "Source revision: $ExpectedSourceRevision",
     "Version: $ExpectedVersion"
-)) {
+)
+if ($ExpectedChannel -eq 'alpha') {
+    $requiredSourceLines += @(
+        "Source tree: $ExpectedSourceTree",
+        "Channel: $ExpectedChannel",
+        "Tag: $ExpectedTag"
+    )
+}
+foreach ($requiredLine in $requiredSourceLines) {
     if ($sourceLines -notcontains $requiredLine) {
         throw "Rusty Kiosk source pointer is inconsistent; missing '$requiredLine'."
     }

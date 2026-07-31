@@ -461,6 +461,9 @@ Alpha distribution is a complete-product lane with canonical
 staging names. It consumes only an exact published Rusty Kiosk alpha
 prerelease whose channel, tag, revision, URL, signer, manifest hash, Android
 package identities, and closed asset set match protected release policy.
+Alpha Setup must reject every Fleet replay repair/reset/accept/test route and
+skip normal replay provisioning so it cannot touch stable registry, Program
+Files helper, or state namespaces.
 
 Private signing material is supplied only through the
 Windows certificate store, ignored `artifacts`, and GitHub Actions secrets.

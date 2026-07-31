@@ -34,6 +34,8 @@ param(
     [int]$AlphaNumber,
     [string]$ExpectedKioskTag,
     [string]$ExpectedKioskReleaseUrl,
+    [string]$ExpectedKioskSourceTree,
+    [long]$ExpectedKioskVersionCode,
     [string]$ExpectedKioskMainPackageName,
     [string]$ExpectedKioskHelperPackageName,
     [string]$ExpectedKioskSignerSha256,
@@ -112,6 +114,8 @@ $kioskVerification = & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps
     -ExpectedChannel $Channel `
     -ExpectedTag $ExpectedKioskTag `
     -ExpectedReleaseUrl $ExpectedKioskReleaseUrl `
+    -ExpectedSourceTree $ExpectedKioskSourceTree `
+    -ExpectedVersionCode $ExpectedKioskVersionCode `
     -ExpectedMainPackageName $ExpectedKioskMainPackageName `
     -ExpectedHelperPackageName $ExpectedKioskHelperPackageName `
     -ExpectedSignerSha256 $ExpectedKioskSignerSha256 `

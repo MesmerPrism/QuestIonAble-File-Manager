@@ -25,6 +25,31 @@ internal static class DistributionIdentity
     internal static string AssetStem => Required("QuestIonAbleFileManager.SetupAssetStem");
     internal static string ReleaseTag => Required("QuestIonAbleFileManager.ReleaseTag");
     internal static bool IsAlpha => Channel == "alpha";
+    internal static bool FleetReplayProtectionEnabled => !IsAlpha;
+
+    internal static void RejectAlphaFleetReplayOperation(
+        bool repair,
+        bool destructiveReset)
+    {
+        if (IsAlpha && (repair || destructiveReset))
+        {
+            throw new ArgumentException(
+                "Alpha Setup cannot read, repair, reset, or provision the stable Fleet replay authority.");
+        }
+    }
+
+    internal static void RejectAlphaFleetReplayArguments(string[] args)
+    {
+        if (IsAlpha &&
+            args.Any(argument =>
+                argument.StartsWith(
+                    "--fleet-replay",
+                    StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Alpha Setup cannot invoke stable Fleet replay authority routes.");
+        }
+    }
 
     private static string Required(string key) =>
         Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
@@ -105,6 +130,9 @@ internal sealed record InstallerOptions(
             throw new ArgumentException(
                 "Fleet replay repair and destructive reset are mutually exclusive.");
         }
+        DistributionIdentity.RejectAlphaFleetReplayOperation(
+            repairFleetReplayProtection,
+            destructiveResetFleetReplayProtection);
         if (DistributionIdentity.IsAlpha)
         {
             ValidateAlphaSource(
@@ -467,11 +495,14 @@ internal sealed class GuidedInstaller
             .FirstOrDefault()
             ?? throw new InvalidOperationException("Windows completed setup but the installed package registration could not be found.");
 
-        var fleetReplayProtection =
-            FleetInstallerReplayProtectionSetup
+        var fleetReplayProtection = DistributionIdentity.FleetReplayProtectionEnabled
+            ? FleetInstallerReplayProtectionSetup
                 .ProvisionOrRepairEmbeddedRelease(
                     options.RepairFleetReplayProtection,
-                    options.DestructiveResetFleetReplayProtection);
+                    options.DestructiveResetFleetReplayProtection)
+            : new FleetReplayProtectionSetupResult(
+                "alpha_disabled",
+                StateRootSha256: null);
 
         var launched = false;
         if (!options.NoLaunch)
@@ -706,6 +737,7 @@ internal static class Program
     {
         try
         {
+            DistributionIdentity.RejectAlphaFleetReplayArguments(args);
             if (args is ["--fleet-release-configuration-proof"])
             {
                 return FleetInstallerReleaseProof.Write();

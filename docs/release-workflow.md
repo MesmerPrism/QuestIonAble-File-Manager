@@ -17,11 +17,24 @@ retains its existing identity, filenames, aliases, workflow, and feed.
 
 The protected `alpha` environment supplies the exact Rusty Kiosk alpha tag,
 manifest SHA-256, APK signer SHA-256, both Android package identities, and
-Windows signing inputs. Admission requires a published prerelease, exact tag
-commit, closed five-asset set, matching manifest
-channel/tag/version/URL/revision/signer/hash/package identities, payload
-hashes, and APK signer. Missing protected inputs fail at workflow execution;
-no production fallback keys are committed.
+Windows signing inputs. The owner-shaped manifest carries `prerelease=true`,
+the deterministic Android `version_code`, `same-package-in-place` identity
+mode, source commit/tree, signer, and per-APK package/version/versionCode/hash
+facts. The exact immutable release URL remains a separately reviewed workflow
+input because it is not an owner-manifest field. The currently stable Android
+package IDs are accepted for alpha only because both are explicitly pinned for
+the Kiosk owner's in-place promotion policy.
+
+Before publication, the workflow requires a positive GitHub API 404 for the
+tag. After creation it reads back the exact tag and peeled commit, draft and
+prerelease flags, every asset name/size/SHA-256 digest, and proves the
+repository's latest release has a different tag.
+
+Alpha Setup rejects repair, destructive reset, protected accept, lock-test,
+and security-self-test replay routes before they can read or mutate the stable
+Fleet replay registry, Program Files helper, or per-user state. Normal alpha
+installation also skips stable Fleet replay provisioning. Stable Setup retains
+its existing replay behavior.
 
 Run `pwsh -NoProfile -File tools/app/Test-AlphaDistributionContract.ps1` for
 the synthetic alpha contract suite.
