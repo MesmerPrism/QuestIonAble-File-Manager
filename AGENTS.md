@@ -464,6 +464,11 @@ package identities, and closed asset set match protected release policy.
 Alpha Setup must reject every Fleet replay repair/reset/accept/test route and
 skip normal replay provisioning so it cannot touch stable registry, Program
 Files helper, or state namespaces.
+Alpha releases also publish the QFM-owned
+`questionable-file-manager-alpha-owner-release.json` catalog asset. Keep it
+deterministic and alpha-only, binding the exact tag/versions, source commit and
+tree, alpha package identity, and primary Setup name/hash/bytes. Supporting
+workflow receipts are evidence, not release authority.
 
 Private signing material is supplied only through the
 Windows certificate store, ignored `artifacts`, and GitHub Actions secrets.

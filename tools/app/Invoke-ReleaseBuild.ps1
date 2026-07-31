@@ -328,6 +328,36 @@ if ($LASTEXITCODE -ne 0) { throw 'Brand asset validation failed.' }
     -AllowSelfIssuedTrustFailure
 if ($LASTEXITCODE -ne 0) { throw 'Release asset validation failed.' }
 
+if ($isAlpha) {
+    $sourceRevision = (& git -C $repoRoot rev-parse HEAD).Trim()
+    $sourceTree = (& git -C $repoRoot rev-parse 'HEAD^{tree}').Trim()
+    if ($LASTEXITCODE -ne 0 -or
+        $sourceRevision -notmatch '^[0-9a-f]{40}$' -or
+        $sourceTree -notmatch '^[0-9a-f]{40}$') {
+        throw 'Could not resolve the exact QFM alpha source revision and tree.'
+    }
+    $metadataPath = & (Join-Path $PSScriptRoot 'New-AlphaOwnerReleaseMetadata.ps1') `
+        -ReleaseDirectory $OutputDirectory `
+        -ReleaseTag $ReleaseTag `
+        -ReleaseVersion "$Version-alpha.$AlphaNumber" `
+        -WindowsPackageVersion $packageVersion `
+        -SourceRevision $sourceRevision `
+        -SourceTree $sourceTree `
+        -PackageIdentity $packageIdentity
+    & (Join-Path $PSScriptRoot 'Test-AlphaOwnerReleaseMetadata.ps1') `
+        -MetadataPath $metadataPath `
+        -SetupPath (Join-Path $OutputDirectory "$assetStem-Setup.exe") `
+        -ExpectedTag $ReleaseTag `
+        -ExpectedVersion "$Version-alpha.$AlphaNumber" `
+        -ExpectedWindowsPackageVersion $packageVersion `
+        -ExpectedSourceRevision $sourceRevision `
+        -ExpectedSourceTree $sourceTree `
+        -ExpectedPackageIdentity $packageIdentity | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Alpha owner-release metadata validation failed.'
+    }
+}
+
 Get-ChildItem -LiteralPath $OutputDirectory -File |
     Where-Object Name -ne 'SHA256SUMS.txt' |
     Sort-Object Name |

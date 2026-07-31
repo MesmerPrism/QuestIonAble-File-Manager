@@ -189,6 +189,108 @@ Tag: $tag
         Assert-Rejected { Invoke-Verification } "invalid prerelease tag $invalidTag"
     }
 
+    $ownerRelease = Join-Path $testRoot 'owner-release'
+    New-Item -ItemType Directory -Path $ownerRelease -Force | Out-Null
+    $ownerSetup = Join-Path $ownerRelease 'QuestIonAbleFileManager-Alpha-Setup.exe'
+    [IO.File]::WriteAllBytes($ownerSetup, [byte[]](11, 22, 33, 44, 55))
+    $ownerValidation =
+        Join-Path $ownerRelease 'release-validation.json'
+    $ownerTag = 'v2.3.4-alpha.5'
+    $ownerVersion = '2.3.4-alpha.5'
+    $ownerWindowsVersion = '2.3.4.5'
+    $ownerRevision = '1' * 40
+    $ownerTree = '2' * 40
+    $ownerIdentity = 'MesmerPrism.QuestIonAbleFileManager.Alpha'
+    function Write-OwnerValidationEvidence([string]$Content) {
+        Set-Content -LiteralPath $ownerValidation -Encoding utf8 -Value $Content
+    }
+    function New-OwnerMetadataFixture(
+        [string]$WindowsPackageVersion = $ownerWindowsVersion
+    ) {
+        & (Join-Path $PSScriptRoot 'New-AlphaOwnerReleaseMetadata.ps1') `
+            -ReleaseDirectory $ownerRelease -ReleaseTag $ownerTag `
+            -ReleaseVersion $ownerVersion `
+            -WindowsPackageVersion $WindowsPackageVersion `
+            -SourceRevision $ownerRevision -SourceTree $ownerTree `
+            -PackageIdentity $ownerIdentity
+    }
+    Write-OwnerValidationEvidence '{"schema":"wrong.release-validation.v1"}'
+    Assert-Rejected {
+        New-OwnerMetadataFixture
+    } 'wrong release-validation evidence schema'
+    Write-OwnerValidationEvidence '{"schema":'
+    Assert-Rejected {
+        New-OwnerMetadataFixture
+    } 'invalid release-validation evidence JSON'
+    Write-OwnerValidationEvidence (
+        '{"schema":"questionable-file-manager.release-validation.v1"}'
+    )
+    Assert-Rejected {
+        New-OwnerMetadataFixture -WindowsPackageVersion '2.3.4.6'
+    } 'semantic and Windows package version mismatch'
+    $ownerMetadata = New-OwnerMetadataFixture
+
+    function Invoke-OwnerMetadataVerification {
+        & (Join-Path $PSScriptRoot 'Test-AlphaOwnerReleaseMetadata.ps1') `
+            -MetadataPath $ownerMetadata -SetupPath $ownerSetup `
+            -ExpectedTag $ownerTag -ExpectedVersion $ownerVersion `
+            -ExpectedWindowsPackageVersion $ownerWindowsVersion `
+            -ExpectedSourceRevision $ownerRevision -ExpectedSourceTree $ownerTree `
+            -ExpectedPackageIdentity $ownerIdentity | Out-Null
+    }
+    function Set-OwnerMetadataMutation {
+        param([scriptblock]$Mutation)
+        $document = Get-Content -Raw -LiteralPath $ownerMetadata | ConvertFrom-Json
+        & $Mutation $document
+        $document | ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath $ownerMetadata -Encoding utf8
+    }
+    function Reset-OwnerMetadata {
+        $script:ownerMetadata = New-OwnerMetadataFixture
+    }
+
+    Invoke-OwnerMetadataVerification
+    $metadataNegativeCases = @(
+        @('wrong tag', { param($m) $m.release.tag = 'v2.3.4-alpha.6' }),
+        @('wrong version', { param($m) $m.release.version = '2.3.4-alpha.6' }),
+        @('wrong Windows package version', {
+            param($m) $m.release.windows_package_version = '2.3.4.6'
+        }),
+        @('wrong source revision', { param($m) $m.source.revision = '3' * 40 }),
+        @('wrong source tree', { param($m) $m.source.tree = '4' * 40 }),
+        @('wrong channel', { param($m) $m.channel = 'stable' }),
+        @('wrong installation identity', {
+            param($m) $m.installation.package_identity = 'MesmerPrism.MetaQuestFileManager'
+        }),
+        @('wrong Setup artifact name', {
+            param($m) $m.primary_windows_setup.name = 'QuestIonAbleFileManager-Setup.exe'
+        }),
+        @('wrong Setup SHA-256', {
+            param($m) $m.primary_windows_setup.sha256 = '5' * 64
+        }),
+        @('wrong Setup byte count', {
+            param($m) $m.primary_windows_setup.bytes = 999
+        }),
+        @('expanded validation evidence', {
+            param($m)
+            $m.validation_evidence |
+                Add-Member -NotePropertyName authority -NotePropertyValue 'synthetic'
+        }),
+        @('omitted validation evidence schema', {
+            param($m) $m.validation_evidence.PSObject.Properties.Remove('schema')
+        }),
+        @('omitted metadata field', {
+            param($m) $m.source.PSObject.Properties.Remove('tree')
+        })
+    )
+    foreach ($case in $metadataNegativeCases) {
+        Reset-OwnerMetadata
+        Set-OwnerMetadataMutation $case[1]
+        Assert-Rejected { Invoke-OwnerMetadataVerification } $case[0]
+    }
+    Remove-Item -LiteralPath $ownerMetadata -Force
+    Assert-Rejected { Invoke-OwnerMetadataVerification } 'omitted metadata asset'
+
     $workflow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.github\workflows\release-alpha.yml')
     foreach ($required in @(
         '--prerelease',
@@ -197,6 +299,7 @@ Tag: $tag
         'Compare-Object $expectedAssets $actualAssets',
         'RUSTY_KIOSK_ALPHA_MANIFEST_SHA256',
         'RUSTY_KIOSK_ALPHA_SIGNER_SHA256'
+        'questionable-file-manager-alpha-owner-release.json'
         'absence was not proven by a GitHub API 404'
         'Published alpha tag ref does not peel to GITHUB_SHA'
         'Published alpha asset readback differs'

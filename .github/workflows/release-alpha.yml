@@ -158,6 +158,23 @@ jobs:
             -ExpectedKioskManifestSha256 $env:KIOSK_MANIFEST_SHA256 -ExpectedKioskSignerSha256 $env:KIOSK_SIGNER_SHA256 `
             -ExpectedKioskMainPackageName $env:KIOSK_MAIN_PACKAGE -ExpectedKioskHelperPackageName $env:KIOSK_HELPER_PACKAGE
 
+      - name: Verify alpha owner-release catalog asset
+        shell: pwsh
+        run: |
+          $sourceTree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $sourceTree -notmatch '^[0-9a-f]{40}$') {
+            throw 'Could not resolve the exact QFM alpha source tree.'
+          }
+          $releaseVersion = '${{ steps.version.outputs.tag }}'.Substring(1)
+          ./tools/app/Test-AlphaOwnerReleaseMetadata.ps1 `
+            -MetadataPath artifacts/release/questionable-file-manager-alpha-owner-release.json `
+            -SetupPath artifacts/release/QuestIonAbleFileManager-Alpha-Setup.exe `
+            -ExpectedTag '${{ steps.version.outputs.tag }}' `
+            -ExpectedVersion $releaseVersion `
+            -ExpectedWindowsPackageVersion '${{ steps.version.outputs.base }}.${{ steps.version.outputs.alpha }}' `
+            -ExpectedSourceRevision $env:GITHUB_SHA -ExpectedSourceTree $sourceTree `
+            -ExpectedPackageIdentity MesmerPrism.QuestIonAbleFileManager.Alpha | Out-Null
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: QuestIonAbleFileManager-windows-alpha

@@ -36,6 +36,16 @@ Fleet replay registry, Program Files helper, or per-user state. Normal alpha
 installation also skips stable Fleet replay provisioning. Stable Setup retains
 its existing replay behavior.
 
+Each alpha prerelease also publishes
+`questionable-file-manager-alpha-owner-release.json`, a small deterministic
+QFM-owned catalog asset. It binds the exact alpha tag and semantic/Windows
+versions, source commit and tree, `alpha` channel, the
+`MesmerPrism.QuestIonAbleFileManager.Alpha` installation identity, and the
+primary Alpha Setup filename, lowercase SHA-256, and byte count. It names the
+release-validation receipt as supporting evidence; neither that receipt nor
+any Actions artifact substitutes for the tag, source, or published-release
+authority. The stable release workflow and stable asset set are unchanged.
+
 Run `pwsh -NoProfile -File tools/app/Test-AlphaDistributionContract.ps1` for
 the synthetic alpha contract suite.
 
