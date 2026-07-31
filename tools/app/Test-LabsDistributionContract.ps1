@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $artifactsRoot = Join-Path $repoRoot 'artifacts'
-$testRoot = Join-Path $artifactsRoot ("alpha-contract-{0}" -f [guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path $artifactsRoot ("labs-contract-{0}" -f [guid]::NewGuid().ToString('N'))
 $bundle = Join-Path $testRoot 'bundle'
 $fakeSigner = Join-Path $testRoot 'apksigner.cmd'
 $tag = 'v2.3.4-alpha.5'
@@ -17,8 +17,9 @@ $revision = '0123456789abcdef0123456789abcdef01234567'
 $sourceTree = '89abcdef0123456789abcdef0123456789abcdef'
 $versionCode = 2030405
 $signer = 'a' * 64
-$mainPackage = 'io.github.mesmerprism.rustykiosk'
-$helperPackage = 'io.github.mesmerprism.rustykiosk.setuphelper'
+$mainPackage = 'io.github.mesmerprism.rustykiosk.labs'
+$helperPackage = 'io.github.mesmerprism.rustykiosk.setuphelper.labs'
+$kioskOwnerMetadata = Join-Path $bundle 'rusty-kiosk-labs-owner-release.json'
 $releaseUrl = "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$tag"
 
 function Assert-Rejected {
@@ -32,12 +33,12 @@ function Assert-Rejected {
     catch {
         return
     }
-    throw "Alpha contract negative case was accepted: $Name"
+    throw "Labs contract negative case was accepted: $Name"
 }
 
 function Write-Manifest {
     param(
-        [string]$Channel = 'alpha',
+        [string]$ProductChannel = 'labs',
         [string]$ManifestTag = $tag,
         [string]$ManifestVersion = $version,
         [string]$ManifestMainPackage = $mainPackage,
@@ -46,7 +47,7 @@ function Write-Manifest {
         [long]$ManifestVersionCode = $versionCode,
         [string]$ManifestSourceTree = $sourceTree,
         [bool]$Prerelease = $true,
-        [string]$IdentityMode = 'same-package-in-place'
+        [string]$IdentityMode = 'separate-coinstallable'
     )
     $files = @(
         'rusty-kiosk.apk',
@@ -55,20 +56,21 @@ function Write-Manifest {
         'RUSTY-KIOSK-SOURCE.txt'
     )
     $manifest = [ordered]@{
-        schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v1'
+        schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v2'
         build_type = 'release'
-        channel = $Channel
+        product_channel = $ProductChannel
+        maturity = 'alpha'
+        distribution_track = 'github-prerelease'
         prerelease = $Prerelease
         tag = $ManifestTag
         version = $ManifestVersion
         version_code = $ManifestVersionCode
         identity_mode = $IdentityMode
-        exit_policy = 'in-place; install a later same-signer stable build with a higher versionCode'
+        exit_policy = 'uninstall-labs-without-changing-stable'
         source_url = 'https://github.com/MesmerPrism/Rusty-Kiosk'
         source_revision = $revision
         source_tree = $ManifestSourceTree
         signer_sha256 = $ManifestSigner
-        staged_at_utc = '2026-07-31T00:00:00.0000000+00:00'
         files = @($files | ForEach-Object {
             $path = Join-Path $bundle $_
             $entry = [ordered]@{
@@ -77,10 +79,9 @@ function Write-Manifest {
                 bytes = (Get-Item -LiteralPath $path).Length
             }
             if ($_ -in @('rusty-kiosk.apk', 'rusty-kiosk-setup-helper.apk')) {
-                $entry.package_name = if ($_ -ceq 'rusty-kiosk.apk') {
-                    $ManifestMainPackage
-                } else {
-                    $ManifestHelperPackage
+                $entry.package_name = switch ($_) {
+                    'rusty-kiosk.apk' { $ManifestMainPackage }
+                    'rusty-kiosk-setup-helper.apk' { $ManifestHelperPackage }
                 }
                 $entry.version_name = $ManifestVersion
                 $entry.version_code = $ManifestVersionCode
@@ -92,20 +93,39 @@ function Write-Manifest {
         Set-Content -LiteralPath (Join-Path $bundle 'bundle-manifest.json') -Encoding utf8
 }
 
+function Write-KioskOwnerMetadata {
+    $manifestPath = Join-Path $bundle 'bundle-manifest.json'
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $main = @($manifest.files | Where-Object name -CEQ 'rusty-kiosk.apk')[0]
+    [ordered]@{
+        schema = 'rusty.kiosk.labs_release_owner_metadata.v2'; repository = 'MesmerPrism/Rusty-Kiosk'; product = 'rusty-kiosk-labs'
+        product_channel = 'labs'; maturity = 'alpha'; distribution_track = 'github-prerelease'; prerelease = $true
+        tag = $tag; version = $version; source_revision = $revision; source_tree = $sourceTree
+        installation_identity = $mainPackage
+        coinstallable_lineage = [ordered]@{ identity_mode = 'separate-coinstallable'; package_name = $mainPackage; signer_sha256 = $signer; version_name = $version; version_code = $versionCode; exit_policy = 'uninstall-labs-without-changing-stable' }
+        bundle_manifest = [ordered]@{ schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v2'; name = 'bundle-manifest.json'; sha256 = (Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = (Get-Item $manifestPath).Length }
+        primary_artifact = [ordered]@{ role = 'complete-product'; name = 'rusty-kiosk.apk'; sha256 = $main.sha256; bytes = [long]$main.bytes }
+    } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $kioskOwnerMetadata -Encoding utf8
+}
+
 function Invoke-Verification {
+    Write-KioskOwnerMetadata
     $manifestHash =
         (Get-FileHash -LiteralPath (Join-Path $bundle 'bundle-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
     & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps1') `
         -BundleDirectory $bundle `
         -ExpectedVersion $version `
         -ExpectedSourceRevision $revision `
-        -ExpectedChannel alpha `
+        -ExpectedProductChannel labs `
+        -ExpectedMaturity alpha `
+        -ExpectedDistributionTrack github-prerelease `
         -ExpectedTag $tag `
         -ExpectedReleaseUrl $releaseUrl `
         -ExpectedSourceTree $sourceTree `
         -ExpectedVersionCode $versionCode `
         -ExpectedMainPackageName $mainPackage `
         -ExpectedHelperPackageName $helperPackage `
+        -ExpectedOwnerMetadataPath $kioskOwnerMetadata `
         -ExpectedSignerSha256 $signer `
         -ExpectedManifestSha256 $manifestHash `
         -ApkSignerPath $fakeSigner | Out-Null
@@ -121,7 +141,9 @@ Rusty Kiosk source: https://github.com/MesmerPrism/Rusty-Kiosk
 Source revision: $revision
 Source tree: $sourceTree
 Version: $version
-Channel: alpha
+Product channel: labs
+Maturity: alpha
+Distribution track: github-prerelease
 Tag: $tag
 "@
     Set-Content -LiteralPath $fakeSigner -Encoding ascii -Value "@echo V2 Signer: certificate SHA-256 digest: $signer 1>&2"
@@ -129,8 +151,24 @@ Tag: $tag
     Write-Manifest
     Invoke-Verification
 
-    Write-Manifest -Channel stable
-    Assert-Rejected { Invoke-Verification } 'stable bundle substituted into alpha'
+    [IO.File]::WriteAllBytes((Join-Path $bundle 'rusty-kiosk-launcher.apk'), [byte[]](8, 9))
+    $phantom = Get-Content -Raw (Join-Path $bundle 'bundle-manifest.json') | ConvertFrom-Json
+    $phantom.files += [pscustomobject]@{ name = 'rusty-kiosk-launcher.apk'; package_name = 'io.github.mesmerprism.rustykiosk.launcher.labs'; version_name = $version; version_code = $versionCode; sha256 = (Get-FileHash (Join-Path $bundle 'rusty-kiosk-launcher.apk') -Algorithm SHA256).Hash.ToLowerInvariant(); bytes = 2 }
+    $phantom | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $bundle 'bundle-manifest.json') -Encoding utf8
+    Assert-Rejected { Invoke-Verification } 'phantom launcher five-payload bundle'
+    Remove-Item -LiteralPath (Join-Path $bundle 'rusty-kiosk-launcher.apk')
+    Write-Manifest
+    Write-KioskOwnerMetadata
+    $damagedOwner = Get-Content -Raw $kioskOwnerMetadata | ConvertFrom-Json
+    $damagedOwner.primary_artifact.sha256 = 'b' * 64
+    $damagedOwner | ConvertTo-Json -Depth 8 | Set-Content $kioskOwnerMetadata -Encoding utf8
+    Assert-Rejected {
+        $manifestHash = (Get-FileHash (Join-Path $bundle 'bundle-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+        & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps1') -BundleDirectory $bundle -ExpectedVersion $version -ExpectedSourceRevision $revision -ExpectedProductChannel labs -ExpectedMaturity alpha -ExpectedDistributionTrack github-prerelease -ExpectedTag $tag -ExpectedReleaseUrl $releaseUrl -ExpectedSourceTree $sourceTree -ExpectedVersionCode $versionCode -ExpectedMainPackageName $mainPackage -ExpectedHelperPackageName $helperPackage -ExpectedOwnerMetadataPath $kioskOwnerMetadata -ExpectedSignerSha256 $signer -ExpectedManifestSha256 $manifestHash -ApkSignerPath $fakeSigner | Out-Null
+    } 'damaged Kiosk owner metadata'
+
+    Write-Manifest -ProductChannel stable
+    Assert-Rejected { Invoke-Verification } 'stable bundle substituted into Labs'
     Write-Manifest -ManifestTag 'v2.3.4-alpha.6'
     Assert-Rejected { Invoke-Verification } 'mismatched exact tag'
     Write-Manifest -ManifestVersion '2.3.4'
@@ -138,21 +176,23 @@ Tag: $tag
     Assert-Rejected {
         & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps1') `
             -BundleDirectory $bundle -ExpectedVersion $version `
-            -ExpectedSourceRevision $revision -ExpectedChannel alpha `
+            -ExpectedSourceRevision $revision -ExpectedProductChannel labs `
+            -ExpectedMaturity alpha -ExpectedDistributionTrack github-prerelease `
             -ExpectedTag $tag -ExpectedReleaseUrl 'https://github.com/MesmerPrism/Rusty-Kiosk/releases/latest/download/bundle-manifest.json' `
             -ExpectedSourceTree $sourceTree -ExpectedVersionCode $versionCode `
             -ExpectedMainPackageName $mainPackage -ExpectedHelperPackageName $helperPackage `
+            -ExpectedOwnerMetadataPath $kioskOwnerMetadata `
             -ExpectedSignerSha256 $signer -ExpectedManifestSha256 ('0' * 64) `
             -ApkSignerPath $fakeSigner | Out-Null
     } 'latest reviewed release URL'
-    Write-Manifest -ManifestMainPackage 'io.github.mesmerprism.rustykiosk.alpha'
-    Assert-Rejected { Invoke-Verification } 'unreviewed alpha Android package substituted'
+    Write-Manifest -ManifestMainPackage 'io.github.mesmerprism.rustykiosk.unreviewed'
+    Assert-Rejected { Invoke-Verification } 'unreviewed Labs Android package substituted'
     Write-Manifest -ManifestVersionCode 2030406
     Assert-Rejected { Invoke-Verification } 'mismatched versionCode'
     Write-Manifest -Prerelease $false
     Assert-Rejected { Invoke-Verification } 'prerelease false'
-    Write-Manifest -IdentityMode 'parallel-package'
-    Assert-Rejected { Invoke-Verification } 'non-in-place identity mode'
+    Write-Manifest -IdentityMode 'same-package-in-place'
+    Assert-Rejected { Invoke-Verification } 'non-coinstallable identity mode'
     Write-Manifest -ManifestSourceTree ('d' * 40)
     Assert-Rejected { Invoke-Verification } 'mismatched source tree'
     Write-Manifest
@@ -170,10 +210,12 @@ Tag: $tag
     Assert-Rejected {
         & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps1') `
             -BundleDirectory $bundle -ExpectedVersion $version `
-            -ExpectedSourceRevision $revision -ExpectedChannel alpha `
+            -ExpectedSourceRevision $revision -ExpectedProductChannel labs `
+            -ExpectedMaturity alpha -ExpectedDistributionTrack github-prerelease `
             -ExpectedTag $tag -ExpectedReleaseUrl $releaseUrl `
             -ExpectedSourceTree $sourceTree -ExpectedVersionCode $versionCode `
             -ExpectedMainPackageName $mainPackage -ExpectedHelperPackageName $helperPackage `
+            -ExpectedOwnerMetadataPath $kioskOwnerMetadata `
             -ExpectedSignerSha256 $signer -ExpectedManifestSha256 $wrongHash `
             -ApkSignerPath $fakeSigner | Out-Null
     } 'wrong manifest hash'
@@ -191,7 +233,7 @@ Tag: $tag
 
     $ownerRelease = Join-Path $testRoot 'owner-release'
     New-Item -ItemType Directory -Path $ownerRelease -Force | Out-Null
-    $ownerSetup = Join-Path $ownerRelease 'QuestIonAbleFileManager-Alpha-Setup.exe'
+    $ownerSetup = Join-Path $ownerRelease 'QuestIonAbleFileManager-Labs-Setup.exe'
     [IO.File]::WriteAllBytes($ownerSetup, [byte[]](11, 22, 33, 44, 55))
     $ownerValidation =
         Join-Path $ownerRelease 'release-validation.json'
@@ -200,14 +242,14 @@ Tag: $tag
     $ownerWindowsVersion = '2.3.4.5'
     $ownerRevision = '1' * 40
     $ownerTree = '2' * 40
-    $ownerIdentity = 'MesmerPrism.QuestIonAbleFileManager.Alpha'
+    $ownerIdentity = 'MesmerPrism.QuestIonAbleFileManager.Labs'
     function Write-OwnerValidationEvidence([string]$Content) {
         Set-Content -LiteralPath $ownerValidation -Encoding utf8 -Value $Content
     }
     function New-OwnerMetadataFixture(
         [string]$WindowsPackageVersion = $ownerWindowsVersion
     ) {
-        & (Join-Path $PSScriptRoot 'New-AlphaOwnerReleaseMetadata.ps1') `
+        & (Join-Path $PSScriptRoot 'New-LabsOwnerReleaseMetadata.ps1') `
             -ReleaseDirectory $ownerRelease -ReleaseTag $ownerTag `
             -ReleaseVersion $ownerVersion `
             -WindowsPackageVersion $WindowsPackageVersion `
@@ -223,7 +265,7 @@ Tag: $tag
         New-OwnerMetadataFixture
     } 'invalid release-validation evidence JSON'
     Write-OwnerValidationEvidence (
-        '{"schema":"questionable-file-manager.release-validation.v1"}'
+        '{"schema":"questionable-file-manager.release-validation.v2"}'
     )
     Assert-Rejected {
         New-OwnerMetadataFixture -WindowsPackageVersion '2.3.4.6'
@@ -231,7 +273,7 @@ Tag: $tag
     $ownerMetadata = New-OwnerMetadataFixture
 
     function Invoke-OwnerMetadataVerification {
-        & (Join-Path $PSScriptRoot 'Test-AlphaOwnerReleaseMetadata.ps1') `
+        & (Join-Path $PSScriptRoot 'Test-LabsOwnerReleaseMetadata.ps1') `
             -MetadataPath $ownerMetadata -SetupPath $ownerSetup `
             -ExpectedTag $ownerTag -ExpectedVersion $ownerVersion `
             -ExpectedWindowsPackageVersion $ownerWindowsVersion `
@@ -258,7 +300,10 @@ Tag: $tag
         }),
         @('wrong source revision', { param($m) $m.source.revision = '3' * 40 }),
         @('wrong source tree', { param($m) $m.source.tree = '4' * 40 }),
-        @('wrong channel', { param($m) $m.channel = 'stable' }),
+        @('wrong product channel', { param($m) $m.product_channel = 'stable' }),
+        @('wrong maturity', { param($m) $m.maturity = 'beta' }),
+        @('channel-valued stable distribution track', { param($m) $m.distribution_track = 'stable' }),
+        @('channel-valued labs distribution track', { param($m) $m.distribution_track = 'labs' }),
         @('wrong installation identity', {
             param($m) $m.installation.package_identity = 'MesmerPrism.MetaQuestFileManager'
         }),
@@ -291,26 +336,26 @@ Tag: $tag
     Remove-Item -LiteralPath $ownerMetadata -Force
     Assert-Rejected { Invoke-OwnerMetadataVerification } 'omitted metadata asset'
 
-    $workflow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.github\workflows\release-alpha.yml')
+    $workflow = Get-Content -Raw -LiteralPath (Join-Path $repoRoot '.github\workflows\release-labs.yml')
     foreach ($required in @(
         '--prerelease',
         '--latest=false',
-        "environment: alpha",
+        "environment: labs",
         'Compare-Object $expectedAssets $actualAssets',
-        'RUSTY_KIOSK_ALPHA_MANIFEST_SHA256',
-        'RUSTY_KIOSK_ALPHA_SIGNER_SHA256'
-        'questionable-file-manager-alpha-owner-release.json'
+        'RUSTY_KIOSK_LABS_MANIFEST_SHA256',
+        'RUSTY_KIOSK_LABS_SIGNER_SHA256'
+        'questionable-file-manager-labs-owner-release.json'
         'absence was not proven by a GitHub API 404'
-        'Published alpha tag ref does not peel to GITHUB_SHA'
-        'Published alpha asset readback differs'
-        'Alpha publication changed or could not distinguish the stable latest release.'
+        'Published Labs tag ref does not peel to GITHUB_SHA'
+        'Published Labs asset readback differs'
+        'Labs publication changed or could not distinguish the stable latest release.'
     )) {
         if (-not $workflow.Contains($required, [StringComparison]::Ordinal)) {
-            throw "Alpha workflow is missing contract text: $required"
+            throw "Labs workflow is missing contract text: $required"
         }
     }
     if ($workflow -match 'releases/latest/download') {
-        throw 'Alpha workflow contains a mutable latest/download URL.'
+        throw 'Labs workflow contains a mutable latest/download URL.'
     }
 
     $stableWorkflowPath = Join-Path $repoRoot '.github\workflows\release.yml'
@@ -324,19 +369,28 @@ Tag: $tag
         )
     }
 
-    $alphaSetup = Join-Path $testRoot 'alpha-setup'
+    $labsSetup = Join-Path $testRoot 'labs-setup'
     & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj') `
         --configuration Release --runtime win-x64 --self-contained false `
-        -p:QfmDistributionChannel=alpha `
+        -p:QfmProductChannel=labs `
+        -p:QfmMaturity=alpha `
+        -p:QfmDistributionTrack=github-prerelease `
         -p:QfmReleaseTag=v2.3.4-alpha.5 `
-        -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Alpha `
-        '-p:QfmDistributionDisplayName=QuestIonAble File Manager Alpha' `
-        -p:QfmSetupAssetStem=QuestIonAbleFileManager-Alpha `
-        --output $alphaSetup *> $null
+        -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Labs `
+        '-p:QfmDistributionDisplayName=QuestIonAble File Manager Labs' `
+        -p:QfmSetupAssetStem=QuestIonAbleFileManager-Labs `
+        --output $labsSetup *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw 'Synthetic alpha Setup publish failed.'
+        throw 'Synthetic Labs Setup publish failed.'
     }
-    $alphaSetupDll = Join-Path $alphaSetup 'QuestIonAbleFileManager.Setup.dll'
+    foreach ($oldTrack in @('stable', 'labs')) {
+        $invalidSetup = Join-Path $testRoot "invalid-track-$oldTrack"
+        & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj') --configuration Release --runtime win-x64 --self-contained false -p:QfmProductChannel=labs -p:QfmMaturity=alpha -p:QfmDistributionTrack=$oldTrack -p:QfmReleaseTag=v2.3.4-alpha.5 -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Labs '-p:QfmDistributionDisplayName=QuestIonAble File Manager Labs' -p:QfmSetupAssetStem=QuestIonAbleFileManager-Labs --output $invalidSetup *> $null
+        if ($LASTEXITCODE -ne 0) { throw "Synthetic old-track Setup publish failed before runtime rejection: $oldTrack" }
+        & dotnet (Join-Path $invalidSetup 'QuestIonAbleFileManager.Setup.dll') --plan --json *> $null
+        if ($LASTEXITCODE -eq 0) { throw "Setup accepted obsolete channel-valued distribution track: $oldTrack" }
+    }
+    $labsSetupDll = Join-Path $labsSetup 'QuestIonAbleFileManager.Setup.dll'
     foreach ($arguments in @(
         @('--repair-fleet-replay-protection', '--quiet'),
         @('--destructive-reset-fleet-replay-protection', '--quiet'),
@@ -348,13 +402,13 @@ Tag: $tag
             ('2' * 64)
         )
     )) {
-        & dotnet $alphaSetupDll @arguments *> $null
+        & dotnet $labsSetupDll @arguments *> $null
         if ($LASTEXITCODE -eq 0) {
-            throw "Alpha Setup reached a stable Fleet replay route: $($arguments[0])"
+            throw "Labs Setup reached a stable Fleet replay route: $($arguments[0])"
         }
     }
 
-    Write-Output 'Alpha distribution contract tests passed.'
+    Write-Output 'Labs distribution contract tests passed.'
 }
 finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue

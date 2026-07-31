@@ -19,35 +19,57 @@ internal static class DistributionIdentity
             .GetCustomAttributes<AssemblyMetadataAttribute>()
             .ToDictionary(attribute => attribute.Key, attribute => attribute.Value ?? string.Empty);
 
-    internal static string Channel => Required("QuestIonAbleFileManager.DistributionChannel");
+    internal static string ProductChannel => Required("QuestIonAbleFileManager.ProductChannel");
+    internal static string Maturity => Required("QuestIonAbleFileManager.Maturity");
+    internal static string DistributionTrack => Required("QuestIonAbleFileManager.DistributionTrack");
     internal static string PackageIdentity => Required("QuestIonAbleFileManager.PackageIdentity");
     internal static string DisplayName => Required("QuestIonAbleFileManager.DistributionDisplayName");
     internal static string AssetStem => Required("QuestIonAbleFileManager.SetupAssetStem");
     internal static string ReleaseTag => Required("QuestIonAbleFileManager.ReleaseTag");
-    internal static bool IsAlpha => Channel == "alpha";
-    internal static bool FleetReplayProtectionEnabled => !IsAlpha;
-
-    internal static void RejectAlphaFleetReplayOperation(
-        bool repair,
-        bool destructiveReset)
+    internal static bool IsLabs
     {
-        if (IsAlpha && (repair || destructiveReset))
+        get
         {
-            throw new ArgumentException(
-                "Alpha Setup cannot read, repair, reset, or provision the stable Fleet replay authority.");
+            ValidateAxes();
+            return ProductChannel == "labs";
+        }
+    }
+    internal static bool FleetReplayProtectionEnabled => !IsLabs;
+
+    private static void ValidateAxes()
+    {
+        if (ProductChannel is not ("stable" or "labs") ||
+            Maturity is not ("alpha" or "beta" or "rc" or "released") ||
+            DistributionTrack is not ("github-release" or "github-prerelease") ||
+            (ProductChannel == "stable" && DistributionTrack != "github-release") ||
+            (ProductChannel == "labs" && DistributionTrack != "github-prerelease"))
+        {
+            throw new InvalidOperationException(
+                "The embedded product_channel, maturity, and distribution_track axes are invalid.");
         }
     }
 
-    internal static void RejectAlphaFleetReplayArguments(string[] args)
+    internal static void RejectLabsFleetReplayOperation(
+        bool repair,
+        bool destructiveReset)
     {
-        if (IsAlpha &&
+        if (IsLabs && (repair || destructiveReset))
+        {
+            throw new ArgumentException(
+                "Labs Setup cannot read, repair, reset, or provision the stable Fleet replay authority.");
+        }
+    }
+
+    internal static void RejectLabsFleetReplayArguments(string[] args)
+    {
+        if (IsLabs &&
             args.Any(argument =>
                 argument.StartsWith(
                     "--fleet-replay",
                     StringComparison.Ordinal)))
         {
             throw new ArgumentException(
-                "Alpha Setup cannot invoke stable Fleet replay authority routes.");
+                "Labs Setup cannot invoke stable Fleet replay authority routes.");
         }
     }
 
@@ -67,15 +89,15 @@ internal sealed record InstallerOptions(
     bool DestructiveResetFleetReplayProtection,
     bool Json)
 {
-    private static string DefaultCertificateSource => DistributionIdentity.IsAlpha
-        ? ExactAlphaAssetUri($"{DistributionIdentity.AssetStem}.cer")
+    private static string DefaultCertificateSource => DistributionIdentity.IsLabs
+        ? ExactLabsAssetUri($"{DistributionIdentity.AssetStem}.cer")
         : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.cer";
 
-    private static string DefaultAppInstallerSource => DistributionIdentity.IsAlpha
-        ? ExactAlphaAssetUri($"{DistributionIdentity.AssetStem}.appinstaller")
+    private static string DefaultAppInstallerSource => DistributionIdentity.IsLabs
+        ? ExactLabsAssetUri($"{DistributionIdentity.AssetStem}.appinstaller")
         : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller";
 
-    private static string ExactAlphaAssetUri(string asset) =>
+    private static string ExactLabsAssetUri(string asset) =>
         $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/{asset}";
 
     public static InstallerOptions Parse(string[] args)
@@ -130,16 +152,16 @@ internal sealed record InstallerOptions(
             throw new ArgumentException(
                 "Fleet replay repair and destructive reset are mutually exclusive.");
         }
-        DistributionIdentity.RejectAlphaFleetReplayOperation(
+        DistributionIdentity.RejectLabsFleetReplayOperation(
             repairFleetReplayProtection,
             destructiveResetFleetReplayProtection);
-        if (DistributionIdentity.IsAlpha)
+        if (DistributionIdentity.IsLabs)
         {
-            ValidateAlphaSource(
+            ValidateLabsSource(
                 certificateSource,
                 DefaultCertificateSource,
                 planOnly);
-            ValidateAlphaSource(
+            ValidateLabsSource(
                 appInstallerSource,
                 DefaultAppInstallerSource,
                 planOnly);
@@ -156,7 +178,7 @@ internal sealed record InstallerOptions(
             json);
     }
 
-    private static void ValidateAlphaSource(
+    private static void ValidateLabsSource(
         string source,
         string exactSource,
         bool planOnly)
@@ -167,14 +189,14 @@ internal sealed record InstallerOptions(
             if (!string.Equals(source, exactSource, StringComparison.Ordinal))
             {
                 throw new ArgumentException(
-                    "Alpha Setup accepts only its embedded exact-tag HTTPS asset URL.");
+                    "Labs Setup accepts only its embedded exact-tag HTTPS asset URL.");
             }
             return;
         }
         if (!planOnly)
         {
             throw new ArgumentException(
-                "Local alpha assets are accepted only by the non-mutating plan route.");
+                "Local Labs assets are accepted only by the non-mutating plan route.");
         }
     }
 
@@ -272,7 +294,7 @@ internal sealed class SetupStagingDirectory : IDisposable
 
         var root = System.IO.Path.GetFullPath(
             Environment.GetFolderPath(
-                DistributionIdentity.IsAlpha
+                DistributionIdentity.IsLabs
                     ? Environment.SpecialFolder.LocalApplicationData
                     : Environment.SpecialFolder.ProgramFiles));
         var vendorDirectory = System.IO.Path.Combine(
@@ -280,8 +302,8 @@ internal sealed class SetupStagingDirectory : IDisposable
             "MesmerPrism");
         var productDirectory = System.IO.Path.Combine(
             vendorDirectory,
-            DistributionIdentity.IsAlpha
-                ? "QuestIonAbleFileManagerAlpha"
+            DistributionIdentity.IsLabs
+                ? "QuestIonAbleFileManagerLabs"
                 : "QuestIonAbleFileManager");
         var parentDirectory = System.IO.Path.Combine(
             productDirectory,
@@ -431,8 +453,8 @@ internal sealed class GuidedInstaller
     // Stable signed identity retained from releases published before the rename.
     internal static string ExpectedPackageName => DistributionIdentity.PackageIdentity;
     internal const string ExpectedPublisher = "CN=MesmerPrism";
-    private static string DownloadDirectoryName => DistributionIdentity.IsAlpha
-        ? "QuestIonAbleFileManagerAlphaSetup"
+    private static string DownloadDirectoryName => DistributionIdentity.IsLabs
+        ? "QuestIonAbleFileManagerLabsSetup"
         : "QuestIonAbleFileManagerSetup";
 
     public async Task<InstallerResult> RunAsync(
@@ -501,7 +523,7 @@ internal sealed class GuidedInstaller
                     options.RepairFleetReplayProtection,
                     options.DestructiveResetFleetReplayProtection)
             : new FleetReplayProtectionSetupResult(
-                "alpha_disabled",
+                "labs_disabled",
                 StateRootSha256: null);
 
         var launched = false;
@@ -544,7 +566,7 @@ internal sealed class GuidedInstaller
             throw new InvalidOperationException(
                 $"The feed identity is not the expected public package ({ExpectedPackageName}, {ExpectedPublisher}).");
         }
-        if (DistributionIdentity.IsAlpha)
+        if (DistributionIdentity.IsLabs)
         {
             var exactPrefix =
                 $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/";
@@ -556,7 +578,7 @@ internal sealed class GuidedInstaller
                 packageUri.Contains("/latest/", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
-                    "The alpha feed is not bound to its embedded exact release tag.");
+                    "The Labs feed is not bound to its embedded exact release tag.");
             }
         }
 
@@ -737,7 +759,7 @@ internal static class Program
     {
         try
         {
-            DistributionIdentity.RejectAlphaFleetReplayArguments(args);
+            DistributionIdentity.RejectLabsFleetReplayArguments(args);
             if (args is ["--fleet-release-configuration-proof"])
             {
                 return FleetInstallerReleaseProof.Write();

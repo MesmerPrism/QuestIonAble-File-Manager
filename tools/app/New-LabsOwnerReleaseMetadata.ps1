@@ -24,23 +24,23 @@ param(
     [string]$SourceTree,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^MesmerPrism\.QuestIonAbleFileManager\.Alpha$')]
+    [ValidatePattern('^MesmerPrism\.QuestIonAbleFileManager\.Labs$')]
     [string]$PackageIdentity
 )
 
 $ErrorActionPreference = 'Stop'
 $releaseRoot = [IO.Path]::GetFullPath($ReleaseDirectory)
-$setupName = 'QuestIonAbleFileManager-Alpha-Setup.exe'
+$setupName = 'QuestIonAbleFileManager-Labs-Setup.exe'
 $setupPath = Join-Path $releaseRoot $setupName
 $validationPath = Join-Path $releaseRoot 'release-validation.json'
 if (-not (Test-Path -LiteralPath $setupPath -PathType Leaf)) {
-    throw 'The primary alpha Windows Setup artifact is missing.'
+    throw 'The primary Labs Windows Setup artifact is missing.'
 }
 if (-not (Test-Path -LiteralPath $validationPath -PathType Leaf)) {
-    throw 'The alpha release-validation evidence is missing.'
+    throw 'The Labs release-validation evidence is missing.'
 }
 if ($ReleaseVersion -cne $ReleaseTag.Substring(1)) {
-    throw 'The alpha release tag and version differ.'
+    throw 'The Labs release tag and version differ.'
 }
 $versionMatch = [regex]::Match(
     $ReleaseVersion,
@@ -52,23 +52,25 @@ $expectedWindowsPackageVersion = (
 )
 if (-not $versionMatch.Success -or
     $WindowsPackageVersion -cne $expectedWindowsPackageVersion) {
-    throw 'The alpha semantic and Windows package versions differ.'
+    throw 'The alpha maturity and Windows package versions differ.'
 }
 try {
     $validationEvidence =
         Get-Content -Raw -LiteralPath $validationPath | ConvertFrom-Json
 }
 catch {
-    throw 'The alpha release-validation evidence is not valid JSON.'
+    throw 'The Labs release-validation evidence is not valid JSON.'
 }
 if ($validationEvidence.schema -cne
-    'questionable-file-manager.release-validation.v1') {
-    throw 'The alpha release-validation evidence schema is not recognized.'
+    'questionable-file-manager.release-validation.v2') {
+    throw 'The Labs release-validation evidence schema is not recognized.'
 }
 
 $metadata = [ordered]@{
-    schema = 'questionable-file-manager.alpha-owner-release.v1'
-    channel = 'alpha'
+    schema = 'questionable-file-manager.owner-release.v2'
+    product_channel = 'labs'
+    maturity = 'alpha'
+    distribution_track = 'github-prerelease'
     release = [ordered]@{
         tag = $ReleaseTag
         version = $ReleaseVersion
@@ -88,10 +90,10 @@ $metadata = [ordered]@{
     }
     validation_evidence = [ordered]@{
         name = 'release-validation.json'
-        schema = 'questionable-file-manager.release-validation.v1'
+        schema = 'questionable-file-manager.release-validation.v2'
     }
 }
-$outputPath = Join-Path $releaseRoot 'questionable-file-manager-alpha-owner-release.json'
+$outputPath = Join-Path $releaseRoot 'questionable-file-manager-labs-owner-release.json'
 $metadata | ConvertTo-Json -Depth 5 |
     Set-Content -LiteralPath $outputPath -Encoding utf8
 $outputPath

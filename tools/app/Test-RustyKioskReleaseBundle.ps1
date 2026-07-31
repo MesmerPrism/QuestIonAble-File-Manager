@@ -4,7 +4,7 @@ param(
     [string]$BundleDirectory,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
-    [ValidatePattern('^(0|[1-9]\d{0,3})\.(0|[1-9]\d?)\.(0|[1-9]\d?)(?:-alpha\.([1-9]|[1-8]\d|9[0-8]))?$')]
+    [ValidatePattern('^(0|[1-9]\d{0,3})\.(0|[1-9]\d?)\.(0|[1-9]\d?)(?:-(?:alpha|beta|rc)\.([1-9]|[1-8]\d|9[0-8]))?$')]
     [string]$ExpectedVersion,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
@@ -12,8 +12,16 @@ param(
     [string]$ExpectedSourceRevision,
 
     [Parameter(ParameterSetName = 'Verify')]
-    [ValidateSet('stable', 'alpha')]
-    [string]$ExpectedChannel = 'stable',
+    [ValidateSet('stable', 'labs')]
+    [string]$ExpectedProductChannel = 'stable',
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$ExpectedMaturity = 'released',
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$ExpectedDistributionTrack = 'github-release',
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ExpectedTag,
@@ -32,6 +40,9 @@ param(
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ExpectedHelperPackageName,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedOwnerMetadataPath,
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ExpectedSignerSha256,
@@ -81,9 +92,12 @@ License: GNU Affero General Public License v3.0 or later (see RUSTY-KIOSK-LICENS
             'RUSTY-KIOSK-SOURCE.txt'
         )
         $manifest = [ordered]@{
-            schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v1'
+            schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v2'
             build_type = 'release'
             version = $version
+            product_channel = 'stable'
+            maturity = 'released'
+            distribution_track = 'github-release'
             source_url = 'https://github.com/MesmerPrism/Rusty-Kiosk'
             source_revision = $revision
             signer_sha256 = $signer
@@ -146,13 +160,24 @@ foreach ($name in @($expectedFiles + 'bundle-manifest.json')) {
 }
 
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-if ($manifest.schema -ne 'meta.quest.file_manager.rusty_kiosk_bundle.v1' -or $manifest.build_type -ne 'release') {
+$manifestProperties = @($manifest.PSObject.Properties.Name | Sort-Object)
+$expectedManifestProperties = @('schema','build_type','product_channel','maturity','distribution_track','prerelease','tag','version','version_code','identity_mode','exit_policy','source_url','source_revision','source_tree','signer_sha256','files' | Sort-Object)
+if ($ExpectedProductChannel -eq 'labs' -and
+    ($manifestProperties -join "`n") -cne ($expectedManifestProperties -join "`n")) {
+    throw 'The Rusty Kiosk Labs manifest shape is incomplete or expanded.'
+}
+if ($manifest.schema -cne 'meta.quest.file_manager.rusty_kiosk_bundle.v2' -or $manifest.build_type -cne 'release') {
     throw 'The Rusty Kiosk bundle does not use the supported release manifest.'
 }
 if ($manifest.version -ne $ExpectedVersion) {
     throw "Rusty Kiosk bundle version '$($manifest.version)' does not match requested release '$ExpectedVersion'."
 }
-if ($ExpectedChannel -eq 'alpha') {
+if ($manifest.product_channel -cne $ExpectedProductChannel -or
+    $manifest.maturity -cne $ExpectedMaturity -or
+    $manifest.distribution_track -cne $ExpectedDistributionTrack) {
+    throw 'The Rusty Kiosk bundle distribution axes do not match the requested product.'
+}
+if ($ExpectedProductChannel -eq 'labs') {
     $versionMatch = [regex]::Match(
         $ExpectedVersion,
         '^(?<major>0|[1-9]\d{0,3})\.(?<minor>0|[1-9]\d?)\.(?<patch>0|[1-9]\d?)-alpha\.(?<alpha>[1-9]|[1-8]\d|9[0-8])$')
@@ -166,10 +191,11 @@ if ($ExpectedChannel -eq 'alpha') {
         [int64]$versionMatch.Groups['minor'].Value * 10000L +
         [int64]$versionMatch.Groups['patch'].Value * 100L +
         [int64]$versionMatch.Groups['alpha'].Value
-    if ($manifest.channel -cne 'alpha' -or
+    if ($ExpectedMaturity -cne 'alpha' -or
+        $ExpectedDistributionTrack -cne 'github-prerelease' -or
         $manifest.prerelease -ne $true -or
         $manifest.tag -cne $ExpectedTag) {
-        throw 'The Rusty Kiosk bundle channel/tag does not match the requested alpha prerelease.'
+        throw 'The Rusty Kiosk Labs bundle maturity/tag does not match the requested alpha prerelease.'
     }
     $canonicalReleaseUrl =
         "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$ExpectedTag"
@@ -179,29 +205,34 @@ if ($ExpectedChannel -eq 'alpha') {
     }
     if ($ExpectedVersionCode -ne $mappedVersionCode -or
         [long]$manifest.version_code -ne $ExpectedVersionCode) {
-        throw 'The Rusty Kiosk alpha Android versionCode does not match the reviewed deterministic mapping.'
+        throw 'The Rusty Kiosk Labs Android versionCode does not match the reviewed deterministic mapping.'
     }
-    if ($manifest.identity_mode -cne 'same-package-in-place' -or
-        $manifest.exit_policy -cne
-            'in-place; install a later same-signer stable build with a higher versionCode') {
-        throw 'The Rusty Kiosk alpha bundle is not the reviewed same-package in-place update policy.'
+    if ($manifest.identity_mode -cne 'separate-coinstallable' -or
+        $manifest.exit_policy -cne 'uninstall-labs-without-changing-stable' -or
+        @($ExpectedMainPackageName, $ExpectedHelperPackageName |
+            Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0 -or
+        @($ExpectedMainPackageName, $ExpectedHelperPackageName |
+            Select-Object -Unique).Count -ne 2) {
+        throw 'The Rusty Kiosk Labs bundle does not use the two exact separate-coinstallable package identities.'
     }
     if ($ExpectedSourceTree -notmatch '^[0-9a-f]{40}$' -or
         $manifest.source_tree -cne $ExpectedSourceTree) {
-        throw 'The Rusty Kiosk alpha source tree does not match the reviewed owner tree.'
+        throw 'The Rusty Kiosk Labs source tree does not match the reviewed owner tree.'
     }
     if ($ExpectedSignerSha256 -notmatch '^[0-9a-f]{64}$' -or
         $manifest.signer_sha256 -cne $ExpectedSignerSha256) {
-        throw 'The Rusty Kiosk alpha signer does not match the pinned consumer policy.'
+        throw 'The Rusty Kiosk Labs signer does not match the pinned consumer policy.'
     }
     $actualManifestSha256 =
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ExpectedManifestSha256 -notmatch '^[0-9a-f]{64}$' -or
         $actualManifestSha256 -cne $ExpectedManifestSha256) {
-        throw 'The Rusty Kiosk alpha bundle manifest does not match its pinned release hash.'
+        throw 'The Rusty Kiosk Labs bundle manifest does not match its pinned release hash.'
     }
 }
-elseif ($ExpectedTag -and $ExpectedTag -cne "v$ExpectedVersion") {
+elseif ($ExpectedMaturity -cne 'released' -or
+    $ExpectedDistributionTrack -cne 'github-release' -or
+    ($ExpectedTag -and $ExpectedTag -cne "v$ExpectedVersion")) {
     throw 'Stable Kiosk input tag does not match its exact stable version.'
 }
 if ($manifest.source_url -ne $expectedSourceUrl) {
@@ -233,12 +264,11 @@ foreach ($file in $manifestFiles) {
     if ($actualBytes -ne [long]$file.bytes -or $actualHash -ine [string]$file.sha256) {
         throw "Rusty Kiosk payload does not match its manifest: $($file.name)."
     }
-    if ($ExpectedChannel -eq 'alpha' -and
+    if ($ExpectedProductChannel -eq 'labs' -and
         $file.name -in @('rusty-kiosk.apk', 'rusty-kiosk-setup-helper.apk')) {
-        $expectedPackage = if ($file.name -ceq 'rusty-kiosk.apk') {
-            $ExpectedMainPackageName
-        } else {
-            $ExpectedHelperPackageName
+        $expectedPackage = switch ($file.name) {
+            'rusty-kiosk.apk' { $ExpectedMainPackageName }
+            'rusty-kiosk-setup-helper.apk' { $ExpectedHelperPackageName }
         }
         if ([string]::IsNullOrWhiteSpace($expectedPackage) -or
             $file.package_name -cne $expectedPackage -or
@@ -255,10 +285,12 @@ $requiredSourceLines = @(
     "Source revision: $ExpectedSourceRevision",
     "Version: $ExpectedVersion"
 )
-if ($ExpectedChannel -eq 'alpha') {
+if ($ExpectedProductChannel -eq 'labs') {
     $requiredSourceLines += @(
         "Source tree: $ExpectedSourceTree",
-        "Channel: $ExpectedChannel",
+        "Product channel: $ExpectedProductChannel",
+        "Maturity: $ExpectedMaturity",
+        "Distribution track: $ExpectedDistributionTrack",
         "Tag: $ExpectedTag"
     )
 }
@@ -305,11 +337,55 @@ $mainSigner = Get-ApkSignerDigest -Path (Join-Path $BundleDirectory 'rusty-kiosk
 $helperSigner = Get-ApkSignerDigest -Path (Join-Path $BundleDirectory 'rusty-kiosk-setup-helper.apk')
 $expectedSigner = ([string]$manifest.signer_sha256).ToLowerInvariant()
 if ($mainSigner -ne $helperSigner -or $mainSigner -ne $expectedSigner) {
-    throw 'The Kiosk APK pair does not match the same signer recorded in its release manifest.'
+    throw 'The Kiosk core/helper APK set does not match the same signer recorded in its release manifest.'
+}
+
+if ($ExpectedProductChannel -eq 'labs') {
+    if ([string]::IsNullOrWhiteSpace($ExpectedOwnerMetadataPath) -or
+        -not (Test-Path -LiteralPath $ExpectedOwnerMetadataPath -PathType Leaf)) {
+        throw 'The exact Kiosk Labs owner metadata asset is required.'
+    }
+    $owner = Get-Content -Raw -LiteralPath $ExpectedOwnerMetadataPath | ConvertFrom-Json
+    $ownerNames = @($owner.PSObject.Properties.Name | Sort-Object)
+    $expectedOwnerNames = @('schema','repository','product','product_channel','maturity','distribution_track','prerelease','tag','version','source_revision','source_tree','installation_identity','coinstallable_lineage','bundle_manifest','primary_artifact' | Sort-Object)
+    $lineageNames = @($owner.coinstallable_lineage.PSObject.Properties.Name | Sort-Object)
+    $bundleNames = @($owner.bundle_manifest.PSObject.Properties.Name | Sort-Object)
+    $artifactNames = @($owner.primary_artifact.PSObject.Properties.Name | Sort-Object)
+    if (($ownerNames -join "`n") -cne ($expectedOwnerNames -join "`n") -or
+        ($lineageNames -join "`n") -cne (@('identity_mode','package_name','signer_sha256','version_name','version_code','exit_policy' | Sort-Object) -join "`n") -or
+        ($bundleNames -join "`n") -cne (@('schema','name','sha256','bytes' | Sort-Object) -join "`n") -or
+        ($artifactNames -join "`n") -cne (@('role','name','sha256','bytes' | Sort-Object) -join "`n") -or
+        $owner.schema -cne 'rusty.kiosk.labs_release_owner_metadata.v2' -or
+        $owner.repository -cne 'MesmerPrism/Rusty-Kiosk' -or
+        $owner.product -cne 'rusty-kiosk-labs' -or
+        $owner.product_channel -cne 'labs' -or $owner.maturity -cne 'alpha' -or
+        $owner.distribution_track -cne 'github-prerelease' -or $owner.prerelease -ne $true -or
+        $owner.tag -cne $ExpectedTag -or $owner.version -cne $ExpectedVersion -or
+        $owner.source_revision -cne $ExpectedSourceRevision -or $owner.source_tree -cne $ExpectedSourceTree -or
+        $owner.installation_identity -cne $ExpectedMainPackageName -or
+        $owner.coinstallable_lineage.identity_mode -cne 'separate-coinstallable' -or
+        $owner.coinstallable_lineage.package_name -cne $ExpectedMainPackageName -or
+        $owner.coinstallable_lineage.signer_sha256 -cne $ExpectedSignerSha256 -or
+        $owner.coinstallable_lineage.version_name -cne $ExpectedVersion -or
+        [long]$owner.coinstallable_lineage.version_code -ne $ExpectedVersionCode -or
+        $owner.coinstallable_lineage.exit_policy -cne 'uninstall-labs-without-changing-stable' -or
+        $owner.bundle_manifest.schema -cne 'meta.quest.file_manager.rusty_kiosk_bundle.v2' -or
+        $owner.bundle_manifest.name -cne 'bundle-manifest.json' -or
+        $owner.bundle_manifest.sha256 -cne $ExpectedManifestSha256 -or
+        [long]$owner.bundle_manifest.bytes -ne (Get-Item -LiteralPath $manifestPath).Length -or
+        $owner.primary_artifact.role -cne 'complete-product' -or
+        $owner.primary_artifact.name -cne 'rusty-kiosk.apk' -or
+        $owner.primary_artifact.sha256 -cne (Get-FileHash -LiteralPath (Join-Path $BundleDirectory 'rusty-kiosk.apk') -Algorithm SHA256).Hash.ToLowerInvariant() -or
+        [long]$owner.primary_artifact.bytes -ne (Get-Item -LiteralPath (Join-Path $BundleDirectory 'rusty-kiosk.apk')).Length) {
+        throw 'The Kiosk Labs owner metadata does not bind the exact owner-authorized release evidence.'
+    }
 }
 
 [pscustomobject]@{
     version = $manifest.version
+    product_channel = $manifest.product_channel
+    maturity = $manifest.maturity
+    distribution_track = $manifest.distribution_track
     source_url = $manifest.source_url
     source_revision = ([string]$manifest.source_revision).ToLowerInvariant()
     signer_sha256 = $expectedSigner

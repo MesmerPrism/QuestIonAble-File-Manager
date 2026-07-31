@@ -14,6 +14,13 @@ param(
 
     [string]$SourceUrl = 'https://github.com/MesmerPrism/Rusty-Kiosk',
     [string]$SourceRevision = 'working-tree',
+    [string]$Version = '0.0.0',
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$Maturity = 'released',
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$DistributionTrack = 'github-release',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\artifacts\kiosk-bundle')
 )
 
@@ -32,7 +39,7 @@ foreach ($path in $inputs) {
         throw "Required Rusty Kiosk bundle input was not found: $path"
     }
 }
-if ([IO.Path]::GetExtension($inputs[0]) -ne '.apk' -or [IO.Path]::GetExtension($inputs[1]) -ne '.apk') {
+if (@($inputs[0..1] | Where-Object { [IO.Path]::GetExtension($_) -ne '.apk' }).Count -ne 0) {
     throw 'Both Rusty Kiosk application inputs must be APK files.'
 }
 
@@ -47,10 +54,24 @@ $licenseOutput = Join-Path $OutputDirectory 'RUSTY-KIOSK-LICENSE.txt'
 Copy-Item -LiteralPath $inputs[0] -Destination $mainOutput
 Copy-Item -LiteralPath $inputs[1] -Destination $helperOutput
 Copy-Item -LiteralPath $inputs[2] -Destination $licenseOutput
+$sourceOutput = Join-Path $OutputDirectory 'RUSTY-KIOSK-SOURCE.txt'
+Set-Content -LiteralPath $sourceOutput -Encoding utf8 -Value @"
+Rusty Kiosk source: $SourceUrl
+Source revision: $SourceRevision
+Version: $Version
+Product channel: $ProductChannel
+Maturity: $Maturity
+Distribution track: $DistributionTrack
+License: GNU Affero General Public License v3.0 or later (see RUSTY-KIOSK-LICENSE.txt)
+"@
 
 $manifest = [ordered]@{
-    schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v1'
+    schema = 'meta.quest.file_manager.rusty_kiosk_bundle.v2'
     build_type = $BuildType
+    version = $Version
+    product_channel = $ProductChannel
+    maturity = $Maturity
+    distribution_track = $DistributionTrack
     source_url = $SourceUrl
     source_revision = $SourceRevision
     staged_at_utc = [DateTimeOffset]::UtcNow.ToString('O')
@@ -64,14 +85,18 @@ $manifest = [ordered]@{
             name = 'rusty-kiosk-setup-helper.apk'
             sha256 = (Get-FileHash -LiteralPath $helperOutput -Algorithm SHA256).Hash.ToLowerInvariant()
             bytes = (Get-Item -LiteralPath $helperOutput).Length
+        },
+        [ordered]@{
+            name = 'RUSTY-KIOSK-LICENSE.txt'
+            sha256 = (Get-FileHash -LiteralPath $licenseOutput -Algorithm SHA256).Hash.ToLowerInvariant()
+            bytes = (Get-Item -LiteralPath $licenseOutput).Length
+        },
+        [ordered]@{
+            name = 'RUSTY-KIOSK-SOURCE.txt'
+            sha256 = (Get-FileHash -LiteralPath $sourceOutput -Algorithm SHA256).Hash.ToLowerInvariant()
+            bytes = (Get-Item -LiteralPath $sourceOutput).Length
         }
     )
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'bundle-manifest.json') -Encoding utf8
-Set-Content -LiteralPath (Join-Path $OutputDirectory 'RUSTY-KIOSK-SOURCE.txt') -Encoding utf8 -Value @"
-Rusty Kiosk source: $SourceUrl
-Source revision: $SourceRevision
-License: GNU Affero General Public License v3.0 or later (see RUSTY-KIOSK-LICENSE.txt)
-"@
-
 Get-ChildItem -LiteralPath $OutputDirectory -File | Sort-Object Name | Select-Object Name, Length, FullName

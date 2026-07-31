@@ -332,7 +332,7 @@ function Assert-ConfiguredMetadata {
         throw 'Checked-in Fleet installer release trust must contain exactly eight fields.'
     }
     if ($Values.ConfigurationVersion -cne '2' -or
-        $Values.Channel -cnotin @('stable', 'preview', 'dev')) {
+        $Values.Channel -cnotin @('stable', 'labs')) {
         throw 'Checked-in Fleet installer release trust has an invalid version or channel.'
     }
     $expectedUri =

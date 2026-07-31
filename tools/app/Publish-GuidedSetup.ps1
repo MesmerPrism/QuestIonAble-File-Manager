@@ -9,8 +9,12 @@ param(
     [string]$CertificatePath,
     [string]$CertificatePassword,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
-    [ValidateSet('stable', 'alpha')]
-    [string]$Channel = 'stable',
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
+    [ValidateSet('alpha', 'beta', 'rc', 'released')]
+    [string]$Maturity = 'released',
+    [ValidateSet('github-release', 'github-prerelease')]
+    [string]$DistributionTrack = 'github-release',
     [string]$ReleaseTag = 'stable',
     [string]$PackageIdentity = 'MesmerPrism.MetaQuestFileManager',
     [string]$DisplayName = 'QuestIonAble File Manager',
@@ -45,7 +49,9 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:Version=$Version `
-    -p:QfmDistributionChannel=$Channel `
+    -p:QfmProductChannel=$ProductChannel `
+    -p:QfmMaturity=$Maturity `
+    -p:QfmDistributionTrack=$DistributionTrack `
     -p:QfmReleaseTag=$ReleaseTag `
     -p:QfmPackageIdentity=$PackageIdentity `
     -p:QfmDistributionDisplayName="$DisplayName" `

@@ -45,7 +45,7 @@ build time from the complete metadata block in checked-in
 | `DescriptorSignerSpkiSha256` | Lowercase SHA-256 of that exact SPKI |
 | `InstallerSignerCertificateSha256` | Lowercase SHA-256 of the exact DER Windows Setup signer certificate |
 | `ProvisioningSetupSignerCertificateSha256` | Lowercase SHA-256 of the reviewed QFM Setup signer certificate allowed to provision/repair protected machine replay state |
-| `Channel` | Exact `stable`, `preview`, or `dev` channel |
+| `Channel` | Exact `stable` or `labs` public distribution route |
 | `StateRootRelativePath` | One-to-four-segment safe relative path under the current user's Local Application Data |
 
 The reviewed source block has this exact shape:
@@ -353,7 +353,7 @@ does not derive either pin from the staged release receipts.
   "release_a_root": "<path-to-retained-release-a>",
   "release_b_root": "<path-to-retained-release-b>",
   "install_root": "<new-temporary-lifecycle-root>",
-  "channel": "dev",
+  "channel": "labs",
   "trusted_descriptor_signer_spki_sha256": "<64-lowercase-hex>",
   "trusted_installer_signer_certificate_sha256": "<64-lowercase-hex>",
   "cleanup_fixture_install_root": true

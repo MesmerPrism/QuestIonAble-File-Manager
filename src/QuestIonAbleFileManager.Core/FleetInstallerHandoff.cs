@@ -2549,7 +2549,7 @@ internal static class FleetInstallerValidation
         (byte)(value < 10 ? '0' + value : 'a' + value - 10);
 
     public static bool IsReleaseChannel(string? value) =>
-        value is "stable" or "preview" or "dev";
+        value is "stable" or "labs";
 
     public static void ValidateDescriptorUri(Uri uri, string channel)
     {

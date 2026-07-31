@@ -9,7 +9,9 @@
     <Description>Guided installer and updater for QuestIonAble File Manager.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\assets\branding\QuestIonAbleFileManager.ico</ApplicationIcon>
-    <QfmDistributionChannel Condition="'$(QfmDistributionChannel)' == ''">stable</QfmDistributionChannel>
+    <QfmProductChannel Condition="'$(QfmProductChannel)' == ''">stable</QfmProductChannel>
+    <QfmMaturity Condition="'$(QfmMaturity)' == ''">released</QfmMaturity>
+    <QfmDistributionTrack Condition="'$(QfmDistributionTrack)' == ''">github-release</QfmDistributionTrack>
     <QfmPackageIdentity Condition="'$(QfmPackageIdentity)' == ''">MesmerPrism.MetaQuestFileManager</QfmPackageIdentity>
     <QfmDistributionDisplayName Condition="'$(QfmDistributionDisplayName)' == ''">QuestIonAble File Manager</QfmDistributionDisplayName>
     <QfmSetupAssetStem Condition="'$(QfmSetupAssetStem)' == ''">QuestIonAbleFileManager</QfmSetupAssetStem>
@@ -19,8 +21,16 @@
   <ItemGroup>
     <ProjectReference Include="..\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj" />
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-      <_Parameter1>QuestIonAbleFileManager.DistributionChannel</_Parameter1>
-      <_Parameter2>$(QfmDistributionChannel)</_Parameter2>
+      <_Parameter1>QuestIonAbleFileManager.ProductChannel</_Parameter1>
+      <_Parameter2>$(QfmProductChannel)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.Maturity</_Parameter1>
+      <_Parameter2>$(QfmMaturity)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.DistributionTrack</_Parameter1>
+      <_Parameter2>$(QfmDistributionTrack)</_Parameter2>
     </AssemblyAttribute>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>QuestIonAbleFileManager.PackageIdentity</_Parameter1>

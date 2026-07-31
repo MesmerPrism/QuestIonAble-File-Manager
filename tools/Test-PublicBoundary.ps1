@@ -13,7 +13,9 @@ $untrackedFiles = @(& git -C $repoRoot ls-files --others --exclude-standard)
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not enumerate untracked public files.'
 }
-$repositoryFiles = @($trackedFiles + $untrackedFiles | Sort-Object -Unique)
+$repositoryFiles = @($trackedFiles + $untrackedFiles | Sort-Object -Unique | Where-Object {
+    Test-Path -LiteralPath (Join-Path $repoRoot $_) -PathType Leaf
+})
 
 $forbiddenExtensions = @(
     '.apk', '.apks', '.aab', '.idsig', '.keystore', '.jks', '.pfx', '.p12', '.cer'
