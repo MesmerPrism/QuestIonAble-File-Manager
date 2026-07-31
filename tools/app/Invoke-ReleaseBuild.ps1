@@ -19,7 +19,7 @@ param(
     [string]$KioskBundleDirectory = (Join-Path $PSScriptRoot '..\..\artifacts\kiosk-bundle'),
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-alpha\.[1-9]\d*)?$')]
     [string]$ExpectedKioskVersion,
 
     [Parameter(Mandatory = $true)]
@@ -28,14 +28,57 @@ param(
 
     [string]$ApkSignerPath,
     [string]$FleetInstallerLifecycleInputPath,
+    [ValidateSet('stable', 'alpha')]
+    [string]$Channel = 'stable',
+    [string]$ReleaseTag,
+    [int]$AlphaNumber,
+    [string]$ExpectedKioskTag,
+    [string]$ExpectedKioskReleaseUrl,
+    [string]$ExpectedKioskMainPackageName,
+    [string]$ExpectedKioskHelperPackageName,
+    [string]$ExpectedKioskSignerSha256,
+    [string]$ExpectedKioskManifestSha256,
     [switch]$SkipBuildAndTest
 )
 
 $ErrorActionPreference = 'Stop'
+$isAlpha = $Channel -eq 'alpha'
+if ($isAlpha) {
+    if ($AlphaNumber -lt 1 -or
+        $ReleaseTag -cne "v$Version-alpha.$AlphaNumber") {
+        throw 'Alpha releases require the exact canonical vX.Y.Z-alpha.N tag.'
+    }
+}
+elseif ($ReleaseTag -and $ReleaseTag -cne "v$Version") {
+    throw 'Stable release tag does not match the numeric version.'
+}
+$packageVersion = if ($isAlpha) { "$Version.$AlphaNumber" } else { "$Version.0" }
+$assetStem = if ($isAlpha) { 'QuestIonAbleFileManager-Alpha' } else { 'QuestIonAbleFileManager' }
+$packageIdentity = if ($isAlpha) {
+    'MesmerPrism.QuestIonAbleFileManager.Alpha'
+} else {
+    'MesmerPrism.MetaQuestFileManager'
+}
+$displayName = if ($isAlpha) {
+    'QuestIonAble File Manager Alpha'
+} else {
+    'QuestIonAble File Manager'
+}
+$packageUri = if ($isAlpha) {
+    "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/$assetStem-win-x64.msix"
+} else {
+    'https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager-win-x64.msix'
+}
+$appInstallerUri = if ($isAlpha) {
+    "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/$assetStem.appinstaller"
+} else {
+    'https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller'
+}
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 & (Join-Path $repoRoot 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
     -RequireOfficialRelease `
-    -ExpectedVersion $Version
+    -ExpectedVersion $Version `
+    -ExpectedTag $ReleaseTag
 if ($LASTEXITCODE -ne 0) {
     throw 'Fleet installer checked-in release configuration validation failed.'
 }
@@ -66,6 +109,13 @@ $kioskVerification = & (Join-Path $PSScriptRoot 'Test-RustyKioskReleaseBundle.ps
     -BundleDirectory $KioskBundleDirectory `
     -ExpectedVersion $ExpectedKioskVersion `
     -ExpectedSourceRevision $ExpectedKioskSourceRevision `
+    -ExpectedChannel $Channel `
+    -ExpectedTag $ExpectedKioskTag `
+    -ExpectedReleaseUrl $ExpectedKioskReleaseUrl `
+    -ExpectedMainPackageName $ExpectedKioskMainPackageName `
+    -ExpectedHelperPackageName $ExpectedKioskHelperPackageName `
+    -ExpectedSignerSha256 $ExpectedKioskSignerSha256 `
+    -ExpectedManifestSha256 $ExpectedKioskManifestSha256 `
     -ApkSignerPath $ApkSignerPath
 $defaultKioskBundle = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts\kiosk-bundle'))
 if (-not $KioskBundleDirectory.Equals($defaultKioskBundle, [StringComparison]::OrdinalIgnoreCase)) {
@@ -189,12 +239,23 @@ Copy-Item -LiteralPath (
 Copy-Item -LiteralPath (
     Join-Path $cliPublish 'questionable-file-manager-connectivity-provider.receipt.json') `
     -Destination $combined -Force
-Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory 'QuestIonAbleFileManager-win-x64.zip')
-Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory 'questionable-file-manager-cli-win-x64.zip')
+$portableName = if ($isAlpha) { "$assetStem-win-x64.zip" } else { 'QuestIonAbleFileManager-win-x64.zip' }
+$cliName = if ($isAlpha) { 'questionable-file-manager-alpha-cli-win-x64.zip' } else { 'questionable-file-manager-cli-win-x64.zip' }
+Compress-Archive -Path (Join-Path $combined '*') -DestinationPath (Join-Path $OutputDirectory $portableName)
+Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $OutputDirectory $cliName)
 
 & (Join-Path $PSScriptRoot 'Build-App-Package.ps1') `
     -Version $Version `
+    -PackageVersion $packageVersion `
+    -ReleaseTag $ReleaseTag `
     -OutputDirectory $OutputDirectory `
+    -PackageName $packageIdentity `
+    -DisplayName $displayName `
+    -PackageFileName "$assetStem-win-x64.msix" `
+    -AppInstallerFileName "$assetStem.appinstaller" `
+    -CertificateFileName "$assetStem.cer" `
+    -PackageUri $packageUri `
+    -AppInstallerUri $appInstallerUri `
     -Publisher $Publisher `
     -CertificatePath $PackageCertificatePath `
     -CertificatePassword $PackageCertificatePassword `
@@ -204,6 +265,12 @@ if ($LASTEXITCODE -ne 0) { throw 'MSIX package build failed.' }
 & (Join-Path $PSScriptRoot 'Publish-GuidedSetup.ps1') `
     -Version $Version `
     -OutputDirectory $OutputDirectory `
+    -FileName "$assetStem-Setup.exe" `
+    -Channel $Channel `
+    -ReleaseTag $ReleaseTag `
+    -PackageIdentity $packageIdentity `
+    -DisplayName $displayName `
+    -AssetStem $assetStem `
     -CertificatePath $SetupCertificatePath `
     -CertificatePassword $SetupCertificatePassword `
     -TimestampUrl $SetupTimestampUrl
@@ -216,7 +283,7 @@ if (-not [string]::IsNullOrWhiteSpace(
         -InputPath $FleetInstallerLifecycleInputPath `
         -QfmSetupExecutablePath (
             Join-Path $OutputDirectory `
-                'QuestIonAbleFileManager-Setup.exe')
+                "$assetStem-Setup.exe")
     if ($LASTEXITCODE -ne 0) {
         throw 'Fleet installer handoff lifecycle validation failed.'
     }
@@ -224,14 +291,14 @@ if (-not [string]::IsNullOrWhiteSpace(
 
 # Releases keep byte-identical former-name aliases so 0.3.x App Installer
 # subscriptions and pinned automation download URLs migrate without breaking.
-$compatibilityAliases = [ordered]@{
+$compatibilityAliases = if ($isAlpha) { [ordered]@{} } else { [ordered]@{
     'MetaQuestFileManager-Setup.exe' = 'QuestIonAbleFileManager-Setup.exe'
     'MetaQuestFileManager-win-x64.msix' = 'QuestIonAbleFileManager-win-x64.msix'
     'MetaQuestFileManager.appinstaller' = 'QuestIonAbleFileManager.appinstaller'
     'MetaQuestFileManager.cer' = 'QuestIonAbleFileManager.cer'
     'MetaQuestFileManager-win-x64.zip' = 'QuestIonAbleFileManager-win-x64.zip'
     'meta-quest-file-manager-cli-win-x64.zip' = 'questionable-file-manager-cli-win-x64.zip'
-}
+} }
 foreach ($entry in $compatibilityAliases.GetEnumerator()) {
     Copy-Item -LiteralPath (Join-Path $OutputDirectory $entry.Value) `
         -Destination (Join-Path $OutputDirectory $entry.Key) -Force
@@ -243,13 +310,16 @@ foreach ($entry in $compatibilityAliases.GetEnumerator()) {
     (Join-Path $providerValidationDirectory 'questionable-file-manager-kiosk-v2-provider.exe'),
     (Join-Path $awakeProviderValidationDirectory 'questionable-file-manager-awake-provider.exe'),
     (Join-Path $connectivityProviderValidationDirectory 'questionable-file-manager-connectivity-provider.exe'),
-    (Join-Path $OutputDirectory 'QuestIonAbleFileManager-Setup.exe')
+    (Join-Path $OutputDirectory "$assetStem-Setup.exe")
 )
 if ($LASTEXITCODE -ne 0) { throw 'Brand asset validation failed.' }
 
 & (Join-Path $PSScriptRoot 'Test-ReleaseAssets.ps1') `
     -ReleaseDirectory $OutputDirectory `
     -ExpectedPublisher $Publisher `
+    -ExpectedPackageName $packageIdentity `
+    -Channel $Channel `
+    -ReleaseTag $ReleaseTag `
     -KioskBundleManifestPath (Join-Path $KioskBundleDirectory 'bundle-manifest.json') `
     -AllowSelfIssuedTrustFailure
 if ($LASTEXITCODE -ne 0) { throw 'Release asset validation failed.' }

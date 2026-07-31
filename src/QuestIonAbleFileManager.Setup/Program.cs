@@ -3,6 +3,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
+using System.Reflection;
 using System.Text.Json;
 using System.Xml.Linq;
 using QuestIonAbleFileManager.Core;
@@ -10,6 +11,26 @@ using Windows.Foundation;
 using Windows.Management.Deployment;
 
 namespace QuestIonAbleFileManager.Setup;
+
+internal static class DistributionIdentity
+{
+    private static readonly IReadOnlyDictionary<string, string> Metadata =
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .ToDictionary(attribute => attribute.Key, attribute => attribute.Value ?? string.Empty);
+
+    internal static string Channel => Required("QuestIonAbleFileManager.DistributionChannel");
+    internal static string PackageIdentity => Required("QuestIonAbleFileManager.PackageIdentity");
+    internal static string DisplayName => Required("QuestIonAbleFileManager.DistributionDisplayName");
+    internal static string AssetStem => Required("QuestIonAbleFileManager.SetupAssetStem");
+    internal static string ReleaseTag => Required("QuestIonAbleFileManager.ReleaseTag");
+    internal static bool IsAlpha => Channel == "alpha";
+
+    private static string Required(string key) =>
+        Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new InvalidOperationException($"Required closed distribution metadata is missing: {key}.");
+}
 
 internal sealed record InstallerOptions(
     string CertificateSource,
@@ -21,11 +42,16 @@ internal sealed record InstallerOptions(
     bool DestructiveResetFleetReplayProtection,
     bool Json)
 {
-    private const string DefaultCertificateSource =
-        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.cer";
+    private static string DefaultCertificateSource => DistributionIdentity.IsAlpha
+        ? ExactAlphaAssetUri($"{DistributionIdentity.AssetStem}.cer")
+        : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.cer";
 
-    private const string DefaultAppInstallerSource =
-        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller";
+    private static string DefaultAppInstallerSource => DistributionIdentity.IsAlpha
+        ? ExactAlphaAssetUri($"{DistributionIdentity.AssetStem}.appinstaller")
+        : "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/QuestIonAbleFileManager.appinstaller";
+
+    private static string ExactAlphaAssetUri(string asset) =>
+        $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/{asset}";
 
     public static InstallerOptions Parse(string[] args)
     {
@@ -79,6 +105,17 @@ internal sealed record InstallerOptions(
             throw new ArgumentException(
                 "Fleet replay repair and destructive reset are mutually exclusive.");
         }
+        if (DistributionIdentity.IsAlpha)
+        {
+            ValidateAlphaSource(
+                certificateSource,
+                DefaultCertificateSource,
+                planOnly);
+            ValidateAlphaSource(
+                appInstallerSource,
+                DefaultAppInstallerSource,
+                planOnly);
+        }
 
         return new InstallerOptions(
             certificateSource,
@@ -89,6 +126,28 @@ internal sealed record InstallerOptions(
             repairFleetReplayProtection,
             destructiveResetFleetReplayProtection,
             json);
+    }
+
+    private static void ValidateAlphaSource(
+        string source,
+        string exactSource,
+        bool planOnly)
+    {
+        if (Uri.TryCreate(source, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps)
+        {
+            if (!string.Equals(source, exactSource, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Alpha Setup accepts only its embedded exact-tag HTTPS asset URL.");
+            }
+            return;
+        }
+        if (!planOnly)
+        {
+            throw new ArgumentException(
+                "Local alpha assets are accepted only by the non-mutating plan route.");
+        }
     }
 
     public static string HelpText => """
@@ -183,21 +242,25 @@ internal sealed class SetupStagingDirectory : IDisposable
             return new SetupStagingDirectory(unprotectedPath, parent);
         }
 
-        var programFiles = System.IO.Path.GetFullPath(
+        var root = System.IO.Path.GetFullPath(
             Environment.GetFolderPath(
-                Environment.SpecialFolder.ProgramFiles));
+                DistributionIdentity.IsAlpha
+                    ? Environment.SpecialFolder.LocalApplicationData
+                    : Environment.SpecialFolder.ProgramFiles));
         var vendorDirectory = System.IO.Path.Combine(
-            programFiles,
+            root,
             "MesmerPrism");
         var productDirectory = System.IO.Path.Combine(
             vendorDirectory,
-            "QuestIonAbleFileManager");
+            DistributionIdentity.IsAlpha
+                ? "QuestIonAbleFileManagerAlpha"
+                : "QuestIonAbleFileManager");
         var parentDirectory = System.IO.Path.Combine(
             productDirectory,
             "SetupStaging");
         Directory.CreateDirectory(parentDirectory);
         ValidatePathChain(
-            programFiles,
+            root,
             vendorDirectory,
             productDirectory,
             parentDirectory);
@@ -319,7 +382,7 @@ internal sealed class SetupStagingDirectory : IDisposable
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    "The protected Setup staging path escaped Program Files.");
+                    "The protected Setup staging path escaped its distribution root.");
             }
             RejectReparse(fullPath);
         }
@@ -338,9 +401,11 @@ internal sealed class SetupStagingDirectory : IDisposable
 internal sealed class GuidedInstaller
 {
     // Stable signed identity retained from releases published before the rename.
-    internal const string ExpectedPackageName = "MesmerPrism.MetaQuestFileManager";
+    internal static string ExpectedPackageName => DistributionIdentity.PackageIdentity;
     internal const string ExpectedPublisher = "CN=MesmerPrism";
-    private const string DownloadDirectoryName = "QuestIonAbleFileManagerSetup";
+    private static string DownloadDirectoryName => DistributionIdentity.IsAlpha
+        ? "QuestIonAbleFileManagerAlphaSetup"
+        : "QuestIonAbleFileManagerSetup";
 
     public async Task<InstallerResult> RunAsync(
         InstallerOptions options,
@@ -351,8 +416,8 @@ internal sealed class GuidedInstaller
             DownloadDirectoryName,
             protectedMachineStaging: IsAdministrator());
         var stagingDirectory = staging.Path;
-        var certificatePath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.cer");
-        var appInstallerPath = Path.Combine(stagingDirectory, "QuestIonAbleFileManager.appinstaller");
+        var certificatePath = Path.Combine(stagingDirectory, $"{DistributionIdentity.AssetStem}.cer");
+        var appInstallerPath = Path.Combine(stagingDirectory, $"{DistributionIdentity.AssetStem}.appinstaller");
 
         progress?.Report(new InstallerProgress("Preparing setup", "Creating the local staging area.", 5));
         using var httpClient = new HttpClient();
@@ -447,6 +512,21 @@ internal sealed class GuidedInstaller
         {
             throw new InvalidOperationException(
                 $"The feed identity is not the expected public package ({ExpectedPackageName}, {ExpectedPublisher}).");
+        }
+        if (DistributionIdentity.IsAlpha)
+        {
+            var exactPrefix =
+                $"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/{DistributionIdentity.ReleaseTag}/";
+            var feedUri = root.Attribute("Uri")?.Value.Trim() ?? string.Empty;
+            var packageUri = mainPackage.Attribute("Uri")?.Value.Trim() ?? string.Empty;
+            if (!feedUri.StartsWith(exactPrefix, StringComparison.Ordinal) ||
+                !packageUri.StartsWith(exactPrefix, StringComparison.Ordinal) ||
+                feedUri.Contains("/latest/", StringComparison.Ordinal) ||
+                packageUri.Contains("/latest/", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The alpha feed is not bound to its embedded exact release tag.");
+            }
         }
 
         return identity;

@@ -1,5 +1,31 @@
 # Release Workflow
 
+## Alpha Channel
+
+Alpha is a complete-product distribution. The dedicated
+`.github/workflows/release-alpha.yml` accepts only `vX.Y.Z-alpha.N`, maps it
+to numeric Windows version `X.Y.Z.N`, and creates a prerelease with
+`--latest=false`.
+
+Alpha uses identity `MesmerPrism.QuestIonAbleFileManager.Alpha`, display name
+`QuestIonAble File Manager Alpha`, distinct Alpha Setup/MSIX/App Installer/CER
+and ZIP filenames, and build-time `AssemblyMetadata`. Setup stages below
+`%LOCALAPPDATA%\MesmerPrism\QuestIonAbleFileManagerAlpha\SetupStaging` and
+rejects stable feed identity. Alpha URLs use only
+`releases/download/vX.Y.Z-alpha.N/`; `latest/download` is rejected. Stable
+retains its existing identity, filenames, aliases, workflow, and feed.
+
+The protected `alpha` environment supplies the exact Rusty Kiosk alpha tag,
+manifest SHA-256, APK signer SHA-256, both Android package identities, and
+Windows signing inputs. Admission requires a published prerelease, exact tag
+commit, closed five-asset set, matching manifest
+channel/tag/version/URL/revision/signer/hash/package identities, payload
+hashes, and APK signer. Missing protected inputs fail at workflow execution;
+no production fallback keys are committed.
+
+Run `pwsh -NoProfile -File tools/app/Test-AlphaDistributionContract.ps1` for
+the synthetic alpha contract suite.
+
 GitHub Pages is the stable human-facing install surface. GitHub Releases is the
 binary source of truth. Pages links target `releases/latest/download`, so a new
 release does not require new website URLs.

@@ -4,12 +4,34 @@ param(
     [string]$BundleDirectory,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-alpha\.[1-9]\d*)?$')]
     [string]$ExpectedVersion,
 
     [Parameter(Mandatory = $true, ParameterSetName = 'Verify')]
     [ValidatePattern('^[0-9a-fA-F]{40}$')]
     [string]$ExpectedSourceRevision,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [ValidateSet('stable', 'alpha')]
+    [string]$ExpectedChannel = 'stable',
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedTag,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedReleaseUrl,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedMainPackageName,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedHelperPackageName,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedSignerSha256,
+
+    [Parameter(ParameterSetName = 'Verify')]
+    [string]$ExpectedManifestSha256,
 
     [Parameter(ParameterSetName = 'Verify')]
     [string]$ApkSignerPath,
@@ -123,6 +145,42 @@ if ($manifest.schema -ne 'meta.quest.file_manager.rusty_kiosk_bundle.v1' -or $ma
 }
 if ($manifest.version -ne $ExpectedVersion) {
     throw "Rusty Kiosk bundle version '$($manifest.version)' does not match requested release '$ExpectedVersion'."
+}
+if ($ExpectedChannel -eq 'alpha') {
+    if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+-alpha\.\d+$' -or
+        $ExpectedTag -cne "v$ExpectedVersion") {
+        throw 'Alpha Kiosk input requires an exact canonical vX.Y.Z-alpha.N tag/version pair.'
+    }
+    if ($manifest.channel -cne 'alpha' -or
+        $manifest.tag -cne $ExpectedTag) {
+        throw 'The Rusty Kiosk bundle channel/tag does not match the requested alpha prerelease.'
+    }
+    $canonicalReleaseUrl =
+        "https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/$ExpectedTag"
+    if ($ExpectedReleaseUrl -cne $canonicalReleaseUrl -or
+        $manifest.release_url -cne $canonicalReleaseUrl -or
+        $manifest.release_url -match '/latest(?:/|$)') {
+        throw 'The Rusty Kiosk alpha source provenance must be its exact immutable release URL.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ExpectedMainPackageName) -or
+        [string]::IsNullOrWhiteSpace($ExpectedHelperPackageName) -or
+        $manifest.package_identity.main -cne $ExpectedMainPackageName -or
+        $manifest.package_identity.setup_helper -cne $ExpectedHelperPackageName) {
+        throw 'The Rusty Kiosk alpha Android package identities do not match the closed consumer policy.'
+    }
+    if ($ExpectedSignerSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $manifest.signer_sha256 -cne $ExpectedSignerSha256) {
+        throw 'The Rusty Kiosk alpha signer does not match the pinned consumer policy.'
+    }
+    $actualManifestSha256 =
+        (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ExpectedManifestSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $actualManifestSha256 -cne $ExpectedManifestSha256) {
+        throw 'The Rusty Kiosk alpha bundle manifest does not match its pinned release hash.'
+    }
+}
+elseif ($ExpectedTag -and $ExpectedTag -cne "v$ExpectedVersion") {
+    throw 'Stable Kiosk input tag does not match its exact stable version.'
 }
 if ($manifest.source_url -ne $expectedSourceUrl) {
     throw "Unexpected Rusty Kiosk source URL: $($manifest.source_url)"

@@ -382,6 +382,16 @@ A base APK and its split APKs are submitted together as one session.
 4. Add diagnostics bundles and no-device UI verification.
 5. Define portable contracts for future Android and Apple host clients.
 
+## Alpha distribution
+
+The complete Windows product has an isolated alpha channel. Tags are exactly
+`vX.Y.Z-alpha.N`, mapped to numeric MSIX version `X.Y.Z.N`. Alpha uses package
+identity `MesmerPrism.QuestIonAbleFileManager.Alpha`, display name
+`QuestIonAble File Manager Alpha`, distinct Alpha assets, and immutable
+exact-tag URLs. It is always a GitHub prerelease and never latest. Stable
+identity, assets, workflow, and update feed remain unchanged. See
+[the release workflow](docs/release-workflow.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Android Platform Tools and other optional external

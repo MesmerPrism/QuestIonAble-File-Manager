@@ -455,6 +455,13 @@ The signed package identity `MesmerPrism.MetaQuestFileManager` remains stable
 for update continuity. Rebranded releases publish canonical asset names plus
 byte-identical former-name aliases for the documented migration window; do not
 remove those aliases without a separately reviewed update-compatibility release.
+Alpha distribution is a complete-product lane with canonical
+`vX.Y.Z-alpha.N` tags, numeric `X.Y.Z.N` Windows versions, exact-tag URLs, the
+`MesmerPrism.QuestIonAbleFileManager.Alpha` identity, and alpha-only asset and
+staging names. It consumes only an exact published Rusty Kiosk alpha
+prerelease whose channel, tag, revision, URL, signer, manifest hash, Android
+package identities, and closed asset set match protected release policy.
+
 Private signing material is supplied only through the
 Windows certificate store, ignored `artifacts`, and GitHub Actions secrets.
 Never commit private certificate material or generated release assets.

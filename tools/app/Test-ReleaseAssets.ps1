@@ -4,15 +4,19 @@ param(
     [string]$ExpectedPackageName = 'MesmerPrism.MetaQuestFileManager',
     [string]$ExpectedPublisher = 'CN=MesmerPrism',
     [string]$KioskBundleManifestPath,
+    [ValidateSet('stable', 'alpha')]
+    [string]$Channel = 'stable',
+    [string]$ReleaseTag,
     [switch]$AllowSelfIssuedTrustFailure
 )
 
 $ErrorActionPreference = 'Stop'
 $ReleaseDirectory = [IO.Path]::GetFullPath($ReleaseDirectory)
-$setupPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-Setup.exe'
-$packagePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager-win-x64.msix'
-$appInstallerPath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.appinstaller'
-$certificatePath = Join-Path $ReleaseDirectory 'QuestIonAbleFileManager.cer'
+$assetStem = if ($Channel -eq 'alpha') { 'QuestIonAbleFileManager-Alpha' } else { 'QuestIonAbleFileManager' }
+$setupPath = Join-Path $ReleaseDirectory "$assetStem-Setup.exe"
+$packagePath = Join-Path $ReleaseDirectory "$assetStem-win-x64.msix"
+$appInstallerPath = Join-Path $ReleaseDirectory "$assetStem.appinstaller"
+$certificatePath = Join-Path $ReleaseDirectory "$assetStem.cer"
 $providerPath = Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.exe'
 $providerReceiptPath =
     Join-Path $ReleaseDirectory 'questionable-file-manager-kiosk-v2-provider.receipt.json'
@@ -174,7 +178,7 @@ if ($connectivityProviderReceipt.schema -cne
     [int]$connectivityProviderReceipt.stderr_bytes -ne 0) {
     throw 'Fleet connectivity provider artifact receipt does not match the validated executable.'
 }
-foreach ($entry in $legacyAliases.GetEnumerator()) {
+foreach ($entry in $(if ($Channel -eq 'alpha') { @() } else { $legacyAliases.GetEnumerator() })) {
     $legacyPath = Join-Path $ReleaseDirectory $entry.Key
     $canonicalPath = Join-Path $ReleaseDirectory $entry.Value
     if (-not (Test-Path -LiteralPath $legacyPath -PathType Leaf)) {
@@ -183,6 +187,32 @@ foreach ($entry in $legacyAliases.GetEnumerator()) {
     if ((Get-FileHash -LiteralPath $legacyPath -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash) {
         throw "Compatibility alias differs from its canonical asset: $($entry.Key)"
+    }
+}
+
+[xml]$appInstallerDocument = Get-Content -Raw -LiteralPath $appInstallerPath
+$appInstallerNamespace = [Xml.XmlNamespaceManager]::new($appInstallerDocument.NameTable)
+$appInstallerNamespace.AddNamespace('ai', 'http://schemas.microsoft.com/appx/appinstaller/2018')
+$appInstallerRoot = $appInstallerDocument.DocumentElement
+$mainPackage = $appInstallerDocument.SelectSingleNode('/ai:AppInstaller/ai:MainPackage', $appInstallerNamespace)
+if ($null -eq $appInstallerRoot -or $null -eq $mainPackage -or
+    $mainPackage.GetAttribute('Name') -cne $ExpectedPackageName) {
+    throw 'The App Installer feed package identity does not match this distribution channel.'
+}
+if ($Channel -eq 'alpha') {
+    if ($ReleaseTag -notmatch '^v\d+\.\d+\.\d+-alpha\.[1-9]\d*$') {
+        throw 'Alpha release asset validation requires a canonical exact tag.'
+    }
+    $exactPrefix =
+        "https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/"
+    foreach ($uri in @(
+        $appInstallerRoot.GetAttribute('Uri'),
+        $mainPackage.GetAttribute('Uri')
+    )) {
+        if (-not ([string]$uri).StartsWith($exactPrefix, [StringComparison]::Ordinal) -or
+            [string]$uri -match '/latest(?:/|$)') {
+            throw 'Alpha App Installer URLs must bind the exact immutable prerelease tag.'
+        }
     }
 }
 
@@ -238,8 +268,8 @@ finally {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 foreach ($portableArchiveName in @(
-    'QuestIonAbleFileManager-win-x64.zip',
-    'questionable-file-manager-cli-win-x64.zip'
+    $(if ($Channel -eq 'alpha') { 'QuestIonAbleFileManager-Alpha-win-x64.zip' } else { 'QuestIonAbleFileManager-win-x64.zip' }),
+    $(if ($Channel -eq 'alpha') { 'questionable-file-manager-alpha-cli-win-x64.zip' } else { 'questionable-file-manager-cli-win-x64.zip' })
 )) {
     $portableArchivePath = Join-Path $ReleaseDirectory $portableArchiveName
     $portableArchive = [IO.Compression.ZipFile]::OpenRead($portableArchivePath)
@@ -403,10 +433,10 @@ $receipt = [ordered]@{
         stderr_bytes = 0
     }
     required_assets = @(
-        'QuestIonAbleFileManager-Setup.exe',
-        'QuestIonAbleFileManager-win-x64.msix',
-        'QuestIonAbleFileManager.appinstaller',
-        'QuestIonAbleFileManager.cer',
+        "$assetStem-Setup.exe",
+        "$assetStem-win-x64.msix",
+        "$assetStem.appinstaller",
+        "$assetStem.cer",
         'questionable-file-manager-kiosk-v2-provider.exe',
         'questionable-file-manager-kiosk-v2-provider.receipt.json',
         'questionable-file-manager-awake-provider.exe',
@@ -414,7 +444,11 @@ $receipt = [ordered]@{
         'questionable-file-manager-connectivity-provider.exe',
         'questionable-file-manager-connectivity-provider.receipt.json'
     )
-    compatibility_aliases = $legacyAliases
+    compatibility_aliases = if ($Channel -eq 'alpha') {
+        [ordered]@{}
+    } else {
+        $legacyAliases
+    }
 }
 $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $receiptPath -Encoding utf8
 $receipt

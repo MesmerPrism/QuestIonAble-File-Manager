@@ -9,9 +9,34 @@
     <Description>Guided installer and updater for QuestIonAble File Manager.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\assets\branding\QuestIonAbleFileManager.ico</ApplicationIcon>
+    <QfmDistributionChannel Condition="'$(QfmDistributionChannel)' == ''">stable</QfmDistributionChannel>
+    <QfmPackageIdentity Condition="'$(QfmPackageIdentity)' == ''">MesmerPrism.MetaQuestFileManager</QfmPackageIdentity>
+    <QfmDistributionDisplayName Condition="'$(QfmDistributionDisplayName)' == ''">QuestIonAble File Manager</QfmDistributionDisplayName>
+    <QfmSetupAssetStem Condition="'$(QfmSetupAssetStem)' == ''">QuestIonAbleFileManager</QfmSetupAssetStem>
+    <QfmReleaseTag Condition="'$(QfmReleaseTag)' == ''">stable</QfmReleaseTag>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj" />
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.DistributionChannel</_Parameter1>
+      <_Parameter2>$(QfmDistributionChannel)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.PackageIdentity</_Parameter1>
+      <_Parameter2>$(QfmPackageIdentity)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.DistributionDisplayName</_Parameter1>
+      <_Parameter2>$(QfmDistributionDisplayName)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.SetupAssetStem</_Parameter1>
+      <_Parameter2>$(QfmSetupAssetStem)</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>QuestIonAbleFileManager.ReleaseTag</_Parameter1>
+      <_Parameter2>$(QfmReleaseTag)</_Parameter2>
+    </AssemblyAttribute>
   </ItemGroup>
 </Project>
