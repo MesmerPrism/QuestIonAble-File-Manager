@@ -12,12 +12,18 @@ ADB receive only that retained copy. The fixed workspace is single-owner,
 bounded, and cleans any prior crash residue before reuse.
 
 `apk install` repeats inspection immediately before its serial-scoped install.
-It then reads package paths from that exact serial and streams the opened
-installed base APK through a hard byte bound without creating a host copy.
-Confirmation requires exact streamed base-APK SHA-256/size equality; only then
-is the already inspected package/version/signer identity projected as installed.
-ADB exit status alone is not confirmation. The receipt identifies the selected
-serial plus both expected and installed byte evidence.
+It then reads package paths from that exact serial, accepts only a constrained
+package-manager-owned `/data/app/.../*.apk` path, and streams that base APK with
+direct serial-scoped `exec-out cat` through the same 512 MiB hard bound used by
+artifact admission, without a remote shell or host copy. That bound still
+allows a larger stale installed APK inside the supported deployment envelope to
+return its actual streamed size and digest as mismatch evidence. Confirmation
+requires exact streamed base-APK
+SHA-256/size equality; only then is the already inspected
+package/version/signer identity projected as installed. ADB exit status alone
+is not confirmation. JSON output retains the selected serial plus both expected
+and installed byte evidence even when reconciliation remains pending or a later
+launch/observe rejects a mismatch.
 
 `apk launch --serial <quest-serial> --file <path-to.apk>` derives its package
 only from the inspected APK, requires matching installed identity, queries the

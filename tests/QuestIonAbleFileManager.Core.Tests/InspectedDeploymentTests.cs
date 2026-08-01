@@ -78,8 +78,8 @@ public sealed class InspectedDeploymentTests
                 StringComparison.OrdinalIgnoreCase);
             Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
                 ["-s", "QUEST123", "shell", "pm path 'com.example.app'"]));
-            Assert.Contains(runner.Calls, call =>
-                call.Arguments.Count >= 3 && call.Arguments[2] == "exec-out");
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "exec-out", "cat", "/data/app/example/base.apk"]));
             Assert.DoesNotContain(runner.Calls, call =>
                 call.Arguments.Count >= 3 && call.Arguments[2] == "pull");
         }
@@ -257,10 +257,68 @@ public sealed class InspectedDeploymentTests
         try
         {
             var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
-            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            var exception = await Assert.ThrowsAsync<InstalledApkMismatchException>(
                 () => client.LaunchInspectedAppAsync("QUEST123", apk));
             Assert.Contains("digest and size", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(4, exception.Expected.SizeBytes);
+            Assert.Equal(4, exception.Installed.BaseApkSizeBytes);
+            Assert.NotEqual(exception.Expected.Sha256, exception.Installed.BaseApkSha256);
             Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("query-activities"));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_ReturnsInstalledEvidenceWhenInstalledApkIsLargerThanExpected()
+    {
+        var apk = await CreateApkAsync();
+        var installedBytes = new byte[] { 0x50, 0x4b, 0x03, 0x04, 0x05 };
+        var runner = CreateDeploymentRunner(apk, installedBytes: installedBytes);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InstalledApkMismatchException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.Equal(4, exception.Expected.SizeBytes);
+            Assert.Equal(5, exception.Installed.BaseApkSizeBytes);
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(installedBytes)).ToLowerInvariant(),
+                exception.Installed.BaseApkSha256);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Theory]
+    [InlineData("/data/app/example/base.apk$(id).apk")]
+    [InlineData("/data/app/../../data/local/tmp/payload.apk")]
+    public async Task Observe_RejectsPackageManagerPathOutsideConstrainedInstalledApkGrammar(
+        string installedPath)
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, arguments) =>
+        {
+            if (file == "aapt2")
+                return Success("package: name='com.example.app' versionCode='42'\n");
+            if (file == "apksigner")
+                return Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n");
+            if (arguments.Any(value => value.StartsWith("pm path ", StringComparison.Ordinal)))
+                return Success($"package:{installedPath}\n");
+            return Success("");
+        });
+        try
+        {
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .ObserveInspectedAppAsync("QUEST123", apk));
+            Assert.Contains("constrained package-manager", exception.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("exec-out"));
         }
         finally
         {
@@ -408,7 +466,8 @@ public sealed class InspectedDeploymentTests
         string activities = "",
         bool launcherExported = true,
         bool probeInstallImmutability = false,
-        string? packageDump = null)
+        string? packageDump = null,
+        byte[]? installedBytes = null)
     {
         return new FakeRunner((file, arguments) =>
         {
@@ -463,7 +522,7 @@ public sealed class InspectedDeploymentTests
                 return Success("456 123\n");
             }
             return Success("Success\n");
-        }, File.ReadAllBytes(sourceApk));
+        }, installedBytes ?? File.ReadAllBytes(sourceApk));
     }
 
     private static async Task<string> CreateApkAsync()

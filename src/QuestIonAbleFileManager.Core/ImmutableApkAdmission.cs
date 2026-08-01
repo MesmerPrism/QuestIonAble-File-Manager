@@ -2,6 +2,8 @@ namespace QuestIonAbleFileManager.Core;
 
 internal sealed class ImmutableApkAdmission : IDisposable
 {
+    public const long MaximumInspectedApkBytes = 512L * 1024 * 1024;
+
     private static readonly SemaphoreSlim ProcessGate = new(1, 1);
     private static readonly TimeSpan OwnerWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OwnerRetry = TimeSpan.FromMilliseconds(50);
@@ -36,7 +38,7 @@ internal sealed class ImmutableApkAdmission : IDisposable
                 new LocalApiStateLimits(
                     MaximumRetainedOperations: 1,
                     MaximumRunningOperations: 1,
-                    MaximumStagedBytes: 512L * 1024 * 1024,
+                    MaximumStagedBytes: MaximumInspectedApkBytes,
                     MaximumStagedFiles: 1));
             var deadline = DateTimeOffset.UtcNow + OwnerWait;
             while (stager is null)

@@ -151,6 +151,21 @@ public static partial class AndroidInput
         return remotePath.Length > 1 ? remotePath.TrimEnd('/') : remotePath;
     }
 
+    public static string RequireInstalledApkPath(string remotePath)
+    {
+        remotePath = RequireRemotePath(remotePath);
+        var segments = remotePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (!InstalledApkPathPattern().IsMatch(remotePath) ||
+            segments.Any(segment => segment is "." or ".."))
+        {
+            throw new ArgumentException(
+                "The installed APK path is not a constrained package-manager /data/app path.",
+                nameof(remotePath));
+        }
+
+        return remotePath;
+    }
+
     public static string ShellQuote(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
@@ -181,4 +196,7 @@ public static partial class AndroidInput
 
     [GeneratedRegex("^[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)+$", RegexOptions.CultureInvariant)]
     private static partial Regex PackagePattern();
+
+    [GeneratedRegex("^/data/app/(?:[A-Za-z0-9._~+=-]+/)+[A-Za-z0-9._~+=-]+\\.apk$", RegexOptions.CultureInvariant)]
+    private static partial Regex InstalledApkPathPattern();
 }

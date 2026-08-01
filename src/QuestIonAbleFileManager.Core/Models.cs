@@ -98,6 +98,16 @@ public sealed record InstalledApkIdentity(
     string BaseApkSha256,
     long BaseApkSizeBytes);
 
+public sealed class InstalledApkMismatchException(
+    ApkArtifactInspection expected,
+    InstalledApkIdentity installed)
+    : IOException(
+        "Installed package/version/signer/base-APK digest and size readback does not match the inspected APK.")
+{
+    public ApkArtifactInspection Expected { get; } = expected;
+    public InstalledApkIdentity Installed { get; } = installed;
+}
+
 public sealed record InspectedApkInstallResult(
     ApkArtifactInspection Artifact,
     InstalledApkIdentity Installed,

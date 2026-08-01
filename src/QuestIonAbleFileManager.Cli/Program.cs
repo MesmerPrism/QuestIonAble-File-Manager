@@ -64,6 +64,26 @@ internal static class CliApplication
                 _ => throw new ArgumentException($"Unknown command: {arguments[0]}")
             };
         }
+        catch (InstalledApkMismatchException exception)
+        {
+            if (HasFlag(arguments, "--json"))
+            {
+                WriteJson(new
+                {
+                    schema = "questionable.file_manager.installed_apk_mismatch.v1",
+                    status = "mismatch",
+                    reasonCode = "installedArtifactMismatch",
+                    message = exception.Message,
+                    expected = exception.Expected,
+                    installed = exception.Installed
+                });
+            }
+            else
+            {
+                Console.Error.WriteLine($"Installed artifact mismatch: {exception.Message}");
+            }
+            return 1;
+        }
         catch (Exception exception) when (
             exception is ArgumentException or
             FileNotFoundException or
@@ -805,7 +825,7 @@ internal static class CliApplication
                     var execution = await executor.ExecuteAsync(OperatorCommands.InstallApk(serial, apkPath, options));
                     WriteMutationAware(
                         execution,
-                        execution.CommandResult,
+                        execution.InspectedApkInstallResult,
                         HasFlag(arguments, "--json"),
                         () => Console.WriteLine(execution.CommandResult?.StandardOutput.Trim()));
                     return 0;

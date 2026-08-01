@@ -535,7 +535,7 @@ public sealed partial class AdbClient
         var streamed = await StreamInstalledBaseApkAsync(
             serial,
             basePaths[0],
-            expectedArtifact.SizeBytes,
+            ImmutableApkAdmission.MaximumInspectedApkBytes,
             cancellationToken).ConfigureAwait(false);
         var exactBytes = streamed.BytesWritten == expectedArtifact.SizeBytes &&
             string.Equals(streamed.Sha256, expectedArtifact.Sha256, StringComparison.OrdinalIgnoreCase);
@@ -683,8 +683,7 @@ public sealed partial class AdbClient
             !string.Equals(expectedArtifact.Sha256, installed.BaseApkSha256, StringComparison.Ordinal) ||
             expectedArtifact.SizeBytes != installed.BaseApkSizeBytes)
         {
-            throw new InvalidDataException(
-                "Installed package/version/signer/base-APK digest and size readback does not match the inspected APK.");
+            throw new InstalledApkMismatchException(expectedArtifact, installed);
         }
     }
 
@@ -1714,7 +1713,7 @@ public sealed partial class AdbClient
         CancellationToken cancellationToken)
     {
         serial = AndroidInput.RequireSerial(serial);
-        remotePath = AndroidInput.RequireRemotePath(remotePath);
+        remotePath = AndroidInput.RequireInstalledApkPath(remotePath);
         if (maximumBytes is < 1 or > FleetIntegrationContract.MaximumPullBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         if (_runner is not IStreamingCommandRunner streamingRunner)
@@ -1723,23 +1722,7 @@ public sealed partial class AdbClient
                 "The configured command runner does not support bounded installed-APK readback.");
         }
 
-        var invariantMaximum = maximumBytes.ToString(
-            System.Globalization.CultureInfo.InvariantCulture);
-        var command =
-            $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || {{ " +
-            "printf 'qfm-integration:path-absent\\n' >&2; exit 41; }; " +
-            "expected=\"$candidate\"; " +
-            BuildOpenedRemoteHandleProof() +
-            "if [ ! -f /proc/self/fd/3 ]; then " +
-            "printf 'qfm-integration:path-not-file\\n' >&2; exit 44; fi; " +
-            "size=$(stat -c %s -- /proc/self/fd/3) || { " +
-            "printf 'qfm-integration:size-unavailable\\n' >&2; exit 45; }; " +
-            "case \"$size\" in ''|*[!0-9]*) " +
-            "printf 'qfm-integration:size-invalid\\n' >&2; exit 46;; esac; " +
-            $"if [ \"$size\" -gt {invariantMaximum} ]; then " +
-            "printf 'qfm-integration:maximum-bytes\\n' >&2; exit 47; fi; " +
-            "exec cat <&3";
-        var arguments = new[] { "-s", serial, "exec-out", "sh", "-c", command };
+        var arguments = new[] { "-s", serial, "exec-out", "cat", remotePath };
         var result = await streamingRunner.RunToStreamAsync(
             AdbPath,
             arguments,
@@ -1747,10 +1730,6 @@ public sealed partial class AdbClient
             maximumBytes,
             TransferTimeout,
             cancellationToken).ConfigureAwait(false);
-        ThrowFleetRemoteError(
-            result.CommandResult,
-            "Read back installed base APK",
-            maximumBytes);
         if (!string.IsNullOrWhiteSpace(result.CommandResult.StandardError))
         {
             throw new AdbCommandException(
