@@ -39,8 +39,11 @@ repository's latest release has a different tag.
 Labs Setup rejects repair, destructive reset, protected accept, lock-test,
 and security-self-test replay routes before they can read or mutate the stable
 Fleet replay registry, Program Files helper, or per-user state. Normal Labs
-installation also skips stable Fleet replay provisioning. Stable Setup retains
-its existing replay behavior.
+installation also skips stable Fleet replay provisioning. The organizational
+certificate still signs Labs binaries, but its certificate hash is not imported
+into Fleet's separate provisioning-signer authority when that checked-in Fleet
+configuration is intentionally absent. Stable Setup retains its existing replay
+behavior.
 
 Each Labs prerelease also publishes
 `questionable-file-manager-labs-owner-release.json`, a deterministic QFM-owned

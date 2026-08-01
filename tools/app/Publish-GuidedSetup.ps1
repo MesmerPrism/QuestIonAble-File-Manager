@@ -73,29 +73,34 @@ if (-not $Unsigned) {
     if ($coreAssemblies.Count -eq 0) {
         throw 'The Setup publish did not expose its exact Core input assembly for pre-sign validation.'
     }
-    $setupSigningCertificate =
-        [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
-            [IO.Path]::GetFullPath($CertificatePath),
-            $CertificatePassword,
-            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
-    try {
-        $setupSignerSha256 = [Convert]::ToHexString(
-            [Security.Cryptography.SHA256]::HashData(
-                $setupSigningCertificate.RawData)
-        ).ToLowerInvariant()
+    $releaseTrustParameters = @{
+        RequireOfficialRelease = $true
+        ExpectedVersion = $Version
+        ExpectedTag = $ReleaseTag
+        ExpectedProductChannel = $ProductChannel
+        AssemblyPath = @($coreAssemblies.FullName)
+        SetupExecutablePath = $outputExe
     }
-    finally {
-        $setupSigningCertificate.Dispose()
+    if ($ProductChannel -ceq 'stable') {
+        $setupSigningCertificate =
+            [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
+                [IO.Path]::GetFullPath($CertificatePath),
+                $CertificatePassword,
+                [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+        try {
+            $releaseTrustParameters.ExpectedSetupSignerCertificateSha256 =
+                [Convert]::ToHexString(
+                    [Security.Cryptography.SHA256]::HashData(
+                        $setupSigningCertificate.RawData)
+                ).ToLowerInvariant()
+        }
+        finally {
+            $setupSigningCertificate.Dispose()
+        }
     }
     & (Join-Path $repoRoot `
         'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
-        -RequireOfficialRelease `
-        -ExpectedVersion $Version `
-        -ExpectedTag $ReleaseTag `
-        -ExpectedProductChannel $ProductChannel `
-        -AssemblyPath @($coreAssemblies.FullName) `
-        -SetupExecutablePath $outputExe `
-        -ExpectedSetupSignerCertificateSha256 $setupSignerSha256
+        @releaseTrustParameters
     if ($LASTEXITCODE -ne 0) {
         throw 'Unsigned Setup Fleet release trust validation failed.'
     }

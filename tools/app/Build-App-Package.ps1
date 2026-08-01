@@ -17,6 +17,8 @@ param(
     [string]$CertificatePath,
     [string]$CertificatePassword,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
+    [ValidateSet('stable', 'labs')]
+    [string]$ProductChannel = 'stable',
     [string]$PackageVersion,
     [string]$ReleaseTag,
     [switch]$Unsigned
@@ -215,6 +217,7 @@ try {
                 -RequireOfficialRelease `
                 -ExpectedVersion $Version `
                 -ExpectedTag $ReleaseTag `
+                -ExpectedProductChannel $ProductChannel `
                 -PackagePath $packageOutputPath
             if ($LASTEXITCODE -ne 0) {
                 throw 'Unsigned MSIX Fleet release trust validation failed.'

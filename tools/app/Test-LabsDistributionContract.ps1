@@ -391,6 +391,18 @@ Tag: $tag
             [StringComparison]::Ordinal)) {
         throw 'Package build does not restore its temporary MSBuild resolver environment.'
     }
+    foreach ($channelAwareReleaseScript in @(
+        'tools\app\Invoke-ReleaseBuild.ps1',
+        'tools\app\Build-App-Package.ps1'
+    )) {
+        $channelAwareReleaseText = Get-Content -Raw -LiteralPath (
+            Join-Path $repoRoot $channelAwareReleaseScript)
+        if (-not $channelAwareReleaseText.Contains(
+                '-ExpectedProductChannel $ProductChannel',
+                [StringComparison]::Ordinal)) {
+            throw "$channelAwareReleaseScript does not preserve the Labs Fleet trust boundary."
+        }
+    }
 
     $releaseAssetGate = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'tools\app\Test-ReleaseAssets.ps1')
     foreach ($requiredSignerPolicy in @(
@@ -402,6 +414,27 @@ Tag: $tag
         if (-not $releaseAssetGate.Contains($requiredSignerPolicy, [StringComparison]::Ordinal)) {
             throw "Release asset validation is missing reviewed signer policy: $requiredSignerPolicy"
         }
+    }
+
+    $setupPublisher = Get-Content -Raw -LiteralPath (
+        Join-Path $repoRoot 'tools\app\Publish-GuidedSetup.ps1')
+    foreach ($requiredAuthorityBoundary in @(
+        "if (`$ProductChannel -ceq 'stable')",
+        '$releaseTrustParameters.ExpectedSetupSignerCertificateSha256'
+    )) {
+        if (-not $setupPublisher.Contains(
+                $requiredAuthorityBoundary,
+                [StringComparison]::Ordinal)) {
+            throw "Labs Setup publishing is missing the Fleet signer authority boundary: $requiredAuthorityBoundary"
+        }
+    }
+    $fleetReleaseValidator = Get-Content -Raw -LiteralPath (
+        Join-Path $repoRoot `
+            'tools\Test-FleetInstallerReleaseConfiguration.ps1')
+    if (-not $fleetReleaseValidator.Contains(
+            'Labs releases require the checked-in Fleet installer trust block to remain absent.',
+            [StringComparison]::Ordinal)) {
+        throw 'Labs validation does not require absent checked-in Fleet trust.'
     }
 
     $stableWorkflowPath = Join-Path $repoRoot '.github\workflows\release.yml'
@@ -429,13 +462,25 @@ Tag: $tag
     if ($LASTEXITCODE -ne 0) {
         throw 'Synthetic Labs Setup publish failed.'
     }
-    & (Join-Path $repoRoot `
+    $labsFleetValidation = & (Join-Path $repoRoot `
         'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
         -ExpectedVersion 2.3.4 `
         -ExpectedTag v2.3.4-alpha.5 `
         -ExpectedProductChannel labs `
         -SetupExecutablePath (Join-Path $labsSetup `
-            'QuestIonAbleFileManager.Setup.exe') | Out-Null
+            'QuestIonAbleFileManager.Setup.exe') | ConvertFrom-Json
+    if ($labsFleetValidation.compiled_field_count -ne 0 -or
+        $labsFleetValidation.setup_replay_security -cne
+            'stable_routes_disabled_and_rejected' -or
+        $labsFleetValidation.status -cne 'passed') {
+        throw 'Labs Fleet validation did not prove absent trust and disabled stable replay routes.'
+    }
+    Assert-Rejected {
+        & (Join-Path $repoRoot `
+            'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+            -ExpectedProductChannel labs `
+            -ExpectedSetupSignerCertificateSha256 ('f' * 64) | Out-Null
+    } 'stable Fleet provisioning signer authority supplied to Labs'
     foreach ($oldTrack in @('stable', 'labs')) {
         $invalidSetup = Join-Path $testRoot "invalid-track-$oldTrack"
         & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj') --configuration Release --runtime win-x64 --self-contained false -p:QfmProductChannel=labs -p:QfmMaturity=alpha -p:QfmDistributionTrack=$oldTrack -p:QfmReleaseTag=v2.3.4-alpha.5 -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Labs '-p:QfmDistributionDisplayName=QuestIonAble File Manager Labs' -p:QfmSetupAssetStem=QuestIonAbleFileManager-Labs --output $invalidSetup *> $null
