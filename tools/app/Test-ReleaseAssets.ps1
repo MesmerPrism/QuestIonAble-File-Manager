@@ -152,6 +152,12 @@ $connectivityProviderHash =
     (Get-FileHash -LiteralPath $connectivityProviderPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $connectivityProviderLength =
     (Get-Item -LiteralPath $connectivityProviderPath).Length
+$connectivityProviderDirectoryCount =
+    [int]$connectivityProviderReceipt.bundle_extract_directory_count
+$connectivityProviderLaunchDirectories =
+    [int]$connectivityProviderReceipt.bundle_extract_launch_directories
+$connectivityProviderRejectedShapes =
+    [int]$connectivityProviderReceipt.rejected_argument_shapes
 if ($connectivityProviderReceipt.schema -cne
         'questionable.file_manager.fleet_connectivity_provider_artifact_receipt.v1' -or
     $connectivityProviderReceipt.artifact_name -cne
@@ -167,15 +173,21 @@ if ($connectivityProviderReceipt.schema -cne
     $connectivityProviderReceipt.bundle_extract_base -cne 'caller-private-per-launch' -or
     [int]$connectivityProviderReceipt.bundle_extract_file_count -lt 0 -or
     [int]$connectivityProviderReceipt.bundle_extract_file_count -gt 128 -or
-    [int]$connectivityProviderReceipt.bundle_extract_directory_count -lt 0 -or
-    [int]$connectivityProviderReceipt.bundle_extract_directory_count -gt 16 -or
-    [int]$connectivityProviderReceipt.bundle_extract_launch_directories -ne 11 -or
+    $connectivityProviderDirectoryCount -lt 0 -or
+    $connectivityProviderDirectoryCount -gt 16 -or
+    $connectivityProviderLaunchDirectories -lt 1 -or
+    $connectivityProviderLaunchDirectories -gt 16 -or
+    $connectivityProviderDirectoryCount -lt
+        $connectivityProviderLaunchDirectories -or
+    $connectivityProviderLaunchDirectories -ne
+        ($connectivityProviderRejectedShapes + 2) -or
     [long]$connectivityProviderReceipt.bundle_extract_bytes -lt 0 -or
     [long]$connectivityProviderReceipt.bundle_extract_bytes -gt 134217728 -or
     [int]$connectivityProviderReceipt.isolated_top_level_entries_after_run -ne 2 -or
     $connectivityProviderReceipt.ordinary_apphost_isolation_rejected -ne $true -or
     $connectivityProviderReceipt.general_cli_dispatch_unreachable -ne $true -or
-    [int]$connectivityProviderReceipt.rejected_argument_shapes -lt 10 -or
+    $connectivityProviderRejectedShapes -lt 10 -or
+    $connectivityProviderRejectedShapes -gt 14 -or
     $connectivityProviderReceipt.private_profile_required -ne $true -or
     $connectivityProviderReceipt.request_schema -cne
         'rusty.fleet.quest_wifi_adb_owner_invocation.v1' -or
