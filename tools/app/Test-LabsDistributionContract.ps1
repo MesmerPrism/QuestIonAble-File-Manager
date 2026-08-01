@@ -344,6 +344,11 @@ Tag: $tag
         'Compare-Object $expectedAssets $actualAssets',
         'RUSTY_KIOSK_LABS_MANIFEST_SHA256',
         'RUSTY_KIOSK_LABS_SIGNER_SHA256'
+        'secrets.WINDOWS_PACKAGE_CERTIFICATE_BASE64'
+        'secrets.WINDOWS_PACKAGE_CERTIFICATE_PASSWORD'
+        'secrets.WINDOWS_PACKAGE_PUBLISHER'
+        'secrets.WINDOWS_PREVIEW_SETUP_CERTIFICATE_BASE64'
+        'secrets.WINDOWS_PREVIEW_SETUP_CERTIFICATE_PASSWORD'
         'questionable-file-manager-labs-owner-release.json'
         'absence was not proven by a GitHub API 404'
         'Published Labs tag ref does not peel to GITHUB_SHA'
@@ -356,6 +361,21 @@ Tag: $tag
     }
     if ($workflow -match 'releases/latest/download') {
         throw 'Labs workflow contains a mutable latest/download URL.'
+    }
+    if ($workflow -match 'WINDOWS_LABS_') {
+        throw 'Labs workflow requires obsolete channel-specific Windows signing secrets.'
+    }
+
+    $releaseAssetGate = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'tools\app\Test-ReleaseAssets.ps1')
+    foreach ($requiredSignerPolicy in @(
+        "[string]`$ExpectedPublisher = 'CN=MesmerPrism'",
+        "'08A5878AD6E652A94517D2C79144EB2655B0088C'",
+        'setup helper signer does not match the reviewed organizational signer thumbprint',
+        'MSIX signer does not match the reviewed organizational signer thumbprint'
+    )) {
+        if (-not $releaseAssetGate.Contains($requiredSignerPolicy, [StringComparison]::Ordinal)) {
+            throw "Release asset validation is missing reviewed signer policy: $requiredSignerPolicy"
+        }
     }
 
     $stableWorkflowPath = Join-Path $repoRoot '.github\workflows\release.yml'

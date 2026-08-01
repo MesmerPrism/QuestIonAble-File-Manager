@@ -21,8 +21,12 @@ aliases, workflow, default behavior, and feed.
 
 The protected `labs` environment supplies the exact Rusty Kiosk Labs tag,
 bundle-v2 manifest SHA-256, APK signer SHA-256, separate-coinstallable
-core/helper Android package identities, exact Kiosk owner metadata, and Windows
-signing inputs. QFM validates
+core/helper Android package identities, and exact Kiosk owner metadata. Labs
+reuses the repository's Stable Windows signing secrets while retaining its
+distinct package identity, feed, assets, state roots, prerelease policy, and
+protected GitHub environment. Release validation requires both the guided Setup
+EXE and MSIX to use publisher `CN=MesmerPrism` and the reviewed organizational
+signer thumbprint `08A5878AD6E652A94517D2C79144EB2655B0088C`. QFM validates
 the owner's exact `product_channel`, `maturity`, and `distribution_track`
 axes plus source, signer, version, and per-APK facts. Kiosk retains package,
 signer, updater, permissions, and receipt authority.
@@ -324,13 +328,17 @@ eight-field release configuration empty and use only signed synthetic inputs.
 
 ## GitHub Configuration
 
-The release workflow requires these Actions secrets:
+The Stable and Labs release workflows share these repository Actions secrets:
 
 - `WINDOWS_PACKAGE_CERTIFICATE_BASE64`;
 - `WINDOWS_PACKAGE_CERTIFICATE_PASSWORD`;
 - `WINDOWS_PACKAGE_PUBLISHER`;
 - `WINDOWS_PREVIEW_SETUP_CERTIFICATE_BASE64`;
 - `WINDOWS_PREVIEW_SETUP_CERTIFICATE_PASSWORD`.
+
+No `WINDOWS_LABS_*` signing secrets are required. Labs isolation is provided by
+its package/feed/assets/state identities and protected `labs` environment, not
+by a separate Windows certificate.
 
 Optional Actions variables select alternate RFC 3161 timestamp services:
 
