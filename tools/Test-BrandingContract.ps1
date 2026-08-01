@@ -108,6 +108,8 @@ Assert-Contains 'tools\app\Invoke-ReleaseBuild.ps1' "'questionable-file-manager-
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-connectivity-provider.exe'"
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' "'questionable-file-manager-connectivity-provider.receipt.json'"
 Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' 'fleet_connectivity_provider = [ordered]@{'
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' '$connectivityProviderLaunchDirectories -ne'
+Assert-Contains 'tools\app\Test-ReleaseAssets.ps1' '($connectivityProviderRejectedShapes + 2)'
 Assert-Contains 'docs\release-workflow.md' '`questionable-file-manager-connectivity-provider.exe`'
 Assert-Contains 'docs\fleet-integration.md' '`questionable-file-manager-kiosk-v2-provider.exe`'
 Assert-Contains 'tools\Test-FleetKioskV2ProviderArtifact.ps1' '-p:PublishSingleFile=true'
