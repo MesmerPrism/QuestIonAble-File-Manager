@@ -33,6 +33,12 @@ $packageVersion = if ($PackageVersion) { $PackageVersion } else { "$Version.0" }
 if ($packageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') {
     throw "PackageVersion must be a four-part numeric version; got $packageVersion."
 }
+$resolverEnvironmentNames = @(
+    'DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR'
+    'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR'
+    'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER'
+)
+$buildEnvironmentNames = @('DOTNET_ROOT') + $resolverEnvironmentNames
 
 function Find-MSBuild {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -120,6 +126,11 @@ New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
 
 $originalManifestBytes = [IO.File]::ReadAllBytes($manifestPath)
 $originalPackageProjectBytes = [IO.File]::ReadAllBytes($packageProject)
+$originalBuildEnvironment = [ordered]@{}
+foreach ($name in $buildEnvironmentNames) {
+    $originalBuildEnvironment[$name] =
+        [Environment]::GetEnvironmentVariable($name)
+}
 try {
     [xml]$manifest = [Text.Encoding]::UTF8.GetString($originalManifestBytes)
     $namespace = [Xml.XmlNamespaceManager]::new($manifest.NameTable)
@@ -193,11 +204,7 @@ try {
             $packageProject,
             $originalPackageProjectBytes)
         $resolverEnvironment = [ordered]@{}
-        foreach ($name in @(
-            'DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR'
-            'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR'
-            'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER'
-        )) {
+        foreach ($name in $resolverEnvironmentNames) {
             $resolverEnvironment[$name] =
                 [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $null)
@@ -261,6 +268,17 @@ try {
     }
 }
 finally {
-    [IO.File]::WriteAllBytes($manifestPath, $originalManifestBytes)
-    [IO.File]::WriteAllBytes($packageProject, $originalPackageProjectBytes)
+    try {
+        [IO.File]::WriteAllBytes($manifestPath, $originalManifestBytes)
+        [IO.File]::WriteAllBytes(
+            $packageProject,
+            $originalPackageProjectBytes)
+    }
+    finally {
+        foreach ($entry in $originalBuildEnvironment.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable(
+                $entry.Key,
+                $entry.Value)
+        }
+    }
 }
