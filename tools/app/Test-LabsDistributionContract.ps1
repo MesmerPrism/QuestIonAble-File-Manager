@@ -366,6 +366,32 @@ Tag: $tag
         throw 'Labs workflow requires obsolete channel-specific Windows signing secrets.'
     }
 
+    $packageBuilder = Get-Content -Raw -LiteralPath (
+        Join-Path $repoRoot 'tools\app\Build-App-Package.ps1')
+    $environmentCapture = $packageBuilder.IndexOf(
+        '$originalBuildEnvironment = [ordered]@{}',
+        [StringComparison]::Ordinal)
+    $resolverInitialization = $packageBuilder.LastIndexOf(
+        '    Initialize-DotNetSdkResolver',
+        [StringComparison]::Ordinal)
+    $environmentRestore = $packageBuilder.LastIndexOf(
+        'foreach ($entry in $originalBuildEnvironment.GetEnumerator())',
+        [StringComparison]::Ordinal)
+    if ($environmentCapture -lt 0 -or
+        $resolverInitialization -le $environmentCapture -or
+        $environmentRestore -le $resolverInitialization -or
+        -not $packageBuilder.Contains(
+            "'DOTNET_MSBUILD_SDK_RESOLVER_CLI_DIR'",
+            [StringComparison]::Ordinal) -or
+        -not $packageBuilder.Contains(
+            "'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_DIR'",
+            [StringComparison]::Ordinal) -or
+        -not $packageBuilder.Contains(
+            "'DOTNET_MSBUILD_SDK_RESOLVER_SDKS_VER'",
+            [StringComparison]::Ordinal)) {
+        throw 'Package build does not restore its temporary MSBuild resolver environment.'
+    }
+
     $releaseAssetGate = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'tools\app\Test-ReleaseAssets.ps1')
     foreach ($requiredSignerPolicy in @(
         "[string]`$ExpectedPublisher = 'CN=MesmerPrism'",
