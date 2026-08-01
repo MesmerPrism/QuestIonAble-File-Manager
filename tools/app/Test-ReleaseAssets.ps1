@@ -351,7 +351,9 @@ $mainPackage = $appInstaller.SelectSingleNode('/ai:AppInstaller/ai:MainPackage',
 if ($null -eq $mainPackage) { throw 'The App Installer feed is missing MainPackage.' }
 if ($mainPackage.Name -ne $ExpectedPackageName) { throw "Unexpected App Installer package name: $($mainPackage.Name)" }
 if ($mainPackage.Publisher -ne $ExpectedPublisher) { throw "Unexpected App Installer publisher: $($mainPackage.Publisher)" }
-if ($mainPackage.Uri -notmatch '^https://github\.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/') {
+if ($ProductChannel -eq 'stable' -and
+    $mainPackage.Uri -notmatch
+        '^https://github\.com/MesmerPrism/QuestIonAble-File-Manager/releases/latest/download/') {
     throw "The published App Installer MSIX URI is not release-stable: $($mainPackage.Uri)"
 }
 
