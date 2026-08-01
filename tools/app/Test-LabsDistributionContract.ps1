@@ -429,6 +429,13 @@ Tag: $tag
     if ($LASTEXITCODE -ne 0) {
         throw 'Synthetic Labs Setup publish failed.'
     }
+    & (Join-Path $repoRoot `
+        'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
+        -ExpectedVersion 2.3.4 `
+        -ExpectedTag v2.3.4-alpha.5 `
+        -ExpectedProductChannel labs `
+        -SetupExecutablePath (Join-Path $labsSetup `
+            'QuestIonAbleFileManager.Setup.exe') | Out-Null
     foreach ($oldTrack in @('stable', 'labs')) {
         $invalidSetup = Join-Path $testRoot "invalid-track-$oldTrack"
         & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj') --configuration Release --runtime win-x64 --self-contained false -p:QfmProductChannel=labs -p:QfmMaturity=alpha -p:QfmDistributionTrack=$oldTrack -p:QfmReleaseTag=v2.3.4-alpha.5 -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Labs '-p:QfmDistributionDisplayName=QuestIonAble File Manager Labs' -p:QfmSetupAssetStem=QuestIonAbleFileManager-Labs --output $invalidSetup *> $null
