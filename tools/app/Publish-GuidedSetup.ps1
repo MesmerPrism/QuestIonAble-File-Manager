@@ -92,6 +92,7 @@ if (-not $Unsigned) {
         -RequireOfficialRelease `
         -ExpectedVersion $Version `
         -ExpectedTag $ReleaseTag `
+        -ExpectedProductChannel $ProductChannel `
         -AssemblyPath @($coreAssemblies.FullName) `
         -SetupExecutablePath $outputExe `
         -ExpectedSetupSignerCertificateSha256 $setupSignerSha256

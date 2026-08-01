@@ -6,6 +6,9 @@ param(
     [string]$ExpectedVersion,
     [string]$ExpectedTag,
 
+    [ValidateSet('stable', 'labs')]
+    [string]$ExpectedProductChannel = 'stable',
+
     [string[]]$AssemblyPath = @(),
 
     [string]$PackagePath,
@@ -265,6 +268,41 @@ function Assert-SetupSecuritySelfTest {
                 'reconciled_and_prior_backup_retained' -or
             $proof.result_local_paths -cne 'absent') {
             throw 'The Setup replay-security self-test proof is invalid.'
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Assert-LabsSetupReplayIsolation {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = [IO.Path]::GetFullPath($Path)
+    $startInfo.ArgumentList.Add('--fleet-replay-security-self-test')
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw 'The Labs Setup replay-isolation proof did not start.'
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) {
+            $process.Kill($true)
+            throw 'The Labs Setup replay-isolation proof timed out.'
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 2 -or
+            -not [string]::IsNullOrEmpty($stdout) -or
+            $stderr -cne "Setup failed.$([Environment]::NewLine)") {
+            throw 'Labs Setup did not reject the Stable replay-security route exactly.'
         }
     }
     finally {
@@ -616,7 +654,12 @@ try {
         Assert-SetupExecutableProof `
             $SetupExecutablePath `
             $checkedIn
-        Assert-SetupSecuritySelfTest $SetupExecutablePath
+        if ($ExpectedProductChannel -ceq 'labs') {
+            Assert-LabsSetupReplayIsolation $SetupExecutablePath
+        }
+        else {
+            Assert-SetupSecuritySelfTest $SetupExecutablePath
+        }
         $validatedBinaries++
     }
     if (-not [string]::IsNullOrWhiteSpace(
@@ -646,6 +689,16 @@ try {
         exact_compiled_values_match_source = $true
         validated_release_binary_count = $validatedBinaries
         configured_validator_self_test = $true
+        setup_replay_security = if ([string]::IsNullOrWhiteSpace(
+                $SetupExecutablePath)) {
+            'not_evaluated'
+        }
+        elseif ($ExpectedProductChannel -ceq 'labs') {
+            'stable_routes_disabled_and_rejected'
+        }
+        else {
+            'stable_self_test_passed'
+        }
         custom_build_hooks_absent = $true
         status = 'passed'
     } | ConvertTo-Json -Compress
