@@ -48,8 +48,8 @@ jobs:
       - name: Restore Labs signing material
         shell: pwsh
         env:
-          PACKAGE_PFX_BASE64: ${{ secrets.WINDOWS_LABS_PACKAGE_CERTIFICATE_BASE64 }}
-          SETUP_PFX_BASE64: ${{ secrets.WINDOWS_LABS_SETUP_CERTIFICATE_BASE64 }}
+          PACKAGE_PFX_BASE64: ${{ secrets.WINDOWS_PACKAGE_CERTIFICATE_BASE64 }}
+          SETUP_PFX_BASE64: ${{ secrets.WINDOWS_PREVIEW_SETUP_CERTIFICATE_BASE64 }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:PACKAGE_PFX_BASE64) -or
               [string]::IsNullOrWhiteSpace($env:SETUP_PFX_BASE64)) {
@@ -128,9 +128,9 @@ jobs:
       - name: Build and validate complete Labs product
         shell: pwsh
         env:
-          PACKAGE_PASSWORD: ${{ secrets.WINDOWS_LABS_PACKAGE_CERTIFICATE_PASSWORD }}
-          SETUP_PASSWORD: ${{ secrets.WINDOWS_LABS_SETUP_CERTIFICATE_PASSWORD }}
-          PUBLISHER: ${{ secrets.WINDOWS_LABS_PACKAGE_PUBLISHER }}
+          PACKAGE_PASSWORD: ${{ secrets.WINDOWS_PACKAGE_CERTIFICATE_PASSWORD }}
+          SETUP_PASSWORD: ${{ secrets.WINDOWS_PREVIEW_SETUP_CERTIFICATE_PASSWORD }}
+          PUBLISHER: ${{ secrets.WINDOWS_PACKAGE_PUBLISHER }}
           KIOSK_MANIFEST_SHA256: ${{ vars.RUSTY_KIOSK_LABS_MANIFEST_SHA256 }}
           KIOSK_SIGNER_SHA256: ${{ vars.RUSTY_KIOSK_LABS_SIGNER_SHA256 }}
           KIOSK_MAIN_PACKAGE: ${{ vars.RUSTY_KIOSK_LABS_MAIN_PACKAGE }}

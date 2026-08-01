@@ -2,7 +2,11 @@
 param(
     [string]$ReleaseDirectory = (Join-Path $PSScriptRoot '..\..\artifacts\release'),
     [string]$ExpectedPackageName = 'MesmerPrism.MetaQuestFileManager',
+    [ValidateSet('CN=MesmerPrism')]
     [string]$ExpectedPublisher = 'CN=MesmerPrism',
+    [ValidatePattern('^[0-9A-Fa-f]{40}$')]
+    [string]$ExpectedWindowsSignerThumbprint =
+        '08A5878AD6E652A94517D2C79144EB2655B0088C',
     [string]$KioskBundleManifestPath,
     [ValidateSet('stable', 'labs')]
     [string]$ProductChannel = 'stable',
@@ -256,17 +260,27 @@ function Test-Signature {
 
 $setupSignature = Test-Signature -Path $setupPath
 $packageSignature = Test-Signature -Path $packagePath
+$reviewedSignerThumbprint = $ExpectedWindowsSignerThumbprint.ToUpperInvariant()
 if ($setupSignature.SignerSubject -ne $ExpectedPublisher) {
     throw "The setup helper signer was '$($setupSignature.SignerSubject)', expected '$ExpectedPublisher'."
 }
 if ($packageSignature.SignerSubject -ne $ExpectedPublisher) {
     throw "The MSIX signer was '$($packageSignature.SignerSubject)', expected '$ExpectedPublisher'."
 }
+if ($setupSignature.SignerThumbprint.ToUpperInvariant() -cne $reviewedSignerThumbprint) {
+    throw 'The setup helper signer does not match the reviewed organizational signer thumbprint.'
+}
+if ($packageSignature.SignerThumbprint.ToUpperInvariant() -cne $reviewedSignerThumbprint) {
+    throw 'The MSIX signer does not match the reviewed organizational signer thumbprint.'
+}
 
 $certificate = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadCertificateFromFile($certificatePath)
 try {
     if ($certificate.Thumbprint -ne $packageSignature.SignerThumbprint) {
         throw 'The public CER does not match the package signer.'
+    }
+    if ($certificate.Thumbprint.ToUpperInvariant() -cne $reviewedSignerThumbprint) {
+        throw 'The public CER does not match the reviewed organizational signer thumbprint.'
     }
     if ($certificate.Subject -ne $ExpectedPublisher) {
         throw "The public CER publisher was '$($certificate.Subject)', expected '$ExpectedPublisher'."
