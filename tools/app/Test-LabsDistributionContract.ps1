@@ -415,6 +415,20 @@ Tag: $tag
             throw "Release asset validation is missing reviewed signer policy: $requiredSignerPolicy"
         }
     }
+    foreach ($requiredAppInstallerPolicy in @(
+        "if (`$ProductChannel -eq 'labs') {",
+        '"https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/$ReleaseTag/"',
+        "`$appInstallerRoot.GetAttribute('Uri')",
+        "`$mainPackage.GetAttribute('Uri')",
+        "[string]`$uri -match '/latest(?:/|`$)'",
+        "if (`$ProductChannel -eq 'stable' -and"
+    )) {
+        if (-not $releaseAssetGate.Contains(
+                $requiredAppInstallerPolicy,
+                [StringComparison]::Ordinal)) {
+            throw "Release asset validation is missing App Installer channel policy: $requiredAppInstallerPolicy"
+        }
+    }
 
     $setupPublisher = Get-Content -Raw -LiteralPath (
         Join-Path $repoRoot 'tools\app\Publish-GuidedSetup.ps1')
