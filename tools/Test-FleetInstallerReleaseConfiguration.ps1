@@ -19,6 +19,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ExpectedProductChannel -ceq 'labs' -and
+    -not [string]::IsNullOrWhiteSpace(
+        $ExpectedSetupSignerCertificateSha256)) {
+    throw 'Labs Setup validation must not import stable Fleet provisioning signer authority.'
+}
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $project = Join-Path $repoRoot `
     'src\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj'
@@ -570,6 +575,9 @@ foreach ($path in @(
 
 $configurationSourceText = [IO.File]::ReadAllText($configurationSource)
 $checkedIn = Read-CheckedInConfiguration $configurationSourceText
+if ($ExpectedProductChannel -ceq 'labs' -and $checkedIn.Count -ne 0) {
+    throw 'Labs releases require the checked-in Fleet installer trust block to remain absent.'
+}
 $sourceHashBefore = (
     Get-FileHash -LiteralPath $configurationSource -Algorithm SHA256
 ).Hash.ToLowerInvariant()
@@ -662,7 +670,8 @@ try {
         }
         $validatedBinaries++
     }
-    if (-not [string]::IsNullOrWhiteSpace(
+    if ($ExpectedProductChannel -ceq 'stable' -and
+        -not [string]::IsNullOrWhiteSpace(
             $ExpectedSetupSignerCertificateSha256) -and
         $ExpectedSetupSignerCertificateSha256 -cne
             $checkedIn.ProvisioningSetupSignerCertificateSha256) {

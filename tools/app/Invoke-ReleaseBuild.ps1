@@ -88,7 +88,8 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 & (Join-Path $repoRoot 'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
     -RequireOfficialRelease `
     -ExpectedVersion $Version `
-    -ExpectedTag $ReleaseTag
+    -ExpectedTag $ReleaseTag `
+    -ExpectedProductChannel $ProductChannel
 if ($LASTEXITCODE -ne 0) {
     throw 'Fleet installer checked-in release configuration validation failed.'
 }
@@ -261,6 +262,7 @@ Compress-Archive -Path (Join-Path $cliPublish '*') -DestinationPath (Join-Path $
 
 & (Join-Path $PSScriptRoot 'Build-App-Package.ps1') `
     -Version $Version `
+    -ProductChannel $ProductChannel `
     -PackageVersion $packageVersion `
     -ReleaseTag $ReleaseTag `
     -OutputDirectory $OutputDirectory `
