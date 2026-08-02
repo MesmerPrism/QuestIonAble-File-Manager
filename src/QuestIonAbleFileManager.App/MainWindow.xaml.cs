@@ -1062,8 +1062,7 @@ public partial class MainWindow : Window
             ShowInputMessage(exception.Message);
             return;
         }
-        var channelText = (KioskProductChannelBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "stable";
-        var product = RustyKioskProductContract.Parse(channelText);
+        var product = SelectedKioskProduct();
         if (MessageBox.Show(
                 this,
                 $"Use the authorized USB connection to {product.WireName} Rusty Kiosk to mint one short-lived Direct Link session?\n\n" +
@@ -1551,7 +1550,10 @@ public partial class MainWindow : Window
                 }
                 else
                 {
-                    await ExecuteOperatorAsync(OperatorCommands.PullRustyKioskTags(device!.Serial, dialog.FileName));
+                    await ExecuteOperatorAsync(OperatorCommands.PullRustyKioskTags(
+                        device!.Serial,
+                        dialog.FileName,
+                        SelectedKioskProduct()));
                 }
                 StatusText.Text = $"Exported the Rusty Kiosk tag file to {dialog.FileName}.";
             },
@@ -1622,7 +1624,8 @@ public partial class MainWindow : Window
                         OperatorCommands.PushRustyKioskTags(
                             device!.Serial,
                             dialog.FileName,
-                            operatorConfirmed: true));
+                            operatorConfirmed: true,
+                            product: SelectedKioskProduct()));
                     ApplyKioskExecution(execution);
                 }
             },
@@ -1773,7 +1776,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var command = OperatorCommands.InspectRustyKiosk(RequireReadyDevice().Serial);
+        var command = OperatorCommands.InspectRustyKiosk(
+            RequireReadyDevice().Serial,
+            SelectedKioskProduct());
         var execution = await ExecuteOperatorAsync(command);
         ApplyKioskExecution(execution);
         ReconcilePendingMutation(execution);
@@ -1916,8 +1921,15 @@ public partial class MainWindow : Window
                 RequireReadyDevice().Serial,
                 command,
                 value,
-                operatorConfirmed: true));
+                operatorConfirmed: true,
+                product: SelectedKioskProduct()));
         ApplyKioskExecution(execution);
+    }
+
+    private RustyKioskProductContract SelectedKioskProduct()
+    {
+        var channel = (KioskProductChannelBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "stable";
+        return RustyKioskProductContract.Parse(channel);
     }
 
     private async Task SetKeepAwakeAsync(bool enabled)

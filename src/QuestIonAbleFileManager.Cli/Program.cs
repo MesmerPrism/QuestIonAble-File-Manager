@@ -1387,11 +1387,14 @@ internal static class CliApplication
     {
         var action = RequireAction(arguments, "kiosk");
         var serial = RequireOption(arguments, "--serial");
+        var product = RustyKioskProductContract.Parse(
+            GetOption(arguments, "--product-channel") ?? "stable");
         switch (action)
         {
             case "status":
                 {
-                    var execution = await executor.ExecuteAsync(OperatorCommands.InspectRustyKiosk(serial));
+                    var execution = await executor.ExecuteAsync(
+                        OperatorCommands.InspectRustyKiosk(serial, product));
                     if (HasFlag(arguments, "--json"))
                     {
                         WriteJson(new
@@ -1477,7 +1480,8 @@ internal static class CliApplication
                             serial,
                             command,
                             GetOption(arguments, "--value"),
-                            operatorConfirmed: confirmation));
+                            operatorConfirmed: confirmation,
+                            product: product));
                     var result = execution.RustyKioskOperatorResult ??
                         throw new InvalidOperationException("Rusty Kiosk returned no operator result.");
                     if (HasFlag(arguments, "--json"))
@@ -1490,7 +1494,7 @@ internal static class CliApplication
                         WriteMutationReceipt(execution.MutationReceipt);
                     }
 
-                    return result.Accepted ? 0 : 1;
+                    return RustyKioskCliExitCodes.For(execution.MutationReceipt, result.Accepted);
                 }
 
             case "tags":
@@ -1504,7 +1508,7 @@ internal static class CliApplication
                     if (tagsAction == "export")
                     {
                         var output = RequireOption(arguments, "--output");
-                        await executor.ExecuteAsync(OperatorCommands.PullRustyKioskTags(serial, output));
+                        await executor.ExecuteAsync(OperatorCommands.PullRustyKioskTags(serial, output, product));
                         Console.WriteLine(Path.GetFullPath(output));
                         return 0;
                     }
@@ -1514,7 +1518,11 @@ internal static class CliApplication
                         RequireConfirmation(arguments, "--confirm-kiosk-control", "Rusty Kiosk tag-file replacement");
                         var input = RequireOption(arguments, "--file");
                         var execution = await executor.ExecuteAsync(
-                            OperatorCommands.PushRustyKioskTags(serial, input, operatorConfirmed: true));
+                            OperatorCommands.PushRustyKioskTags(
+                                serial,
+                                input,
+                                operatorConfirmed: true,
+                                product: product));
                         WriteMutationAware(
                             execution,
                             execution.RustyKioskOperatorResult,
@@ -1832,12 +1840,12 @@ internal static class CliApplication
               questionable-file-manager wifi enable --serial <usb-serial> [--port 5555] --confirm-wifi-adb
               questionable-file-manager wifi connect --host <quest-ip> [--port 5555] --confirm-wifi-adb
               questionable-file-manager wifi disconnect --host <quest-ip> [--port 5555] --confirm-wifi-adb
-              questionable-file-manager kiosk status --serial <serial> [--json]
+              questionable-file-manager kiosk status --serial <serial> [--product-channel <stable|labs>] [--json]
               questionable-file-manager kiosk install --serial <usb-serial> [--bundle <folder>] --confirm-kiosk-setup
               questionable-file-manager kiosk provision --serial <usb-serial> --confirm-kiosk-setup
-              questionable-file-manager kiosk command --serial <serial> --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
-              questionable-file-manager kiosk tags export --serial <serial> --output <app-tags.json>
-              questionable-file-manager kiosk tags import --serial <serial> --file <app-tags.json> --confirm-kiosk-control
+              questionable-file-manager kiosk command --serial <serial> [--product-channel <stable|labs>] --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
+              questionable-file-manager kiosk tags export --serial <serial> [--product-channel <stable|labs>] --output <app-tags.json>
+              questionable-file-manager kiosk tags import --serial <serial> [--product-channel <stable|labs>] --file <app-tags.json> --confirm-kiosk-control
               questionable-file-manager kiosk-direct status <direct-auth> [--json]
               questionable-file-manager kiosk-direct command <direct-auth> --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
               questionable-file-manager kiosk-direct request-status <direct-auth> --request-id <id> [--json]
@@ -1882,6 +1890,9 @@ internal static class CliApplication
               disable-wifi-adb, enable-accessibility, disable-accessibility,
               passthrough-natural, passthrough-contour, exit-meta-home.
               set-launch-requirement accepts exactly any, wifi-on, or wifi-off.
+              ADB Kiosk routes default to stable; --product-channel labs binds
+              status, command, and tag traffic to the separate Labs identity.
+              Accepted focus commands exit 3 until wearer-visible focus is confirmed.
 
             Direct authentication (choose exactly one):
               --endpoint <http://quest-ip:39873> --credential-stdin

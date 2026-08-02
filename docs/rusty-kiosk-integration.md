@@ -21,6 +21,9 @@ when the bundle is absent or Kiosk is never installed.
    commands, tags, app-owned staging, and optional attended APK installs then
    use the authenticated local link. The PC's ADB installer remains the default
    APK route.
+   The same selected channel also binds every ADB status, command, and tag
+   fallback to that channel's fixed package, activity, permission, and provider
+   authority; a co-installed Stable app cannot receive a Labs operation.
 6. Wi-Fi ADB remains optional. If requested, Meta shows its own permission
    prompt and the PC receipt remains pending until wearer acceptance/readback.
 7. Optionally enable **Ask after restart**. After a reboot, Kiosk can request
@@ -43,7 +46,8 @@ command through either Direct Link or the DUMP-protected ADB host provider.
 Panel, requirement, cancellation, and passthrough commands have typed state
 readback suitable for unattended CLI checks. Keyboard-focus commands remain
 accepted-but-pending because only a wearer can confirm that Meta's keyboard is
-visible and focused on the intended field.
+visible and focused on the intended field. Their ADB CLI exit status is `3`,
+matching the Direct Link pending convention rather than reporting success.
 
 Passive tag files may use `rusty.kiosk.app_tags.v1`; active launch requirements
 upgrade the document to strict `rusty.kiosk.app_tags.v2`. Entries may identify
@@ -84,7 +88,11 @@ protected by caller-held `android.permission.DUMP`. Stable uses
 `content://io.github.mesmerprism.rustykiosk.operator`; Labs uses
 `content://io.github.mesmerprism.rustykiosk.labs.operator`. File Manager chooses
 one fixed product contract rather than accepting a package or authority from
-the device. The host can admit only the fixed Kiosk command enum, query/cancel
+the device. ADB operations carry that exact product contract in the immutable
+operation and reject altered cross-channel identities before dispatch. A
+completed result must match both the generated request ID and requested typed
+command; only a separately requested `status` snapshot may reconcile later
+effective state. The host can admit only the fixed Kiosk command enum, query/cancel
 one exact request lifecycle, transfer the fixed tag document, and issue/revoke
 a bounded direct session. It cannot supply shell text, Android components,
 intent actions, setup endpoints, or headset paths.

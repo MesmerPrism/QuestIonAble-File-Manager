@@ -481,6 +481,19 @@ public sealed record RustyKioskProductContract(
                 nameof(value))
         };
     }
+
+    public static RustyKioskProductContract RequireKnown(RustyKioskProductContract product)
+    {
+        ArgumentNullException.ThrowIfNull(product);
+        var canonical = For(product.Channel);
+        if (product != canonical)
+        {
+            throw new ArgumentException(
+                "Rusty Kiosk product identity must be the exact fixed Stable or Labs contract.",
+                nameof(product));
+        }
+        return canonical;
+    }
 }
 
 public static class RustyKioskContract

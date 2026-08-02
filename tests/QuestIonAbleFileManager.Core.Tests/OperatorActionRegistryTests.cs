@@ -174,6 +174,44 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void AdbKioskCliAndWpfThreadTheSelectedProductAndPendingExitCode()
+    {
+        var root = FindRepositoryRoot();
+        var wpf = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.App",
+            "MainWindow.xaml.cs"));
+        var cli = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var wpfCommand = SourceMethod(
+            wpf,
+            "private async Task RunKioskCommandAsync",
+            "private RustyKioskProductContract SelectedKioskProduct");
+        var wpfProduct = SourceMethod(
+            wpf,
+            "private RustyKioskProductContract SelectedKioskProduct",
+            "private async Task SetKeepAwakeAsync");
+        var cliKiosk = SourceMethod(
+            cli,
+            "private static async Task<int> RunKioskAsync",
+            "private static async Task<int> RunDeviceAsync");
+
+        Assert.Contains("product: SelectedKioskProduct()", wpfCommand, StringComparison.Ordinal);
+        Assert.Contains("KioskProductChannelBox.SelectedItem", wpfProduct, StringComparison.Ordinal);
+        Assert.Contains("--product-channel", cliKiosk, StringComparison.Ordinal);
+        Assert.Contains("OperatorCommands.InspectRustyKiosk(serial, product)", cliKiosk, StringComparison.Ordinal);
+        Assert.Contains("product: product", cliKiosk, StringComparison.Ordinal);
+        Assert.Contains(
+            "RustyKioskCliExitCodes.For(execution.MutationReceipt, result.Accepted)",
+            cliKiosk,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CliHelpUsesOnlyStdinOrAuthorizedUsbAuthentication()
     {
         var root = FindRepositoryRoot();

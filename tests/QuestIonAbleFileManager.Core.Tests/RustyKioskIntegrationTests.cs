@@ -95,6 +95,188 @@ public sealed class RustyKioskIntegrationTests
         Assert.Contains("--confirm-kiosk-control", adb.CliArguments);
     }
 
+    [Theory]
+    [InlineData(RustyKioskProductChannel.Stable, "stable")]
+    [InlineData(RustyKioskProductChannel.Labs, "labs")]
+    public void AdbOperatorFactoriesPreserveExactProductChannel(
+        RustyKioskProductChannel channel,
+        string wireName)
+    {
+        var product = RustyKioskProductContract.For(channel);
+        var commands = new[]
+        {
+            OperatorCommands.InspectRustyKiosk("QUEST123", product),
+            OperatorCommands.InvokeRustyKiosk(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: product),
+            OperatorCommands.PullRustyKioskTags("QUEST123", "tags.json", product)
+        };
+
+        Assert.All(commands, command =>
+        {
+            Assert.Equal(product, command.RustyKioskProduct);
+            var channelIndex = command.CliArguments.ToList().IndexOf("--product-channel");
+            Assert.True(channelIndex >= 0);
+            Assert.Equal(wireName, command.CliArguments[channelIndex + 1]);
+        });
+    }
+
+    [Fact]
+    public void AdbOperatorFactoriesRejectForgedCrossChannelProductIdentity()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var forged = labs with
+        {
+            MainPackage = stable.MainPackage,
+            OperatorAuthority = stable.OperatorAuthority
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.InspectRustyKiosk("QUEST123", forged));
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.InvokeRustyKiosk(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: forged));
+    }
+
+    [Theory]
+    [InlineData(RustyKioskProductChannel.Stable)]
+    [InlineData(RustyKioskProductChannel.Labs)]
+    public async Task AdbStatusAndCommandUseOnlyTheSelectedProductIdentity(
+        RustyKioskProductChannel channel)
+    {
+        var product = RustyKioskProductContract.For(channel);
+        var other = RustyKioskProductContract.For(
+            channel == RustyKioskProductChannel.Stable
+                ? RustyKioskProductChannel.Labs
+                : RustyKioskProductChannel.Stable);
+        string? requestId = null;
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (arguments.Contains("dumpsys", StringComparer.Ordinal) &&
+                arguments.Contains("package", StringComparer.Ordinal))
+            {
+                var package = arguments.Last();
+                var permission = package == product.MainPackage
+                    ? product.SetupControlPermission
+                    : RustyKioskContract.WriteSecureSettingsPermission;
+                return Success($"Package [{package}]\nversionName=0.6.7\n  {permission}: granted=true\n");
+            }
+            if (ProviderMethod(arguments) == "contract")
+            {
+                return Bundle(
+                    $"accepted=true, completed=true, schema={RustyKioskContract.HostOperatorSuccessorSchema}, " +
+                    $"package={product.MainPackage}, product_channel={product.WireName}");
+            }
+            if (ProviderMethod(arguments) == "invoke")
+            {
+                requestId = Extra(arguments, "request_id:s:");
+                return Bundle("accepted=true, completed=true, message=accepted");
+            }
+            if (arguments.Contains("am", StringComparer.Ordinal) &&
+                arguments.Contains("start", StringComparer.Ordinal))
+            {
+                return Success("Status: ok\n");
+            }
+            if (ProviderMethod(arguments) == "result")
+            {
+                var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                    ResultJson(requestId!, "show-apps", wifiAdbEnabled: false)));
+                return Bundle($"accepted=true, completed=true, result_base64={encoded}");
+            }
+            return new CommandResult("adb-test", arguments, 1, string.Empty, "unexpected call", TimeSpan.Zero);
+        });
+        var client = new AdbClient("adb-test", runner);
+
+        var status = await client.GetRustyKioskInstallationStatusAsync("QUEST123", product);
+        var result = await client.InvokeRustyKioskAsync(
+            "QUEST123",
+            RustyKioskCommand.ShowApps,
+            product: product);
+
+        Assert.True(status.MainInstalled);
+        Assert.True(status.SetupHelperInstalled);
+        Assert.True(status.HostOperatorAvailable);
+        Assert.Equal(RustyKioskCommand.ShowApps, result.Command);
+        Assert.Contains(runner.Calls, call => call.Arguments.Contains(product.MainActivity));
+        Assert.All(
+            runner.Calls.Where(call => call.Arguments.Contains("content")),
+            call => Assert.Contains(product.OperatorUri, call.Arguments));
+        Assert.DoesNotContain(
+            runner.Calls.SelectMany(static call => call.Arguments),
+            argument => argument == other.OperatorUri ||
+                        argument == other.MainPackage ||
+                        argument == other.SetupHelperPackage ||
+                        argument == other.MainActivity);
+    }
+
+    [Fact]
+    public async Task AdbCommandRejectsCompletedResultForCrossedTypedCommand()
+    {
+        var product = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        string? requestId = null;
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (ProviderMethod(arguments) == "invoke")
+            {
+                requestId = Extra(arguments, "request_id:s:");
+                return Bundle("accepted=true, completed=true, message=accepted");
+            }
+            if (arguments.Contains("am", StringComparer.Ordinal))
+            {
+                return Success("Status: ok\n");
+            }
+            if (ProviderMethod(arguments) == "result")
+            {
+                var crossed = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                    ResultJson(requestId!, "show-controls", wifiAdbEnabled: false)));
+                return Bundle($"accepted=true, completed=true, result_base64={crossed}");
+            }
+            return new CommandResult("adb-test", arguments, 1, string.Empty, "unexpected call", TimeSpan.Zero);
+        });
+        var client = new AdbClient("adb-test", runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.InvokeRustyKioskAsync(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: product));
+
+        Assert.Contains("typed command", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(RustyKioskCommand.FocusSearch)]
+    [InlineData(RustyKioskCommand.FocusTagEditor)]
+    public void AcceptedFocusCommandsMapPendingReceiptToCliExitThree(RustyKioskCommand command)
+    {
+        var result = RustyKioskOperatorResult.Parse(ResultJson(
+            "pc-focus",
+            command.ToWireName(),
+            wifiAdbEnabled: false,
+            completed: false));
+        var receipt = new OperatorMutationReceipt(
+            "pc-focus",
+            OperatorCommandKind.InvokeRustyKiosk,
+            "QUEST123",
+            command.ToWireName(),
+            OperatorMutationStage.Pending,
+            "Keyboard focus cannot be confirmed remotely.",
+            HeadsetReadback: true,
+            [new OperatorMutationTransition(
+                OperatorMutationStage.Pending,
+                DateTimeOffset.UtcNow,
+                "Pending wearer confirmation")]);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Completed);
+        Assert.False(RustyKioskReadback.Confirms(command, null, result));
+        Assert.Equal(3, RustyKioskCliExitCodes.For(receipt, accepted: true));
+    }
+
     [Fact]
     public void OperatorResultParsesAlpha7StateAndConfirmsTypedReadback()
     {
@@ -111,10 +293,26 @@ public sealed class RustyKioskIntegrationTests
             RustyKioskCommand.SetLaunchRequirement,
             "wifi-on",
             result));
-        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.ShowControls, null, result));
-        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.CancelPendingLaunch, null, result));
-        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.PassthroughContour, null, result));
-        Assert.False(RustyKioskReadback.Confirms(RustyKioskCommand.PassthroughNatural, null, result));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.ShowControls,
+            null,
+            result with { Command = RustyKioskCommand.ShowControls }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.CancelPendingLaunch,
+            null,
+            result with { Command = RustyKioskCommand.CancelPendingLaunch }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.PassthroughContour,
+            null,
+            result with { Command = RustyKioskCommand.PassthroughContour }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.PassthroughNatural,
+            null,
+            result with { Command = RustyKioskCommand.PassthroughNatural }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.ShowApps,
+            null,
+            result with { Command = RustyKioskCommand.ShowControls }));
     }
 
     [Fact]
@@ -419,8 +617,9 @@ public sealed class RustyKioskIntegrationTests
 
         try
         {
-            await client.PushRustyKioskTagFileAsync("QUEST123", input);
-            await client.PullRustyKioskTagFileAsync("QUEST123", output);
+            var product = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+            await client.PushRustyKioskTagFileAsync("QUEST123", input, product: product);
+            await client.PullRustyKioskTagFileAsync("QUEST123", output, product: product);
 
             Assert.Equal(bytes, await File.ReadAllBytesAsync(output));
             Assert.True(runner.Calls.Count(call => call.Arguments.Contains("tag-write-chunk")) >= 2);
@@ -430,7 +629,10 @@ public sealed class RustyKioskIntegrationTests
                 static call =>
                 {
                     Assert.Equal(["-s", "QUEST123"], call.Arguments.Take(2));
-                    Assert.Contains(RustyKioskContract.OperatorUri, call.Arguments);
+                    Assert.Contains(
+                        RustyKioskProductContract.For(RustyKioskProductChannel.Labs).OperatorUri,
+                        call.Arguments);
+                    Assert.DoesNotContain(RustyKioskContract.OperatorUri, call.Arguments);
                     Assert.DoesNotContain("push", call.Arguments);
                     Assert.DoesNotContain(RustyKioskContract.TagFilePath, call.Arguments);
                 });
@@ -442,13 +644,17 @@ public sealed class RustyKioskIntegrationTests
         }
     }
 
-    private static string ResultJson(string requestId, string command, bool wifiAdbEnabled) => $$"""
+    private static string ResultJson(
+        string requestId,
+        string command,
+        bool wifiAdbEnabled,
+        bool completed = true) => $$"""
         {
           "schema": "rusty.kiosk.cli_result.v1",
           "request_id": "{{requestId}}",
           "command": "{{command}}",
           "accepted": true,
-          "completed": true,
+          "completed": {{completed.ToString().ToLowerInvariant()}},
           "message": "Complete",
           "state": {
             "installed_count": 1,
@@ -571,6 +777,12 @@ public sealed class RustyKioskIntegrationTests
 
     private static string Extra(IReadOnlyList<string> arguments, string prefix) =>
         arguments.First(argument => argument.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
+
+    private static string? ProviderMethod(IReadOnlyList<string> arguments)
+    {
+        var index = Array.IndexOf(arguments.ToArray(), "--method");
+        return index >= 0 && index + 1 < arguments.Count ? arguments[index + 1] : null;
+    }
 
     private sealed class RecordingCommandRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler) : ICommandRunner

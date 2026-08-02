@@ -109,12 +109,12 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' wifi disconnect --host <quest-ip> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --product-channel labs --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command passthrough-contour --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command passthrough-contour --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --product-channel labs --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command cancel-pending-launch --confirm-kiosk-control --adb <path-to-adb> --json

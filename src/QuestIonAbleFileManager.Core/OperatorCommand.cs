@@ -65,6 +65,7 @@ public sealed class OperatorCommand
         RustyKioskBundle? rustyKioskBundle = null,
         RustyKioskCommand? rustyKioskCommand = null,
         string? rustyKioskValue = null,
+        RustyKioskProductContract? rustyKioskProduct = null,
         bool? enabled = null,
         int durationMilliseconds = 28_800_000,
         int? cpuLevel = null,
@@ -94,6 +95,7 @@ public sealed class OperatorCommand
         RustyKioskBundle = rustyKioskBundle;
         RustyKioskCommand = rustyKioskCommand;
         RustyKioskValue = rustyKioskValue;
+        RustyKioskProduct = rustyKioskProduct;
         Enabled = enabled;
         DurationMilliseconds = durationMilliseconds;
         CpuLevel = cpuLevel;
@@ -137,6 +139,8 @@ public sealed class OperatorCommand
     public RustyKioskCommand? RustyKioskCommand { get; }
 
     public string? RustyKioskValue { get; }
+
+    public RustyKioskProductContract? RustyKioskProduct { get; }
 
     public bool? Enabled { get; }
 
@@ -686,13 +690,18 @@ public static class OperatorCommands
             rustyKioskBundle: bundle);
     }
 
-    public static OperatorCommand InspectRustyKiosk(string serial)
+    public static OperatorCommand InspectRustyKiosk(
+        string serial,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         return new OperatorCommand(
             OperatorCommandKind.InspectRustyKiosk,
-            ["kiosk", "status", "--serial", serial],
-            serial: serial);
+            ["kiosk", "status", "--serial", serial, "--product-channel", product.WireName],
+            serial: serial,
+            rustyKioskProduct: product);
     }
 
     public static OperatorCommand ProvisionRustyKiosk(
@@ -712,9 +721,12 @@ public static class OperatorCommands
         string serial,
         RustyKioskCommand command,
         string? value = null,
-        bool operatorConfirmed = false)
+        bool operatorConfirmed = false,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         value = command.ValidateValue(value);
 
         if (RequiresKioskControlApproval(command))
@@ -724,7 +736,9 @@ public static class OperatorCommands
 
         var arguments = new List<string>
         {
-            "kiosk", "command", "--serial", serial, "--command", command.ToWireName()
+            "kiosk", "command", "--serial", serial,
+            "--product-channel", product.WireName,
+            "--command", command.ToWireName()
         };
         if (!string.IsNullOrWhiteSpace(value))
         {
@@ -743,28 +757,42 @@ public static class OperatorCommands
             serial: serial,
             operatorConfirmed: operatorConfirmed,
             rustyKioskCommand: command,
-            rustyKioskValue: value);
+            rustyKioskValue: value,
+            rustyKioskProduct: product);
     }
 
-    public static OperatorCommand PullRustyKioskTags(string serial, string outputPath)
+    public static OperatorCommand PullRustyKioskTags(
+        string serial,
+        string outputPath,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         var fullPath = Path.GetFullPath(outputPath);
         return new OperatorCommand(
             OperatorCommandKind.PullRustyKioskTags,
-            ["kiosk", "tags", "export", "--serial", serial, "--output", fullPath],
+            [
+                "kiosk", "tags", "export", "--serial", serial,
+                "--product-channel", product.WireName,
+                "--output", fullPath
+            ],
             serial: serial,
-            localPath: fullPath);
+            localPath: fullPath,
+            rustyKioskProduct: product);
     }
 
     public static OperatorCommand PushRustyKioskTags(
         string serial,
         string inputPath,
-        bool operatorConfirmed = false)
+        bool operatorConfirmed = false,
+        RustyKioskProductContract? product = null)
     {
         RequireApproval(operatorConfirmed, "Rusty Kiosk tag-file replacement");
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         ArgumentException.ThrowIfNullOrWhiteSpace(inputPath);
         var fullPath = Path.GetFullPath(inputPath);
         RustyKioskTagFile.ValidateAndRead(fullPath);
@@ -772,12 +800,14 @@ public static class OperatorCommands
             OperatorCommandKind.PushRustyKioskTags,
             [
                 "kiosk", "tags", "import", "--serial", serial,
+                "--product-channel", product.WireName,
                 "--file", fullPath,
                 "--confirm-kiosk-control"
             ],
             serial: serial,
             localPath: fullPath,
-            operatorConfirmed: true);
+            operatorConfirmed: true,
+            rustyKioskProduct: product);
     }
 
     public static OperatorCommand ReadQuestControls(string serial)
@@ -1301,14 +1331,18 @@ public sealed class OperatorCommandExecutor
             case OperatorCommandKind.InspectRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
+                    var product = command.RustyKioskProduct ??
+                        throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.");
                     var status = await client.GetRustyKioskInstallationStatusAsync(
                         serial,
+                        product,
                         cancellationToken).ConfigureAwait(false);
                     var operatorResult = status.HostOperatorAvailable
                         ? await client.InvokeRustyKioskAsync(
                             serial,
                             RustyKioskCommand.Status,
-                            cancellationToken: cancellationToken).ConfigureAwait(false)
+                            cancellationToken: cancellationToken,
+                            product: product).ConfigureAwait(false)
                         : null;
                     return new OperatorExecutionResult(
                         command,
@@ -1326,17 +1360,21 @@ public sealed class OperatorCommandExecutor
             case OperatorCommandKind.InvokeRustyKiosk:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
+                    var product = command.RustyKioskProduct ??
+                        throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.");
                     var result = await client.InvokeRustyKioskAsync(
                         serial,
                         command.RustyKioskCommand ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk action."),
                         command.RustyKioskValue,
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        product).ConfigureAwait(false);
                     return new OperatorExecutionResult(
                         command,
                         RustyKioskOperatorResult: result,
                         RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
+                            product,
                             cancellationToken).ConfigureAwait(false));
                 }
 
@@ -1346,25 +1384,32 @@ public sealed class OperatorCommandExecutor
                     CommandResult: await client.PullRustyKioskTagFileAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
-                        cancellationToken).ConfigureAwait(false));
+                        cancellationToken,
+                        command.RustyKioskProduct ??
+                            throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.")).ConfigureAwait(false));
 
             case OperatorCommandKind.PushRustyKioskTags:
                 {
                     var serial = Require(command.Serial, nameof(command.Serial));
+                    var product = command.RustyKioskProduct ??
+                        throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.");
                     var transfer = await client.PushRustyKioskTagFileAsync(
                         serial,
                         Require(command.LocalPath, nameof(command.LocalPath)),
-                        cancellationToken).ConfigureAwait(false);
+                        cancellationToken,
+                        product).ConfigureAwait(false);
                     var hotload = await client.InvokeRustyKioskAsync(
                         serial,
                         RustyKioskCommand.Reload,
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                        cancellationToken: cancellationToken,
+                        product: product).ConfigureAwait(false);
                     return new OperatorExecutionResult(
                         command,
                         CommandResult: transfer,
                         RustyKioskOperatorResult: hotload,
                         RustyKioskInstallationStatus: await client.GetRustyKioskInstallationStatusAsync(
                             serial,
+                            product,
                             cancellationToken).ConfigureAwait(false));
                 }
 

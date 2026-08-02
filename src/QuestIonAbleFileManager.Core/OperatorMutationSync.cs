@@ -421,7 +421,9 @@ public static class RustyKioskReadback
         RustyKioskOperatorResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (!result.Accepted || !result.Completed)
+        if (!result.Accepted ||
+            !result.Completed ||
+            (result.Command != command && result.Command != RustyKioskCommand.Status))
         {
             return false;
         }
@@ -466,4 +468,18 @@ public static class RustyKioskReadback
             _ => true
         };
     }
+}
+
+public static class RustyKioskCliExitCodes
+{
+    public static int For(OperatorMutationReceipt? receipt, bool accepted) => receipt?.Stage switch
+    {
+        OperatorMutationStage.Confirmed or OperatorMutationStage.Cancelled => accepted ? 0 : 1,
+        OperatorMutationStage.Pending or
+        OperatorMutationStage.PendingWearerAction or
+        OperatorMutationStage.TimedOut => 3,
+        OperatorMutationStage.Rejected or OperatorMutationStage.Expired => 2,
+        null => accepted ? 0 : 1,
+        _ => 1
+    };
 }

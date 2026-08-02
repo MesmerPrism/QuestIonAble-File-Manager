@@ -1328,27 +1328,37 @@ public sealed partial class AdbClient
             new FileInfo(fullOutputPath).Length);
     }
 
+    public Task<RustyKioskInstallationStatus> GetRustyKioskInstallationStatusAsync(
+        string serial,
+        CancellationToken cancellationToken = default) =>
+        GetRustyKioskInstallationStatusAsync(
+            serial,
+            RustyKioskProductContract.For(RustyKioskProductChannel.Stable),
+            cancellationToken);
+
     public async Task<RustyKioskInstallationStatus> GetRustyKioskInstallationStatusAsync(
         string serial,
+        RustyKioskProductContract product,
         CancellationToken cancellationToken = default)
     {
         serial = AndroidInput.RequireSerial(serial);
-        var mainDump = await GetPackageDumpAsync(serial, RustyKioskContract.MainPackage, cancellationToken)
+        product = RustyKioskProductContract.RequireKnown(product);
+        var mainDump = await GetPackageDumpAsync(serial, product.MainPackage, cancellationToken)
             .ConfigureAwait(false);
-        var helperDump = await GetPackageDumpAsync(serial, RustyKioskContract.SetupHelperPackage, cancellationToken)
+        var helperDump = await GetPackageDumpAsync(serial, product.SetupHelperPackage, cancellationToken)
             .ConfigureAwait(false);
         var mainInstalled = mainDump.Succeeded && mainDump.StandardOutput.Contains(
-            $"Package [{RustyKioskContract.MainPackage}]",
+            $"Package [{product.MainPackage}]",
             StringComparison.Ordinal);
         var helperInstalled = helperDump.Succeeded && helperDump.StandardOutput.Contains(
-            $"Package [{RustyKioskContract.SetupHelperPackage}]",
+            $"Package [{product.SetupHelperPackage}]",
             StringComparison.Ordinal);
         var helperReady = helperInstalled && HasGrantedPermission(
             helperDump.StandardOutput,
             RustyKioskContract.WriteSecureSettingsPermission);
         var controlGranted = mainInstalled && HasGrantedPermission(
             mainDump.StandardOutput,
-            RustyKioskContract.SetupControlPermission);
+            product.SetupControlPermission);
         var operatorAvailable = false;
         if (mainInstalled)
         {
@@ -1356,17 +1366,21 @@ public sealed partial class AdbClient
                 serial,
                 [
                     "shell", "content", "call",
-                    "--uri", RustyKioskContract.OperatorUri,
+                    "--uri", product.OperatorUri,
                     "--method", "contract"
                 ],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false);
+            var schema = BundleValue(contract.StandardOutput, "schema");
+            var successorIdentityMatches =
+                !string.Equals(schema, RustyKioskContract.HostOperatorSuccessorSchema, StringComparison.Ordinal) ||
+                (string.Equals(BundleValue(contract.StandardOutput, "package"), product.MainPackage, StringComparison.Ordinal) &&
+                 string.Equals(BundleValue(contract.StandardOutput, "product_channel"), product.WireName, StringComparison.Ordinal));
             operatorAvailable = contract.Succeeded &&
                 BundleBoolean(contract.StandardOutput, "accepted") == true &&
-                string.Equals(
-                    BundleValue(contract.StandardOutput, "schema"),
-                    RustyKioskContract.HostOperatorSchema,
-                    StringComparison.Ordinal);
+                (string.Equals(schema, RustyKioskContract.HostOperatorSchema, StringComparison.Ordinal) ||
+                 string.Equals(schema, RustyKioskContract.HostOperatorSuccessorSchema, StringComparison.Ordinal)) &&
+                successorIdentityMatches;
         }
 
         return new RustyKioskInstallationStatus(
@@ -1466,16 +1480,19 @@ public sealed partial class AdbClient
         string serial,
         RustyKioskCommand command,
         string? value = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         value = command.ValidateValue(value);
 
         var requestId = "pc-" + Guid.NewGuid().ToString("N");
         var invokeArguments = new List<string>
         {
             "shell", "content", "call",
-            "--uri", RustyKioskContract.OperatorUri,
+            "--uri", product.OperatorUri,
             "--method", "invoke",
             "--arg", command.ToWireName(),
             "--extra", $"request_id:s:{requestId}"
@@ -1504,7 +1521,7 @@ public sealed partial class AdbClient
             serial,
             [
                 "shell", "am", "start", "-W",
-                "-n", RustyKioskContract.MainPackage + "/" + RustyKioskContract.MainActivity,
+                "-n", product.MainActivity,
                 "--es", RustyKioskContract.PendingRequestExtra, requestId
             ],
             ConnectionTimeout,
@@ -1524,7 +1541,7 @@ public sealed partial class AdbClient
                 serial,
                 [
                     "shell", "content", "call",
-                    "--uri", RustyKioskContract.OperatorUri,
+                    "--uri", product.OperatorUri,
                     "--method", "result",
                     "--arg", requestId
                 ],
@@ -1541,6 +1558,10 @@ public sealed partial class AdbClient
                 {
                     throw new InvalidDataException("Rusty Kiosk returned a mismatched request id.");
                 }
+                if (parsed.Command != command)
+                {
+                    throw new InvalidDataException("Rusty Kiosk returned a mismatched typed command.");
+                }
 
                 return parsed;
             }
@@ -1554,9 +1575,12 @@ public sealed partial class AdbClient
     public async Task<CommandResult> PullRustyKioskTagFileAsync(
         string serial,
         string localPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
         var fullLocalPath = Path.GetFullPath(localPath);
         var parent = Path.GetDirectoryName(fullLocalPath);
@@ -1574,6 +1598,7 @@ public sealed partial class AdbClient
             var offset = checked((int)output.Length);
             lastResult = await CallRustyKioskProviderAsync(
                 serial,
+                product,
                 "tag-read",
                 [$"offset:i:{offset}"],
                 cancellationToken).ConfigureAwait(false);
@@ -1618,9 +1643,12 @@ public sealed partial class AdbClient
     public async Task<CommandResult> PushRustyKioskTagFileAsync(
         string serial,
         string localPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         var json = RustyKioskTagFile.ValidateAndRead(localPath);
         var bytes = Encoding.UTF8.GetBytes(json);
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
@@ -1633,6 +1661,7 @@ public sealed partial class AdbClient
         };
         var begin = await CallRustyKioskProviderAsync(
             serial,
+            product,
             "tag-write-begin",
             common,
             cancellationToken).ConfigureAwait(false);
@@ -1645,6 +1674,7 @@ public sealed partial class AdbClient
             var encoded = Convert.ToBase64String(bytes, offset, length);
             var chunk = await CallRustyKioskProviderAsync(
                 serial,
+                product,
                 "tag-write-chunk",
                 [
                     $"transfer_id:s:{transferId}",
@@ -1661,6 +1691,7 @@ public sealed partial class AdbClient
 
         var commit = await CallRustyKioskProviderAsync(
             serial,
+            product,
             "tag-write-commit",
             common,
             cancellationToken).ConfigureAwait(false);
@@ -1837,6 +1868,7 @@ public sealed partial class AdbClient
 
     private async Task<CommandResult> CallRustyKioskProviderAsync(
         string serial,
+        RustyKioskProductContract product,
         string method,
         IReadOnlyList<string> typedExtras,
         CancellationToken cancellationToken)
@@ -1844,7 +1876,7 @@ public sealed partial class AdbClient
         var arguments = new List<string>
         {
             "shell", "content", "call",
-            "--uri", RustyKioskContract.OperatorUri,
+            "--uri", product.OperatorUri,
             "--method", method
         };
         foreach (var extra in typedExtras)
