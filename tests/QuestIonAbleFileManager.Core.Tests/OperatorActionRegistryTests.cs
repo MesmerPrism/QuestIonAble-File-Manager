@@ -387,6 +387,54 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void ApkLaunchJsonWritesOneTypedSanitizedResultAndNoPlaintextStderr()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var launchMethod = SourceMethod(
+            source,
+            "private static async Task<int> RunApkLaunchAsync",
+            "private static async Task<int> RunApkLaunchJsonAsync");
+
+        Assert.Contains("questionable.file_manager.apk_launch_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", launchMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", launchMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", launchMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(launchMethod, "WriteJson\\(").Cast<Match>());
+        Assert.Contains("WriteApkLaunchFailure(exception)", launchMethod, StringComparison.Ordinal);
+
+        var wrapper = SourceMethod(
+            source,
+            "private static async Task<int> RunApkLaunchJsonAsync",
+            "private static int WriteApkLaunchFailure");
+        Assert.Contains("AdbClient.CreateDefault", wrapper, StringComparison.Ordinal);
+        Assert.Contains("WriteApkLaunchFailure(exception)", wrapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", wrapper, StringComparison.Ordinal);
+
+        var failureMethod = SourceMethod(
+            source,
+            "private static int WriteApkLaunchFailure",
+            "private static (string Code, string Message, bool DispatchAttempted, int ExitCode)");
+        Assert.Contains("succeeded = false", failureMethod, StringComparison.Ordinal);
+        Assert.Contains("dispatch_attempted", failureMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
+        Assert.DoesNotContain("Console.Error", failureMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
+
+        var classifier = SourceMethod(
+            source,
+            "ClassifyApkLaunchFailure(Exception exception)",
+            "private static bool IsLauncherStartCommand");
+        Assert.Contains("pre_dispatch_proof_rejected", classifier, StringComparison.Ordinal);
+        Assert.Contains("launch_dispatch_failed", classifier, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", classifier, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SharedBootstrapFixturePinsNoSecretStatusAndGenerationBoundCleanup()
     {
         var root = FindRepositoryRoot();

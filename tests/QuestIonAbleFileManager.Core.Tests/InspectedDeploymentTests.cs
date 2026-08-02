@@ -1,5 +1,6 @@
 using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
@@ -150,6 +151,223 @@ public sealed class InspectedDeploymentTests
             Assert.DoesNotContain(runner.Calls, call =>
                 call.Arguments.Count >= 5 && call.Arguments[3] == "am" &&
                 call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_AcceptsSanitizedCurrentQuestResolverProofWithoutActivityInfoBlock()
+    {
+        var apk = await CreateApkAsync();
+        const string packageName = "io.github.mesmerprism.rustyquest.spatial_camera_panel";
+        const string activityName = ".SpatialCameraPanelActivity";
+        using var fixture = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures",
+            "current-quest-launcher-proof.v1.json")));
+        var queryOutput = fixture.RootElement.GetProperty("query_stdout").GetString()!;
+        var packageDump = fixture.RootElement.GetProperty("package_dump_excerpt").GetString()!;
+        var runner = CreateDeploymentRunner(
+            apk,
+            launcherOutput: queryOutput,
+            activities:
+                $"mResumedActivity: ActivityRecord{{abc u0 {packageName}/{activityName} t1}}\n",
+            packageDump: packageDump,
+            packageName: packageName,
+            activityName: activityName);
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal($"{packageName}/{activityName}", result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", $"{packageName}/{activityName}"]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_AcceptsFullClassActivityHeaderWithExactlyOneExportedTrueField()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            packageDump:
+                "  Activity{abc com.example.app/com.example.app.Main}:\n" +
+                "    enabled=true exported=true directBootAware=false\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal("com.example.app/.Main", result.Component);
+            Assert.Contains(runner.Calls, call => call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" && call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_NormalizesFullQueryAndShorthandResumedReadback()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            launcherOutput: "com.example.app/com.example.app.Main\n",
+            activities:
+                "topResumedActivity=ActivityRecord{abc u0 com.example.app/.Main t1}\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal("com.example.app/com.example.app.Main", result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                [
+                    "-s", "QUEST123", "shell", "am", "start", "-n",
+                    "com.example.app/com.example.app.Main"
+                ]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Theory]
+    [InlineData("other.package/.Main\n")]
+    [InlineData("com.example.app/Main\n")]
+    [InlineData("com.example.app/.Main\nwarning\n")]
+    public async Task Launch_RejectsCrossPackageMalformedOrAdditionalQueryOutput(string queryOutput)
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(apk, launcherOutput: queryOutput);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" && call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "Activity Resolver Table:\n" +
+        "  Non-Data Actions:\n" +
+        "      android.intent.action.MAIN:\n" +
+        "        2c9cd07 com.example.app/.Main filter 6ce9e34\n" +
+        "          Action: \"android.intent.action.MAIN\"\n")]
+    [InlineData(
+        "Activity Resolver Table:\n" +
+        "  Non-Data Actions:\n" +
+        "      android.intent.action.MAIN:\n" +
+        "        2c9cd07 com.example.app/.Other filter 6ce9e34\n" +
+        "          Action: \"android.intent.action.MAIN\"\n" +
+        "          Category: \"android.intent.category.LAUNCHER\"\n")]
+    [InlineData(
+        "Activity Resolver Table:\n" +
+        "  Non-Data Actions:\n" +
+        "      android.intent.action.MAIN:\n" +
+        "        2c9cd07 com.example.app/.Main filter 6ce9e34\n" +
+        "          Action: \"android.intent.action.MAIN\"\n" +
+        "          Category: \"android.intent.category.LAUNCHER\"\n" +
+        "          targetActivity=com.example.app.RealMain\n")]
+    [InlineData(
+        "Activity Resolver Table:\n" +
+        "  Non-Data Actions:\n" +
+        "      android.intent.action.MAIN:\n" +
+        "        2c9cd07 com.example.app/.Main filter 6ce9e34\n" +
+        "          Action: \"android.intent.action.MAIN\"\n" +
+        "          Category: \"android.intent.category.LAUNCHER\"\n" +
+        "        3c9cd08 com.example.app/com.example.app.Main filter 7ce9e35\n" +
+        "          Action: \"android.intent.action.MAIN\"\n" +
+        "          Category: \"android.intent.category.LAUNCHER\"\n")]
+    public async Task Launch_ResolverFallbackRejectsMissingSubstitutedAliasOrAmbiguousProof(
+        string packageDump)
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(apk, packageDump: packageDump);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" && call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_RejectsDuplicateExportFieldsInMatchingDetailRecord()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            packageDump:
+                "  Activity #0 ActivityInfo{abc com.example.app/.Main}\n" +
+                "    exported=true exported=true\n");
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" && call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_StartFailureReturnsNoLaunchResultAfterProof()
+    {
+        var apk = await CreateApkAsync();
+        var startFailure = new CommandResult(
+            "adb",
+            [],
+            1,
+            "",
+            "Error type 3",
+            TimeSpan.Zero);
+        var runner = CreateDeploymentRunner(apk, launchStartResult: startFailure);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+
+            Assert.Equal(1, failure.Result.ExitCode);
+            Assert.True(failure.Result.Arguments.Count >= 6);
+            Assert.Equal("am", failure.Result.Arguments[3]);
+            Assert.Equal("start", failure.Result.Arguments[4]);
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"]));
         }
         finally
         {
@@ -404,25 +622,29 @@ public sealed class InspectedDeploymentTests
     private static FakeRunner CreateDeploymentRunner(
         string sourceApk,
         string? splitName = null,
-        string launcherOutput = "com.example.app/.Main\n",
+        string? launcherOutput = null,
         string activities = "",
         bool launcherExported = true,
         bool probeInstallImmutability = false,
-        string? packageDump = null)
+        string? packageDump = null,
+        string packageName = "com.example.app",
+        string activityName = ".Main",
+        CommandResult? launchStartResult = null)
     {
+        launcherOutput ??= $"{packageName}/{activityName}\n";
         return new FakeRunner((file, arguments) =>
         {
             if (file == "aapt2")
             {
                 return Success(
-                    "package: name='com.example.app' versionCode='42' versionName='1.2.3'" +
+                    $"package: name='{packageName}' versionCode='42' versionName='1.2.3'" +
                     (splitName is null ? "" : $" split='{splitName}'") + "\n");
             }
             if (file == "apksigner")
             {
                 return Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n");
             }
-            if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "pm path 'com.example.app'"]))
+            if (arguments.SequenceEqual(["-s", "QUEST123", "shell", $"pm path '{packageName}'"]))
             {
                 return Success("package:/data/app/example/base.apk\n");
             }
@@ -448,11 +670,18 @@ public sealed class InspectedDeploymentTests
                 return Success(launcherOutput);
             }
             if (arguments.SequenceEqual(
-                    ["-s", "QUEST123", "shell", "dumpsys", "package", "com.example.app"]))
+                    ["-s", "QUEST123", "shell", "dumpsys", "package", packageName]))
             {
                 return Success(packageDump ??
-                    "  Activity #0 ActivityInfo{abc com.example.app/.Main}\n" +
+                    $"  Activity #0 ActivityInfo{{abc {packageName}/{activityName}}}\n" +
                     $"    exported={launcherExported.ToString().ToLowerInvariant()}\n");
+            }
+            if (arguments.Count >= 6 &&
+                arguments[2] == "shell" &&
+                arguments[3] == "am" &&
+                arguments[4] == "start")
+            {
+                return launchStartResult ?? Success("Starting: Intent\n");
             }
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"]))
             {
@@ -471,6 +700,20 @@ public sealed class InspectedDeploymentTests
         var path = Path.Combine(Path.GetTempPath(), $"qfm-public-test-{Guid.NewGuid():N}.apk");
         await File.WriteAllBytesAsync(path, [0x50, 0x4b, 0x03, 0x04]);
         return path;
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current, "QuestIonAbleFileManager.slnx")))
+            {
+                return current;
+            }
+            current = Directory.GetParent(current)?.FullName;
+        }
+        throw new DirectoryNotFoundException("Could not find repository root.");
     }
 
     private static CommandResult Success(string output) =>

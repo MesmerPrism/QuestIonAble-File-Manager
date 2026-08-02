@@ -7,6 +7,8 @@ return await CliApplication.RunAsync(args);
 
 internal static class CliApplication
 {
+    private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -63,6 +65,13 @@ internal static class CliApplication
             if (command == "connectivity-profile")
             {
                 return await RunConnectivityProfileAsync(arguments);
+            }
+            if (command == "apk" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "launch", StringComparison.OrdinalIgnoreCase) &&
+                HasFlag(arguments, "--json"))
+            {
+                return await RunApkLaunchJsonAsync(arguments);
             }
 
             var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
@@ -1098,18 +1107,7 @@ internal static class CliApplication
                 }
 
             case "launch":
-                {
-                    var execution = await executor.ExecuteAsync(
-                        OperatorCommands.LaunchInspectedApp(
-                            RequireOption(arguments, "--serial"),
-                            RequireOption(arguments, "--file")));
-                    WriteMutationAware(
-                        execution,
-                        execution.ResolvedAppLaunchResult,
-                        HasFlag(arguments, "--json"),
-                        () => Console.WriteLine(execution.ResolvedAppLaunchResult?.Component));
-                    return 0;
-                }
+                return await RunApkLaunchAsync(executor, arguments);
 
             case "observe":
                 {
@@ -1188,6 +1186,121 @@ internal static class CliApplication
                 throw new ArgumentException($"Unknown apk action: {action}");
         }
     }
+
+    private static async Task<int> RunApkLaunchAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        var json = HasFlag(arguments, "--json");
+        try
+        {
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.LaunchInspectedApp(
+                    RequireOption(arguments, "--serial"),
+                    RequireOption(arguments, "--file")));
+            if (json)
+            {
+                WriteJson(new
+                {
+                    schema = ApkLaunchResultSchema,
+                    succeeded = true,
+                    mutation = execution.MutationReceipt,
+                    result = execution.ResolvedAppLaunchResult,
+                    failure = (object?)null
+                });
+            }
+            else
+            {
+                Console.WriteLine(execution.ResolvedAppLaunchResult?.Component);
+                WriteMutationReceipt(execution.MutationReceipt);
+            }
+            return 0;
+        }
+        catch (Exception exception) when (json)
+        {
+            return WriteApkLaunchFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkLaunchJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkLaunchAsync(new OperatorCommandExecutor(client), arguments);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkLaunchFailure(exception);
+        }
+    }
+
+    private static int WriteApkLaunchFailure(Exception exception)
+    {
+        var failure = ClassifyApkLaunchFailure(exception);
+        WriteJson(new
+        {
+            schema = ApkLaunchResultSchema,
+            succeeded = false,
+            mutation = (object?)null,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                dispatch_attempted = failure.DispatchAttempted
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, bool DispatchAttempted, int ExitCode)
+        ClassifyApkLaunchFailure(Exception exception)
+    {
+        if (exception is ArgumentException or FileNotFoundException or IOException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The inspected-app launch input could not be admitted.",
+                false,
+                2);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_dispatch_proof_rejected",
+                "Installed identity or launcher safety proof was rejected before dispatch.",
+                false,
+                1);
+        }
+        if (exception is AdbCommandException adbFailure && IsLauncherStartCommand(adbFailure.Result))
+        {
+            return (
+                "launch_dispatch_failed",
+                "The proven launcher component could not be started.",
+                true,
+                1);
+        }
+        if (exception is AdbCommandException)
+        {
+            return (
+                "pre_dispatch_command_failed",
+                "A fixed pre-dispatch device readback command failed.",
+                false,
+                1);
+        }
+        return (
+            "launch_failed",
+            "The inspected-app launch did not complete.",
+            false,
+            1);
+    }
+
+    private static bool IsLauncherStartCommand(CommandResult result) =>
+        result.Arguments.Count >= 5 &&
+        string.Equals(result.Arguments[2], "shell", StringComparison.Ordinal) &&
+        string.Equals(result.Arguments[3], "am", StringComparison.Ordinal) &&
+        string.Equals(result.Arguments[4], "start", StringComparison.Ordinal);
 
     private static async Task<int> RunWifiAsync(
         OperatorCommandExecutor executor,

@@ -572,30 +572,26 @@ public sealed partial class AdbClient
              artifact.Identity.PackageName],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         query.EnsureSuccess("Resolve exported launcher activity");
-        var components = query.StandardOutput.ReplaceLineEndings("\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => line.StartsWith(artifact.Identity.PackageName + "/", StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (components.Length != 1 || !IsSafeComponent(components[0], artifact.Identity.PackageName))
-        {
-            throw new InvalidDataException(
-                "Package must resolve to exactly one exported launcher activity.");
-        }
+        var component = RequireUniqueLauncherComponent(
+            query.StandardOutput,
+            artifact.Identity.PackageName);
         var packageDump = await RunForDeviceAsync(
             serial,
             ["shell", "dumpsys", "package", artifact.Identity.PackageName],
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         packageDump.EnsureSuccess("Prove launcher activity export state");
-        if (!ProvesExportedActivity(packageDump.StandardOutput, components[0]))
+        if (!ProvesExportedActivity(
+                packageDump.StandardOutput,
+                component.Canonical,
+                artifact.Identity.PackageName))
         {
             throw new InvalidDataException(
                 "The resolved launcher activity was not proven exported before dispatch.");
         }
 
         var start = await RunForDeviceAsync(
-            serial, ["shell", "am", "start", "-n", components[0]],
+            serial, ["shell", "am", "start", "-n", component.Wire],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         start.EnsureSuccess("Start resolved launcher activity");
         var activities = await RunForDeviceAsync(
@@ -605,11 +601,13 @@ public sealed partial class AdbClient
         var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
             .Any(line => (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
                           line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
-                         line.Contains(components[0], StringComparison.Ordinal));
+                         (line.Contains(component.Wire, StringComparison.Ordinal) ||
+                          line.Contains(component.Canonical, StringComparison.Ordinal) ||
+                          line.Contains(component.Shorthand, StringComparison.Ordinal)));
         return new ResolvedAppLaunchResult(
             artifact with { Path = reportedPath },
             installed,
-            components[0],
+            component.Wire,
             start,
             observed);
     }
@@ -690,53 +688,282 @@ public sealed partial class AdbClient
         }
     }
 
-    private static bool IsSafeComponent(string component, string packageName)
+    private static ResolvedLauncherComponent RequireUniqueLauncherComponent(
+        string queryOutput,
+        string packageName)
     {
+        var lines = queryOutput.ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length != 1 ||
+            !TryNormalizeComponent(lines[0], packageName, out var canonical))
+        {
+            throw new InvalidDataException(
+                "Package must resolve to exactly one same-package launcher activity.");
+        }
+        var fullActivity = canonical[(canonical.IndexOf('/') + 1)..];
+        var shorthand = packageName + "/" + fullActivity[packageName.Length..];
+        return new ResolvedLauncherComponent(lines[0], canonical, shorthand);
+    }
+
+    private static bool TryNormalizeComponent(
+        string component,
+        string packageName,
+        out string canonical)
+    {
+        canonical = string.Empty;
         var slash = component.IndexOf('/');
-        if (slash <= 0 || slash == component.Length - 1 ||
+        if (slash <= 0 || slash != component.LastIndexOf('/') ||
+            slash == component.Length - 1 ||
             !string.Equals(component[..slash], packageName, StringComparison.Ordinal))
         {
             return false;
         }
         var activity = component[(slash + 1)..];
-        return Regex.IsMatch(activity, @"^(?:\.[A-Za-z0-9_$]+|[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+)$",
-            RegexOptions.CultureInvariant);
+        var fullActivity = activity.StartsWith(".", StringComparison.Ordinal)
+            ? packageName + activity
+            : activity;
+        if (!fullActivity.StartsWith(packageName + ".", StringComparison.Ordinal) ||
+            !Regex.IsMatch(
+                fullActivity,
+                @"^[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+$",
+                RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+        canonical = packageName + "/" + fullActivity;
+        return true;
     }
 
-    private static bool ProvesExportedActivity(string packageDump, string component)
+    private static bool ProvesExportedActivity(
+        string packageDump,
+        string canonicalComponent,
+        string packageName)
     {
         var lines = packageDump.ReplaceLineEndings("\n").Split('\n');
+        var matchingDetails = new List<ActivityExportEvidence>();
         for (var index = 0; index < lines.Length; index++)
         {
-            var activity = Regex.Match(
-                lines[index],
-                @"ActivityInfo\{[^}\r\n]*\s(?<component>[^\s}]+)\}",
-                RegexOptions.CultureInvariant);
+            var activity = MatchActivityDetailHeader(lines[index]);
             if (!activity.Success ||
-                !string.Equals(
+                !TryNormalizeComponent(
                     activity.Groups["component"].Value,
-                    component,
-                    StringComparison.Ordinal))
+                    packageName,
+                    out var detailCanonical) ||
+                !string.Equals(detailCanonical, canonicalComponent, StringComparison.Ordinal))
             {
                 continue;
             }
             var activityIndent = lines[index].TakeWhile(char.IsWhiteSpace).Count();
+            bool? exported = null;
+            var alias = false;
+            var malformed = false;
+            AccumulateActivityFields(lines[index], ref exported, ref alias, ref malformed);
             for (var detail = index + 1; detail < lines.Length; detail++)
             {
                 var value = lines[detail].Trim();
                 if (value.Length == 0) continue;
-                var detailIndent = lines[detail].TakeWhile(char.IsWhiteSpace).Count();
-                if (detailIndent <= activityIndent ||
-                    value.StartsWith("Activity #", StringComparison.Ordinal) ||
-                    value.Contains("ActivityInfo{", StringComparison.Ordinal))
+                if (MatchActivityDetailHeader(lines[detail]).Success)
+                {
                     break;
-                if (value.StartsWith("exported=", StringComparison.Ordinal))
-                    return string.Equals(value, "exported=true", StringComparison.Ordinal);
+                }
+                var detailIndent = lines[detail].TakeWhile(char.IsWhiteSpace).Count();
+                if (detailIndent <= activityIndent || value.StartsWith("Activity #", StringComparison.Ordinal))
+                {
+                    break;
+                }
+                AccumulateActivityFields(value, ref exported, ref alias, ref malformed);
             }
+            matchingDetails.Add(new ActivityExportEvidence(exported, alias, malformed));
+        }
+
+        if (matchingDetails.Count > 1)
+        {
             return false;
         }
-        return false;
+        if (matchingDetails.Count == 1)
+        {
+            var detail = matchingDetails[0];
+            return !detail.Alias && !detail.Malformed && detail.Exported == true;
+        }
+
+        return ProvesLauncherResolverFilter(lines, canonicalComponent, packageName);
     }
+
+    private static Match MatchActivityDetailHeader(string line)
+    {
+        var activityInfo = Regex.Match(
+            line,
+            @"ActivityInfo\{[^}\r\n]*\s(?<component>[A-Za-z][A-Za-z0-9_.]*/[^\s}]+)\}",
+            RegexOptions.CultureInvariant);
+        if (activityInfo.Success)
+        {
+            return activityInfo;
+        }
+        return Regex.Match(
+            line,
+            @"Activity\{[^}\r\n]*\s(?<component>[A-Za-z][A-Za-z0-9_.]*/[^\s}]+)\}:",
+            RegexOptions.CultureInvariant);
+    }
+
+    private static void AccumulateActivityFields(
+        string value,
+        ref bool? exported,
+        ref bool alias,
+        ref bool malformed)
+    {
+        if (Regex.IsMatch(
+                value,
+                @"(?:^|\s)(?:targetActivity=[^\s]+|isAlias=true)(?=\s|$)",
+                RegexOptions.CultureInvariant))
+        {
+            alias = true;
+        }
+        var exportedFields = Regex.Matches(
+            value,
+            @"(?:^|\s)exported=(?<value>true|false)(?=\s|$)",
+            RegexOptions.CultureInvariant);
+        if (exportedFields.Count > 1 || (exportedFields.Count == 1 && exported is not null))
+        {
+            malformed = true;
+        }
+        else if (exportedFields.Count == 1)
+        {
+            exported = string.Equals(
+                exportedFields[0].Groups["value"].Value,
+                "true",
+                StringComparison.Ordinal);
+        }
+    }
+
+    private static bool ProvesLauncherResolverFilter(
+        IReadOnlyList<string> lines,
+        string canonicalComponent,
+        string packageName)
+    {
+        var matches = 0;
+        var inResolverTable = false;
+        var resolverIndent = -1;
+        var inNonDataActions = false;
+        var nonDataIndent = -1;
+        var inMainAction = false;
+        var mainIndent = -1;
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var raw = lines[index];
+            var value = raw.Trim();
+            if (value.Length == 0)
+            {
+                continue;
+            }
+            var indent = raw.TakeWhile(char.IsWhiteSpace).Count();
+            if (string.Equals(value, "Activity Resolver Table:", StringComparison.Ordinal))
+            {
+                inResolverTable = true;
+                resolverIndent = indent;
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (!inResolverTable)
+            {
+                continue;
+            }
+            if (indent <= resolverIndent)
+            {
+                inResolverTable = false;
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (string.Equals(value, "Non-Data Actions:", StringComparison.Ordinal))
+            {
+                inNonDataActions = true;
+                nonDataIndent = indent;
+                inMainAction = false;
+                continue;
+            }
+            if (!inNonDataActions)
+            {
+                continue;
+            }
+            if (indent <= nonDataIndent)
+            {
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (string.Equals(value, "android.intent.action.MAIN:", StringComparison.Ordinal))
+            {
+                inMainAction = true;
+                mainIndent = indent;
+                continue;
+            }
+            if (!inMainAction)
+            {
+                continue;
+            }
+            if (indent <= mainIndent)
+            {
+                inMainAction = false;
+                continue;
+            }
+
+            var entry = Regex.Match(
+                value,
+                @"^[0-9a-fA-F]+\s+(?<component>[^\s]+)\s+filter\s+[0-9a-fA-F]+$",
+                RegexOptions.CultureInvariant);
+            if (!entry.Success ||
+                !TryNormalizeComponent(
+                    entry.Groups["component"].Value,
+                    packageName,
+                    out var resolverCanonical) ||
+                !string.Equals(resolverCanonical, canonicalComponent, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var entryIndent = indent;
+            var hasMain = false;
+            var hasLauncher = false;
+            var alias = false;
+            for (var detail = index + 1; detail < lines.Count; detail++)
+            {
+                var detailRaw = lines[detail];
+                var detailValue = detailRaw.Trim();
+                if (detailValue.Length == 0)
+                {
+                    continue;
+                }
+                if (detailRaw.TakeWhile(char.IsWhiteSpace).Count() <= entryIndent)
+                {
+                    break;
+                }
+                hasMain |= string.Equals(
+                    detailValue,
+                    "Action: \"android.intent.action.MAIN\"",
+                    StringComparison.Ordinal);
+                hasLauncher |= string.Equals(
+                    detailValue,
+                    "Category: \"android.intent.category.LAUNCHER\"",
+                    StringComparison.Ordinal);
+                alias |= detailValue.Contains("targetActivity=", StringComparison.Ordinal) ||
+                    string.Equals(detailValue, "isAlias=true", StringComparison.Ordinal);
+            }
+            if (alias || !hasMain || !hasLauncher)
+            {
+                return false;
+            }
+            matches++;
+        }
+        return matches == 1;
+    }
+
+    private sealed record ResolvedLauncherComponent(
+        string Wire,
+        string Canonical,
+        string Shorthand);
+
+    private sealed record ActivityExportEvidence(bool? Exported, bool Alias, bool Malformed);
 
     public async Task<ApkBundleInstallResult> InstallApkBundleAsync(
         string serial,
