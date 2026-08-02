@@ -145,6 +145,35 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void Alpha7KioskActionsExposeBothSharedTypedRoutes()
+    {
+        string[] expectedIds =
+        [
+            "kiosk.panel.controls",
+            "kiosk.panel.apps",
+            "kiosk.focus.search",
+            "kiosk.focus.tag-editor",
+            "kiosk.launch.requirement.set",
+            "kiosk.launch.pending.cancel",
+            "kiosk.passthrough.natural",
+            "kiosk.passthrough.contour"
+        ];
+
+        foreach (var id in expectedIds)
+        {
+            var action = Assert.Single(OperatorActionRegistry.Actions, action => action.Id == id);
+            Assert.Equal(OperatorActionProjection.SharedCoreCli, action.Projection);
+            Assert.Equal(2, action.Routes.Count);
+            Assert.Contains(action.Routes, route =>
+                route.Id == "direct_link" &&
+                route.CoreOperation == "KioskDirectOperatorCommand.Invoke");
+            Assert.Contains(action.Routes, route =>
+                route.Id == "adb_host_provider" &&
+                route.CoreOperation == "OperatorCommands.InvokeRustyKiosk");
+        }
+    }
+
+    [Fact]
     public void CliHelpUsesOnlyStdinOrAuthorizedUsbAuthentication()
     {
         var root = FindRepositoryRoot();

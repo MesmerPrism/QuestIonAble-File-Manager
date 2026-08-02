@@ -715,16 +715,7 @@ public static class OperatorCommands
         bool operatorConfirmed = false)
     {
         serial = AndroidInput.RequireSerial(serial);
-        value = value?.Trim();
-        if (command.RequiresValue() && string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
-        }
-
-        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
-        }
+        value = command.ValidateValue(value);
 
         if (RequiresKioskControlApproval(command))
         {
@@ -941,6 +932,10 @@ public static class OperatorCommands
         RustyKioskCommand.DisableWifiAdb or
         RustyKioskCommand.EnableAccessibility or
         RustyKioskCommand.DisableAccessibility or
+        RustyKioskCommand.SetLaunchRequirement or
+        RustyKioskCommand.CancelPendingLaunch or
+        RustyKioskCommand.PassthroughNatural or
+        RustyKioskCommand.PassthroughContour or
         RustyKioskCommand.ExitMetaHome;
 
     private static void RequireApproval(bool operatorConfirmed, string operation)

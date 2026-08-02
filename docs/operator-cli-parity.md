@@ -69,7 +69,7 @@ exact tool selection is part of the test.
 | Refresh optional Kiosk status/catalog | `kiosk status` |
 | Install bundled Kiosk pair | `kiosk install --confirm-kiosk-setup` |
 | Provision installed Kiosk helper | `kiosk provision --confirm-kiosk-setup` |
-| Kiosk select/tag/launch/setup action | `kiosk command` |
+| Kiosk panel/focus/select/tag/launch/requirement/passthrough/setup action | `kiosk command` |
 | Export/import Kiosk tag file | `kiosk tags export` / `kiosk tags import` |
 | Connect/refresh Kiosk directly | `kiosk-direct status` |
 | Read/cancel one admitted direct request | `kiosk-direct request-status` / `kiosk-direct request-cancel` |
@@ -112,9 +112,12 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command passthrough-contour --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command cancel-pending-launch --confirm-kiosk-control --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <local-file> --confirm-staging-upload --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <base-apk> --confirm-local-install --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --duration-ms 28800000 --confirm-device-settings --json --adb <path-to-adb>

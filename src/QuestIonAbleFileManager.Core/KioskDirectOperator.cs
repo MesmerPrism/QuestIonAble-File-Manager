@@ -38,12 +38,15 @@ public sealed record KioskDirectOperatorCommand(
     public static KioskDirectOperatorCommand Invoke(
         RustyKioskCommand command,
         string? value,
-        bool operatorConfirmed) =>
-        New(
+        bool operatorConfirmed)
+    {
+        value = command.ValidateValue(value);
+        return New(
             KioskDirectOperatorAction.Invoke,
             KioskCommand: command,
             Value: value,
             OperatorConfirmed: operatorConfirmed);
+    }
 
     public static KioskDirectOperatorCommand RequestStatus(string requestId) =>
         New(KioskDirectOperatorAction.RequestStatus, RequestId: RequireRequestId(requestId));

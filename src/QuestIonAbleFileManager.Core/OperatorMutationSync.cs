@@ -404,6 +404,9 @@ internal static class OperatorMutations
         $"Wi-Fi ADB={(state.WifiAdbEnabled ? "on" : "off")}; " +
         $"Accessibility={(state.AccessibilityEnabled ? "on" : "off")}; " +
         $"guard={(state.GuardArmed ? "armed" : "inactive")}; " +
+        $"requirement={state.SelectedLaunchRequirement?.ToWireName() ?? "unknown"}; " +
+        $"pending-launch={state.PendingRequirementLaunch?.ToString().ToLowerInvariant() ?? "unknown"}; " +
+        $"passthrough={state.PassthroughStyle?.ToWireName() ?? "unknown"}; " +
         $"selected={state.SelectedKey ?? "none"}.";
 
     private static string DisplayOverride(string value) =>
@@ -426,6 +429,9 @@ public static class RustyKioskReadback
         var state = result.State;
         return command switch
         {
+            RustyKioskCommand.ShowControls => state.ControlsOpen == true,
+            RustyKioskCommand.ShowApps => state.ControlsOpen == false,
+            RustyKioskCommand.FocusSearch or RustyKioskCommand.FocusTagEditor => false,
             RustyKioskCommand.RequestWifiAdb => state.WifiAdbEnabled,
             RustyKioskCommand.EnableWifiAfterBoot => state.RequestWifiAdbAfterBoot,
             RustyKioskCommand.DisableWifiAfterBoot => !state.RequestWifiAdbAfterBoot,
@@ -443,6 +449,19 @@ public static class RustyKioskReadback
             RustyKioskCommand.RemoveTag => state.Entries.Any(entry =>
                 string.Equals(entry.Key, state.SelectedKey, StringComparison.Ordinal) &&
                 !entry.Tags.Contains(value ?? string.Empty, StringComparer.OrdinalIgnoreCase)),
+            RustyKioskCommand.SetLaunchRequirement => value is not null &&
+                state.SelectedLaunchRequirement == RustyKioskCommands.ParseLaunchRequirement(value) &&
+                state.Entries.Any(entry =>
+                    string.Equals(entry.Key, state.SelectedKey, StringComparison.Ordinal) &&
+                    entry.LaunchRequirement == state.SelectedLaunchRequirement),
+            RustyKioskCommand.CancelPendingLaunch => state.PendingRequirementLaunch == false,
+            RustyKioskCommand.PassthroughNatural =>
+                state.SystemPassthroughEnabled == true &&
+                state.PassthroughStyle == RustyKioskPassthroughStyle.Natural,
+            RustyKioskCommand.PassthroughContour =>
+                state.SystemPassthroughEnabled == true &&
+                state.PassthroughStyle == RustyKioskPassthroughStyle.ContourLut &&
+                state.PassthroughLutApplied == true,
             RustyKioskCommand.Reload or RustyKioskCommand.ExitMetaHome => true,
             _ => true
         };

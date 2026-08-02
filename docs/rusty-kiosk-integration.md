@@ -16,7 +16,7 @@ when the bundle is absent or Kiosk is never installed.
 5. In the Windows Kiosk tab, select the installed `stable` or `labs` Kiosk
    channel and choose **Connect using authorized USB**. File Manager verifies
    the exact classic-USB serial, installed package/UID, and channel-bound host
-   v3 provider before accepting one ephemeral session. Manual fallback uses the
+   v4 provider before accepting one ephemeral session. Manual fallback uses the
    address and masked credential shown in the headset panel. Routine Kiosk
    commands, tags, app-owned staging, and optional attended APK installs then
    use the authenticated local link. The PC's ADB installer remains the default
@@ -34,11 +34,23 @@ when the bundle is absent or Kiosk is never installed.
 The tab displays the complete Kiosk catalog, including tag-file entries named
 for apps not installed on the current headset. Search matches app name, package,
 or tag. Tag filtering, tag add/remove, normal launch, and guarded launch use the
-same Kiosk command semantics as the headset panel.
+same Kiosk command semantics as the headset panel. The alpha.7-compatible
+surface also switches between Apps and Controls, requests the headset keyboard
+for search or tag editing, applies one strict `any`, `wifi-on`, or `wifi-off`
+launch requirement to the selected app, cancels an unmet-requirement launch,
+and selects natural or contour-LUT passthrough. Each route uses the same typed
+command through either Direct Link or the DUMP-protected ADB host provider.
+Panel, requirement, cancellation, and passthrough commands have typed state
+readback suitable for unattended CLI checks. Keyboard-focus commands remain
+accepted-but-pending because only a wearer can confirm that Meta's keyboard is
+visible and focused on the intended field.
 
-Tag files use `rusty.kiosk.app_tags.v1`. Entries may identify an app by name
-without a package. Import/export uses provider chunks rather than direct access
-to `/sdcard/Android/data`: each chunk is bounded, the complete file is capped at
+Passive tag files may use `rusty.kiosk.app_tags.v1`; active launch requirements
+upgrade the document to strict `rusty.kiosk.app_tags.v2`. Entries may identify
+an app by name without a package. V2 permits at most one `wifi-on` or `wifi-off`
+requirement per unique app identity, while an omitted requirement means `any`.
+Import/export uses provider chunks rather than direct access to
+`/sdcard/Android/data`: each chunk is bounded, the complete file is capped at
 256 KiB, SHA-256 is checked, the schema is parsed, and activation is atomic.
 
 Direct mode also exposes one app-owned staging area. Windows can list, upload,

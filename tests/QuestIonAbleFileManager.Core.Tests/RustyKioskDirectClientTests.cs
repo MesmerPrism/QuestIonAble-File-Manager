@@ -336,7 +336,7 @@ public sealed class RustyKioskDirectClientTests
     {
         const string code = "0123-4567-89AB-CDEF-0123-4567-89";
         var tags = Encoding.UTF8.GetBytes(
-            "{\"schema\":\"rusty.kiosk.app_tags.v1\",\"entries\":[]}");
+            "{\"schema\":\"rusty.kiosk.app_tags.v1\",\"apps\":[]}");
         using var confirmed = new RustyKioskDirectClient(
             RustyKioskDirectEndpoint.Parse("http://192.0.2.1:39873", code),
             new HttpClient(new TagWriteHandler(code)));

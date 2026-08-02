@@ -1836,14 +1836,14 @@ internal static class CliApplication
               questionable-file-manager kiosk install --serial <usb-serial> [--bundle <folder>] --confirm-kiosk-setup
               questionable-file-manager kiosk provision --serial <usb-serial> --confirm-kiosk-setup
               questionable-file-manager kiosk command --serial <serial> --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
-              questionable-file-manager kiosk tags export --serial <serial> --output <app-tags.v1.json>
-              questionable-file-manager kiosk tags import --serial <serial> --file <app-tags.v1.json> --confirm-kiosk-control
+              questionable-file-manager kiosk tags export --serial <serial> --output <app-tags.json>
+              questionable-file-manager kiosk tags import --serial <serial> --file <app-tags.json> --confirm-kiosk-control
               questionable-file-manager kiosk-direct status <direct-auth> [--json]
               questionable-file-manager kiosk-direct command <direct-auth> --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
               questionable-file-manager kiosk-direct request-status <direct-auth> --request-id <id> [--json]
               questionable-file-manager kiosk-direct request-cancel <direct-auth> --request-id <id> --confirm-kiosk-control [--json]
-              questionable-file-manager kiosk-direct tags export <direct-auth> --output <app-tags.v1.json>
-              questionable-file-manager kiosk-direct tags import <direct-auth> --file <app-tags.v1.json> --confirm-kiosk-control
+              questionable-file-manager kiosk-direct tags export <direct-auth> --output <app-tags.json>
+              questionable-file-manager kiosk-direct tags import <direct-auth> --file <app-tags.json> --confirm-kiosk-control
               questionable-file-manager kiosk-direct files list <direct-auth> [--json]
               questionable-file-manager kiosk-direct files upload <direct-auth> --file <path> [--name <staged-name>] --confirm-staging-upload
               questionable-file-manager kiosk-direct files download <direct-auth> --name <staged-name> --output <path> [--overwrite]
@@ -1872,6 +1872,16 @@ internal static class CliApplication
               --grant-runtime-permissions  Ask Android to grant eligible runtime permissions.
               --test-only                  Allow an APK marked testOnly.
               --parallelism <1-16>          Bound concurrent installs (default: 4).
+
+            Rusty Kiosk typed commands:
+              status, show-controls, show-apps, reload, focus-search,
+              focus-tag-editor, set-search, select, filter-tag, add-tag,
+              remove-tag, set-launch-requirement, cancel-pending-launch,
+              launch-normal, launch-kiosk, check-setup-helper, request-wifi-adb,
+              enable-wifi-adb-after-boot, disable-wifi-adb-after-boot,
+              disable-wifi-adb, enable-accessibility, disable-accessibility,
+              passthrough-natural, passthrough-contour, exit-meta-home.
+              set-launch-requirement accepts exactly any, wifi-on, or wifi-off.
 
             Direct authentication (choose exactly one):
               --endpoint <http://quest-ip:39873> --credential-stdin

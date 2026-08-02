@@ -1,0 +1,40 @@
+{
+  "schema": "questionable.file_manager.rusty_kiosk_cli_parity.v1",
+  "source": {
+    "repository": "Rusty Kiosk",
+    "commit": "8b6066ba1abef90c8b55fa5f116304a1a191e75f",
+    "tree": "25eb1df14b53b1de2a21e27a6e184cb09b7ceb15",
+    "path": "app/src/main/java/io/github/mesmerprism/rustykiosk/RustyKioskCliContract.kt"
+  },
+  "max_value_length": 160,
+  "commands": [
+    { "wire_name": "status", "value_rule": "none" },
+    { "wire_name": "show-controls", "value_rule": "none" },
+    { "wire_name": "show-apps", "value_rule": "none" },
+    { "wire_name": "reload", "value_rule": "none" },
+    { "wire_name": "focus-search", "value_rule": "none" },
+    { "wire_name": "focus-tag-editor", "value_rule": "none" },
+    { "wire_name": "set-search", "value_rule": "optional" },
+    { "wire_name": "select", "value_rule": "required" },
+    { "wire_name": "filter-tag", "value_rule": "optional" },
+    { "wire_name": "add-tag", "value_rule": "required" },
+    { "wire_name": "remove-tag", "value_rule": "required" },
+    { "wire_name": "set-launch-requirement", "value_rule": "required" },
+    { "wire_name": "cancel-pending-launch", "value_rule": "none" },
+    { "wire_name": "launch-normal", "value_rule": "none" },
+    { "wire_name": "launch-kiosk", "value_rule": "none" },
+    { "wire_name": "check-setup-helper", "value_rule": "none" },
+    { "wire_name": "request-wifi-adb", "value_rule": "none" },
+    { "wire_name": "enable-wifi-adb-after-boot", "value_rule": "none" },
+    { "wire_name": "disable-wifi-adb-after-boot", "value_rule": "none" },
+    { "wire_name": "disable-wifi-adb", "value_rule": "none" },
+    { "wire_name": "enable-accessibility", "value_rule": "none" },
+    { "wire_name": "disable-accessibility", "value_rule": "none" },
+    { "wire_name": "passthrough-natural", "value_rule": "none" },
+    { "wire_name": "passthrough-contour", "value_rule": "none" },
+    { "wire_name": "exit-meta-home", "value_rule": "none" }
+  ],
+  "launch_requirement_values": ["any", "wifi-on", "wifi-off"],
+  "entry_launch_requirement_field": "launch_requirement",
+  "tag_file_schemas": ["rusty.kiosk.app_tags.v1", "rusty.kiosk.app_tags.v2"]
+}

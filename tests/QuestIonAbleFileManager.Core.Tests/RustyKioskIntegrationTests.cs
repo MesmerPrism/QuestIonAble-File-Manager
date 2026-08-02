@@ -1,11 +1,132 @@
 using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
 public sealed class RustyKioskIntegrationTests
 {
+    [Fact]
+    public void CommandVocabularyExactlyMatchesPinnedKioskAlpha7Contract()
+    {
+        var root = FindRepositoryRoot();
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            root,
+            "references",
+            "rusty-kiosk-cli-command-contract.v1.json")));
+        var expected = fixture.RootElement.GetProperty("commands").EnumerateArray()
+            .Select(command => (
+                WireName: command.GetProperty("wire_name").GetString()!,
+                ValueRule: command.GetProperty("value_rule").GetString()!))
+            .ToArray();
+        var actual = Enum.GetValues<RustyKioskCommand>()
+            .Select(command => (
+                WireName: command.ToWireName(),
+                ValueRule: command.RequiresValue()
+                    ? "required"
+                    : command.AllowsValue() ? "optional" : "none"))
+            .ToArray();
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(
+            RustyKioskContract.MaxCommandValueLength,
+            fixture.RootElement.GetProperty("max_value_length").GetInt32());
+        Assert.Equal(
+            ["any", "wifi-on", "wifi-off"],
+            fixture.RootElement.GetProperty("launch_requirement_values")
+                .EnumerateArray()
+                .Select(static value => value.GetString()!)
+                .ToArray());
+    }
+
+    [Theory]
+    [InlineData("any", RustyKioskLaunchRequirement.Any)]
+    [InlineData("wifi-on", RustyKioskLaunchRequirement.WifiOn)]
+    [InlineData("wifi-off", RustyKioskLaunchRequirement.WifiOff)]
+    public void ActiveLaunchRequirementValuesAreStrictAndRoundTrip(
+        string value,
+        RustyKioskLaunchRequirement expected)
+    {
+        Assert.Equal(value, RustyKioskCommand.SetLaunchRequirement.ValidateValue(value));
+        Assert.Equal(expected, RustyKioskCommands.ParseLaunchRequirement(value));
+        Assert.Equal(value, expected.ToWireName());
+    }
+
+    [Theory]
+    [InlineData("Wifi-On")]
+    [InlineData("wifi_on")]
+    [InlineData("on")]
+    public void ActiveLaunchRequirementValuesFailClosed(string value) =>
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetLaunchRequirement.ValidateValue(value));
+
+    [Fact]
+    public void CommandValuesAreBoundedAndRejectedWhenTheCommandHasNoValue()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetSearch.ValidateValue(new string('x', 161)));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.ShowApps.ValidateValue("unexpected"));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetLaunchRequirement.ValidateValue(null));
+        Assert.Null(RustyKioskCommand.SetSearch.ValidateValue("   "));
+    }
+
+    [Fact]
+    public void Alpha7RequirementUsesTheTypedAdbAndDirectCommandFactories()
+    {
+        var adb = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.SetLaunchRequirement,
+            " wifi-off ",
+            operatorConfirmed: true);
+        var direct = KioskDirectOperatorCommand.Invoke(
+            RustyKioskCommand.SetLaunchRequirement,
+            " wifi-off ",
+            operatorConfirmed: true);
+
+        Assert.Equal("wifi-off", adb.RustyKioskValue);
+        Assert.Equal("wifi-off", direct.Value);
+        Assert.Contains("--command", adb.CliArguments);
+        Assert.Contains("set-launch-requirement", adb.CliArguments);
+        Assert.Contains("--value", adb.CliArguments);
+        Assert.Contains("wifi-off", adb.CliArguments);
+        Assert.Contains("--confirm-kiosk-control", adb.CliArguments);
+    }
+
+    [Fact]
+    public void OperatorResultParsesAlpha7StateAndConfirmsTypedReadback()
+    {
+        var result = RustyKioskOperatorResult.Parse(Alpha7ResultJson());
+
+        Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.Entries.Single().LaunchRequirement);
+        Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.SelectedLaunchRequirement);
+        Assert.Equal(RustyKioskPassthroughStyle.ContourLut, result.State.PassthroughStyle);
+        Assert.True(result.State.ControlsOpen);
+        Assert.False(result.State.PendingRequirementLaunch);
+        Assert.True(result.State.SystemPassthroughEnabled);
+        Assert.True(result.State.PassthroughLutApplied);
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.SetLaunchRequirement,
+            "wifi-on",
+            result));
+        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.ShowControls, null, result));
+        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.CancelPendingLaunch, null, result));
+        Assert.True(RustyKioskReadback.Confirms(RustyKioskCommand.PassthroughContour, null, result));
+        Assert.False(RustyKioskReadback.Confirms(RustyKioskCommand.PassthroughNatural, null, result));
+    }
+
+    [Fact]
+    public void OperatorResultRejectsUnknownAlpha7LaunchRequirement()
+    {
+        var json = Alpha7ResultJson().Replace(
+            "\"launch_requirement\": \"wifi-on\"",
+            "\"launch_requirement\": \"bluetooth-on\"",
+            StringComparison.Ordinal);
+
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(json));
+    }
     [Fact]
     public void OperatorResultPreservesCompleteCatalogIncludingNamedMissingApps()
     {
@@ -193,6 +314,49 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
+    public async Task TagFileValidationAcceptsStrictV2ActiveRequirementAndRejectsUnknownValues()
+    {
+        var validPath = Path.Combine(Path.GetTempPath(), $"rusty-kiosk-tags-v2-{Guid.NewGuid():N}.json");
+        var invalidPath = Path.Combine(Path.GetTempPath(), $"rusty-kiosk-tags-v2-bad-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(
+            validPath,
+            """
+            {
+              "schema": "rusty.kiosk.app_tags.v2",
+              "apps": [
+                {
+                  "name": "Morphovision",
+                  "package": "io.github.mesmerprism.rustyquest.spatial_camera_panel",
+                  "tags": ["360"],
+                  "requirements": ["wifi-on"]
+                }
+              ]
+            }
+            """);
+        await File.WriteAllTextAsync(
+            invalidPath,
+            """
+            {
+              "schema": "rusty.kiosk.app_tags.v2",
+              "apps": [
+                { "name": "Morphovision", "requirements": ["bluetooth-on"] }
+              ]
+            }
+            """);
+
+        try
+        {
+            Assert.Contains("wifi-on", RustyKioskTagFile.ValidateAndRead(validPath), StringComparison.Ordinal);
+            Assert.Throws<InvalidDataException>(() => RustyKioskTagFile.ValidateAndRead(invalidPath));
+        }
+        finally
+        {
+            File.Delete(validPath);
+            File.Delete(invalidPath);
+        }
+    }
+
+    [Fact]
     public async Task TagTransferUsesBoundedProviderChunksAndShaInsteadOfRawAndroidDataPaths()
     {
         var entries = string.Join(
@@ -330,6 +494,74 @@ public sealed class RustyKioskIntegrationTests
           }
         }
         """;
+
+    private static string Alpha7ResultJson() =>
+        """
+        {
+          "schema": "rusty.kiosk.cli_result.v1",
+          "request_id": "pc-alpha7",
+          "command": "set-launch-requirement",
+          "accepted": true,
+          "completed": true,
+          "message": "Complete",
+          "state": {
+            "installed_count": 1,
+            "not_installed_count": 0,
+            "visible_count": 1,
+            "visible_entries_truncated": false,
+            "entries": [
+              {
+                "key": "package:com.example.installed",
+                "name": "Installed Example",
+                "package": "com.example.installed",
+                "installed": true,
+                "launchable": true,
+                "tags": ["calm"],
+                "launch_requirement": "wifi-on"
+              }
+            ],
+            "search": "",
+            "tag_filter": null,
+            "selected_key": "package:com.example.installed",
+            "selected_name": "Installed Example",
+            "selected_package": "com.example.installed",
+            "selected_installed": true,
+            "selected_launchable": true,
+            "wifi_adb_enabled": true,
+            "setup_helper_installed": true,
+            "setup_helper_ready": true,
+            "request_wifi_adb_after_boot": false,
+            "accessibility_enabled": true,
+            "guard_armed": false,
+            "operation_in_progress": null,
+            "status_line": "Ready",
+            "tag_file_path": "/sdcard/Android/data/io.github.mesmerprism.rustykiosk/files/tags/app-tags.v1.json",
+            "search_focus_request": 7,
+            "tag_focus_request": 9,
+            "controls_open": true,
+            "selected_launch_requirement": "wifi-on",
+            "pending_requirement_launch": false,
+            "pending_requirement_launch_id": null,
+            "passthrough_style": "contour-lut",
+            "system_passthrough_enabled": true,
+            "passthrough_lut_applied": true
+          }
+        }
+        """;
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "QuestIonAbleFileManager.slnx")))
+            {
+                return directory.FullName;
+            }
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
 
     private static CommandResult Success(string output) =>
         new("adb-test", [], 0, output, string.Empty, TimeSpan.Zero);

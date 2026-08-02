@@ -1401,9 +1401,45 @@ public partial class MainWindow : Window
 
     private void OnKioskAppSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
-        var tags = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Tags ?? [];
+        var entry = KioskAppsList.SelectedItem as RustyKioskAppEntry;
+        var tags = entry?.Tags ?? [];
         KioskSelectedTagsBox.ItemsSource = tags;
         KioskSelectedTagsBox.SelectedIndex = tags.Count > 0 ? 0 : -1;
+        var requirement = entry?.LaunchRequirement.ToWireName() ?? "any";
+        KioskLaunchRequirementBox.SelectedItem = KioskLaunchRequirementBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, requirement, StringComparison.Ordinal));
+    }
+
+    private async void OnKioskShowControls(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.ShowControls),
+            "Showing Kiosk controls on the headset…");
+
+    private async void OnKioskShowApps(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.ShowApps),
+            "Showing the Kiosk app catalog on the headset…");
+
+    private async void OnKioskFocusSearch(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.FocusSearch),
+            "Requesting headset search focus…");
+
+    private async void OnKioskFocusTagEditor(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                await SelectCurrentKioskEntryAsync();
+                await RunKioskCommandAsync(RustyKioskCommand.FocusTagEditor);
+            },
+            "Requesting headset tag-editor focus…");
     }
 
     private async void OnKioskLaunchNormal(object sender, RoutedEventArgs eventArgs) =>
@@ -1411,6 +1447,37 @@ public partial class MainWindow : Window
 
     private async void OnKioskLaunchGuarded(object sender, RoutedEventArgs eventArgs) =>
         await LaunchSelectedKioskAppAsync(guarded: true);
+
+    private async void OnSetKioskLaunchRequirement(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        if (KioskLaunchRequirementBox.SelectedItem is not ComboBoxItem { Tag: string value })
+        {
+            ShowInputMessage("Choose a launch requirement first.");
+            return;
+        }
+        _ = RustyKioskCommands.ParseLaunchRequirement(value);
+        if (MessageBox.Show(
+                this,
+                $"Set {entry.Name}'s launch requirement to {value}?",
+                "Confirm active launch requirement",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                await SelectCurrentKioskEntryAsync();
+                await RunKioskCommandAsync(RustyKioskCommand.SetLaunchRequirement, value);
+            },
+            $"Setting launch requirement to {value}…");
+    }
 
     private async void OnAddKioskTag(object sender, RoutedEventArgs eventArgs)
     {
@@ -1466,7 +1533,7 @@ public partial class MainWindow : Window
             Filter = "JSON files (*.json)|*.json",
             DefaultExt = ".json",
             AddExtension = true,
-            FileName = "app-tags.v1.json",
+            FileName = "app-tags.json",
             OverwritePrompt = true
         };
         if (dialog.ShowDialog(this) != true)
@@ -1591,6 +1658,21 @@ public partial class MainWindow : Window
         await ConfirmAndRunKioskControlAsync(
             RustyKioskCommand.DisableAccessibility,
             "Disable Rusty Kiosk's Accessibility watchdog?");
+
+    private async void OnCancelKioskPendingLaunch(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.CancelPendingLaunch,
+            "Cancel the pending launch that is waiting for its active Wi-Fi requirement?");
+
+    private async void OnKioskPassthroughNatural(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.PassthroughNatural,
+            "Switch Rusty Kiosk to natural system passthrough?");
+
+    private async void OnKioskPassthroughContour(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.PassthroughContour,
+            "Switch Rusty Kiosk to its contour-LUT passthrough style?");
 
     private async void OnEnableKeepAwake(object sender, RoutedEventArgs eventArgs) =>
         await SetKeepAwakeAsync(enabled: true);
@@ -1900,6 +1982,9 @@ public partial class MainWindow : Window
         KioskWifiStatusText.Text = "Wireless debugging: not checked";
         KioskAutoWifiStatusText.Text = "Request after restart: not checked";
         KioskAccessibilityStatusText.Text = "Accessibility guard: not checked";
+        KioskPanelStatusText.Text = "Headset panel: not checked";
+        KioskPendingLaunchStatusText.Text = "Pending requirement launch: not checked";
+        KioskPassthroughStatusText.Text = "Passthrough: not checked";
         HeadsetBatteryText.Text = "Headset battery: not checked";
         ControllerBatteryText.Text = "Controllers: not checked";
         KeepAwakeStatusText.Text = "Keep awake: not checked";
@@ -1939,6 +2024,23 @@ public partial class MainWindow : Window
         KioskAccessibilityStatusText.Text =
             $"Accessibility guard: {(kiosk.State.AccessibilityEnabled ? "enabled" : "disabled")}; " +
             $"guard {(kiosk.State.GuardArmed ? "armed" : "inactive")}";
+        KioskPanelStatusText.Text = kiosk.State.ControlsOpen switch
+        {
+            true => "Headset panel: controls",
+            false => "Headset panel: apps",
+            null => "Headset panel: unavailable in this Kiosk version"
+        };
+        KioskPendingLaunchStatusText.Text = kiosk.State.PendingRequirementLaunch switch
+        {
+            true => $"Pending requirement launch: {kiosk.State.PendingRequirementLaunchId ?? "waiting for wearer action"}",
+            false => "Pending requirement launch: none",
+            null => "Pending requirement launch: unavailable in this Kiosk version"
+        };
+        KioskPassthroughStatusText.Text = kiosk.State.PassthroughStyle is { } style
+            ? $"Passthrough: {style.ToWireName()}; system " +
+              $"{(kiosk.State.SystemPassthroughEnabled == true ? "enabled" : "disabled")}; " +
+              $"LUT {(kiosk.State.PassthroughLutApplied == true ? "applied" : "not applied")}"
+            : "Passthrough: unavailable in this Kiosk version";
         var previousTag = KioskTagFilterBox.SelectedItem as string;
         var tagChoices = new[] { "All tags" }.Concat(kiosk.State.Tags).ToArray();
         KioskTagFilterBox.ItemsSource = tagChoices;
@@ -1956,7 +2058,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selectedKey = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Key;
+        var selectedKey = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Key ??
+            _rustyKioskState.SelectedKey;
         var search = KioskSearchBox.Text.Trim();
         var tag = KioskTagFilterBox.SelectedItem as string;
         var entries = _rustyKioskState.Entries

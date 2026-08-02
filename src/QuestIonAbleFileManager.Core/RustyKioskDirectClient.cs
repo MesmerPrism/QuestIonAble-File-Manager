@@ -255,14 +255,7 @@ public sealed class RustyKioskDirectClient : IDisposable
         string? requestId = null,
         CancellationToken cancellationToken = default)
     {
-        if (command.RequiresValue() && string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
-        }
-        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
-        }
+        value = command.ValidateValue(value);
 
         requestId ??= NewRequestId("kiosk");
         ValidateRequestId(requestId);
@@ -270,7 +263,7 @@ public sealed class RustyKioskDirectClient : IDisposable
         {
             ["request_id"] = requestId,
             ["command"] = command.ToWireName(),
-            ["value"] = string.IsNullOrWhiteSpace(value) ? null : value.Trim()
+            ["value"] = value
         };
         using var admitted = await SendJsonAsync(HttpMethod.Post, "v1/kiosk/invoke", payload, cancellationToken)
             .ConfigureAwait(false);
@@ -385,12 +378,7 @@ public sealed class RustyKioskDirectClient : IDisposable
         {
             throw new InvalidDataException("Rusty Kiosk returned an empty or oversized tag file.");
         }
-        using var json = JsonDocument.Parse(bytes);
-        var schema = RequiredString(json.RootElement, "schema");
-        if (!string.Equals(schema, RustyKioskContract.TagFileSchema, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException($"Unsupported Rusty Kiosk tag schema: {schema}");
-        }
+        _ = RustyKioskTagFile.Validate(Encoding.UTF8.GetString(bytes));
         return bytes;
     }
 
@@ -401,14 +389,7 @@ public sealed class RustyKioskDirectClient : IDisposable
         {
             throw new ArgumentException("The tag file is empty or exceeds the bounded size.", nameof(validatedJson));
         }
-        using var parsed = JsonDocument.Parse(validatedJson);
-        if (!string.Equals(
-                RequiredString(parsed.RootElement, "schema"),
-                RustyKioskContract.TagFileSchema,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The tag file does not use Rusty Kiosk's supported schema.");
-        }
+        _ = RustyKioskTagFile.Validate(Encoding.UTF8.GetString(validatedJson));
 
         using var response = await SendJsonBytesAsync(HttpMethod.Put, "v1/tags", validatedJson, cancellationToken)
             .ConfigureAwait(false);

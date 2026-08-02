@@ -1469,21 +1469,7 @@ public sealed partial class AdbClient
         CancellationToken cancellationToken = default)
     {
         serial = AndroidInput.RequireSerial(serial);
-        value = value?.Trim();
-        if (command.RequiresValue() && string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
-        }
-
-        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
-        }
-
-        if ((value?.Length ?? 0) > 160)
-        {
-            throw new ArgumentException("Rusty Kiosk operator values may not exceed 160 characters.", nameof(value));
-        }
+        value = command.ValidateValue(value);
 
         var requestId = "pc-" + Guid.NewGuid().ToString("N");
         var invokeArguments = new List<string>
