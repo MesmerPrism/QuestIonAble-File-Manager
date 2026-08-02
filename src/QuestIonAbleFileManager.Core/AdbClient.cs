@@ -1952,21 +1952,11 @@ public sealed partial class AdbClient
                 "The configured command runner does not support bounded installed-APK readback.");
         }
 
-        var invariantMaximum = maximumBytes.ToString(
-            System.Globalization.CultureInfo.InvariantCulture);
         var command =
             $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || {{ " +
             "printf 'qfm-integration:path-absent\\n' >&2; exit 41; }; " +
             "expected=\"$candidate\"; " +
             BuildOpenedRemoteHandleProof() +
-            "if [ ! -f /proc/self/fd/3 ]; then " +
-            "printf 'qfm-integration:path-not-file\\n' >&2; exit 44; fi; " +
-            "size=$(stat -c %s -- /proc/self/fd/3) || { " +
-            "printf 'qfm-integration:size-unavailable\\n' >&2; exit 45; }; " +
-            "case \"$size\" in ''|*[!0-9]*) " +
-            "printf 'qfm-integration:size-invalid\\n' >&2; exit 46;; esac; " +
-            $"if [ \"$size\" -gt {invariantMaximum} ]; then " +
-            "printf 'qfm-integration:maximum-bytes\\n' >&2; exit 47; fi; " +
             "exec cat <&3";
         var arguments = new[] { "-s", serial, "exec-out", "sh", "-c", command };
         var result = await streamingRunner.RunToStreamAsync(

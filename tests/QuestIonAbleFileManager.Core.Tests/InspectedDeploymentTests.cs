@@ -1,6 +1,7 @@
 using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
@@ -83,6 +84,45 @@ public sealed class InspectedDeploymentTests
                 call.Arguments.Count >= 3 && call.Arguments[2] == "exec-out");
             Assert.DoesNotContain(runner.Calls, call =>
                 call.Arguments.Count >= 3 && call.Arguments[2] == "pull");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Observe_StreamsExactOpenedApkWithoutAdvancingDescriptorBeforeCat()
+    {
+        var bytes = Enumerable.Range(0, 4096)
+            .Select(index => (byte)(index % 251))
+            .ToArray();
+        var apk = await CreateApkAsync(bytes);
+        var runner = CreateDeploymentRunner(apk);
+        try
+        {
+            var observation = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .ObserveInspectedAppAsync("QUEST123", apk);
+
+            var installed = Assert.IsType<InstalledApkIdentity>(observation.Installed);
+            Assert.Equal(bytes.LongLength, installed.BaseApkSizeBytes);
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                installed.BaseApkSha256);
+            Assert.Equal(bytes.LongLength, Assert.Single(runner.StreamMaximumBytes));
+
+            var stream = Assert.Single(runner.Calls, call =>
+                call.Arguments.Count == 6 && call.Arguments[2] == "exec-out");
+            var command = stream.Arguments[5];
+            Assert.Contains("exec 3<\"$candidate\"", command, StringComparison.Ordinal);
+            Assert.Contains(
+                "opened=$(realpath /proc/self/fd/3)",
+                command,
+                StringComparison.Ordinal);
+            Assert.Single(Regex.Matches(command, "/proc/self/fd/3").Cast<Match>());
+            Assert.DoesNotContain("stat ", command, StringComparison.Ordinal);
+            Assert.DoesNotContain("-f /proc/self/fd/3", command, StringComparison.Ordinal);
+            Assert.EndsWith("exec cat <&3", command, StringComparison.Ordinal);
         }
         finally
         {
@@ -695,10 +735,10 @@ public sealed class InspectedDeploymentTests
         }, File.ReadAllBytes(sourceApk));
     }
 
-    private static async Task<string> CreateApkAsync()
+    private static async Task<string> CreateApkAsync(byte[]? bytes = null)
     {
         var path = Path.Combine(Path.GetTempPath(), $"qfm-public-test-{Guid.NewGuid():N}.apk");
-        await File.WriteAllBytesAsync(path, [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(path, bytes ?? [0x50, 0x4b, 0x03, 0x04]);
         return path;
     }
 
@@ -725,6 +765,8 @@ public sealed class InspectedDeploymentTests
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
 
+        public List<long> StreamMaximumBytes { get; } = [];
+
         public Task<CommandResult> RunAsync(
             string fileName,
             IReadOnlyList<string> arguments,
@@ -748,6 +790,7 @@ public sealed class InspectedDeploymentTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add((fileName, arguments.ToArray()));
+            StreamMaximumBytes.Add(maximumBytes);
             var result = handler(fileName, arguments) with
             {
                 FileName = fileName,
