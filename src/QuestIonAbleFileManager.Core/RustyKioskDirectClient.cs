@@ -66,6 +66,7 @@ public sealed record RustyKioskDirectInstallReceipt(
     public bool Installed => Completed && string.Equals(State, "installed", StringComparison.Ordinal);
     public bool Failed => Completed && !Installed;
     public bool NeedsWearerAction => State is "pending-wearer-confirmation" or "needs-wearer-permission";
+    public bool NeedsCleanup => !Completed && string.Equals(State, "cleanup-required", StringComparison.Ordinal);
 }
 
 public sealed record RustyKioskDirectRequestReceipt(
@@ -640,24 +641,34 @@ public sealed class RustyKioskDirectClient : IDisposable
             throw new ArgumentException("Every staged APK part name must be distinct.", nameof(stagedApks));
         }
         requestId ??= NewRequestId("install");
-        using var response = await SendJsonAsync(
-                HttpMethod.Post,
-                "v1/install",
-                new Dictionary<string, object?>
-                {
-                    ["request_id"] = requestId,
-                    ["files"] = commitments
-                },
-                cancellationToken,
-                timeout: TimeSpan.FromMinutes(20))
-            .ConfigureAwait(false);
-        var receipt = ParseInstallReceipt(response.RootElement);
-        if (!string.Equals(receipt.RequestId, requestId, StringComparison.Ordinal))
+        var payload = new Dictionary<string, object?>
         {
-            throw new InvalidDataException(
-                "Rusty Kiosk returned an install receipt for a different request id.");
+            ["request_id"] = requestId,
+            ["files"] = commitments
+        };
+        RustyKioskDirectInstallReceipt? receipt = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var response = await SendJsonAsync(
+                    HttpMethod.Post,
+                    "v1/install",
+                    payload,
+                    cancellationToken,
+                    timeout: TimeSpan.FromMinutes(20))
+                .ConfigureAwait(false);
+            receipt = ParseInstallReceipt(response.RootElement);
+            if (!string.Equals(receipt.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Rusty Kiosk returned an install receipt for a different request id.");
+            }
+            if (!receipt.NeedsCleanup)
+            {
+                return receipt;
+            }
         }
-        return receipt;
+        return receipt ?? throw new InvalidOperationException(
+            "Rusty Kiosk returned no install cleanup receipt.");
     }
 
     public async Task<RustyKioskDirectInstallReceipt> ReadInstallReceiptAsync(

@@ -55,6 +55,11 @@ base and split APKs for one app share that session. Therefore the **APKs (ADB
 default)** tab is the normal unattended and batch-install path. General
 shell-visible headset paths, package export, advanced install flags, CPU/GPU
 settings, and diagnostics remain optional ADB functions.
+An abandonment failure remains incomplete `cleanup-required`; File Manager
+replays the exact install body once under a fresh authenticated transport
+request solely to retry cleanup. The same logical install request ID cannot
+start a second PackageInstaller session, and only abandonment return or
+confirmed session absence is terminal failed cleanup.
 
 ## Authority Boundary
 
@@ -67,6 +72,9 @@ the device. The host can admit only the fixed Kiosk command enum, query/cancel
 one exact request lifecycle, transfer the fixed tag document, and issue/revoke
 a bounded direct session. It cannot supply shell text, Android components,
 intent actions, setup endpoints, or headset paths.
+Bootstrap operation replay is retained in a non-evicting 4,096-entry ledger for
+the app-private issuance epoch. Saturation, corruption, and epoch mismatch fail
+closed, and a bridge-generation transition does not make an old ID reusable.
 
 Kiosk retains ownership of launch and watchdog behavior. The setup helper owns
 the small secure-settings operations. The Windows app owns ADB transport and

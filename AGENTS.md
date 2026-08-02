@@ -110,7 +110,11 @@ documented.
   then accept only no-argument stopped-state readback; never reconstruct or
   request a credential. A Direct Link install must submit the exact name,
   positive byte count, and lowercase SHA-256 returned by each upload so Kiosk
-  can verify the same opened handle while copying into PackageInstaller.
+  can verify the same opened handle while copying into PackageInstaller. An
+  incomplete `cleanup-required` receipt may replay only the identical install
+  body with a fresh authenticated transport ID; it must never create a second
+  logical install or be projected as terminal failure before abandonment or
+  session-absence readback.
 - Rusty Fleet integration v1 is disabled by default. Its environment-created
   CLI adapter is restricted to strict JSON capability discovery, exact-serial
   observation, bounded `adb-shared` list/pull, and read-only durable status.

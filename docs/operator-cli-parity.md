@@ -152,6 +152,10 @@ and no-argument provider status; its typed cleanup receipt is emitted even
 though no HTTP client lease was established. Direct installs pass the exact
 name, byte count, and lowercase SHA-256 returned by each completed upload, so a
 same-name staging replacement cannot silently change PackageInstaller input.
+The `kiosk-direct status` route is also the shared adoption projection: on one
+client lease it requires signed Direct Link status, a completed typed Kiosk
+status whose effective-state readback matches, and signed staging inventory.
+WPF publishes a connected session only after that same Core composite succeeds.
 
 Manual direct authentication is the explicit fallback:
 

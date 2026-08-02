@@ -40,6 +40,40 @@ public sealed class RustyKioskUsbDirectBootstrapException : InvalidOperationExce
     public RustyKioskUsbDirectCleanupReceipt CleanupReceipt { get; }
 }
 
+public sealed class RustyKioskUsbDirectAdoptionException : InvalidOperationException
+{
+    internal RustyKioskUsbDirectAdoptionException(
+        RustyKioskUsbDirectCleanupReceipt cleanupReceipt,
+        Exception adoptionFailure)
+        : base(
+            $"Authorized-USB Direct Link adoption failed ({ReasonCode(adoptionFailure)}). " +
+            $"Cleanup {StageName(cleanupReceipt.Stage)}: {cleanupReceipt.Message}")
+    {
+        CleanupReceipt = cleanupReceipt;
+        AdoptionFailureReasonCode = ReasonCode(adoptionFailure);
+        AdoptionFailureType = adoptionFailure.GetType().FullName ?? adoptionFailure.GetType().Name;
+    }
+
+    public RustyKioskUsbDirectCleanupReceipt CleanupReceipt { get; }
+
+    public string AdoptionFailureReasonCode { get; }
+
+    public string AdoptionFailureType { get; }
+
+    private static string ReasonCode(Exception exception) => exception switch
+    {
+        TimeoutException => "bounded_timeout",
+        HttpRequestException or TaskCanceledException => "direct_transport_unavailable",
+        InvalidDataException => "contract_rejected",
+        _ => "required_readback_failed"
+    };
+
+    private static string StageName(OperatorMutationStage stage) =>
+        stage == OperatorMutationStage.CleanupUnknown
+            ? "cleanup_unknown"
+            : stage.ToString().ToLowerInvariant();
+}
+
 /// <summary>
 /// One memory-only Direct Link session minted by the exact serial's DUMP-protected
 /// Kiosk provider. No endpoint or credential is exposed by this object.
@@ -88,6 +122,14 @@ public sealed class RustyKioskUsbDirectLinkSession : IAsyncDisposable
 
     public Task<RustyKioskUsbDirectCleanupReceipt> CloseAsync() =>
         GetOrStartCleanup();
+
+    public async Task<RustyKioskUsbDirectAdoptionException> CloseAfterAdoptionFailureAsync(
+        Exception adoptionFailure)
+    {
+        ArgumentNullException.ThrowIfNull(adoptionFailure);
+        var cleanup = await GetOrStartCleanup().ConfigureAwait(false);
+        return new RustyKioskUsbDirectAdoptionException(cleanup, adoptionFailure);
+    }
 
     public async ValueTask DisposeAsync()
     {

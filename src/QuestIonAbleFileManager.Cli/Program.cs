@@ -471,7 +471,7 @@ internal static class CliApplication
             switch (action)
             {
                 case "status":
-                    result = await executor.ExecuteAsync(KioskDirectOperatorCommand.Status()).ConfigureAwait(false);
+                    result = await executor.ExecuteAsync(KioskDirectOperatorCommand.Adopt()).ConfigureAwait(false);
                     return await CompleteDirectAsync(result, lease, json, 0).ConfigureAwait(false);
 
                 case "command":
@@ -1778,6 +1778,8 @@ internal static class CliApplication
             local link. Manual credentials are read only from bounded standard input.
             Authorized-USB bootstrap is exact-serial/channel scoped, uses the existing ADB
             daemon, and owns one memory-only session for the lifetime of that CLI command.
+            The status action confirms Direct Link status, typed Kiosk status, and staging
+            inventory through the same composite Core adoption readback used by WPF.
             With --json, cleanup precedes one sanitized kiosk_direct_cli_result.v1 document
             on success or failure; Direct Link JSON failures do not write plaintext stderr.
             Direct files are confined to app-owned staging, and

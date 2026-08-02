@@ -15,7 +15,8 @@ public enum KioskDirectOperatorAction
     DownloadStaging,
     DeleteStaging,
     Install,
-    InstallStatus
+    InstallStatus,
+    Adopt
 }
 
 public sealed record KioskDirectOperatorCommand(
@@ -30,6 +31,8 @@ public sealed record KioskDirectOperatorCommand(
     bool Overwrite = false,
     bool OperatorConfirmed = false)
 {
+    public static KioskDirectOperatorCommand Adopt() => New(KioskDirectOperatorAction.Adopt);
+
     public static KioskDirectOperatorCommand Status() => New(KioskDirectOperatorAction.Status);
 
     public static KioskDirectOperatorCommand Invoke(
@@ -179,6 +182,34 @@ public sealed class KioskDirectOperatorExecutor(RustyKioskDirectClient client)
         EnsureConfirmation(command);
         switch (command.Action)
         {
+            case KioskDirectOperatorAction.Adopt:
+                {
+                    var status = await _client.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+                    var kioskResult = await ExecuteAsync(
+                            KioskDirectOperatorCommand.Invoke(
+                                RustyKioskCommand.Status,
+                                value: null,
+                                operatorConfirmed: true),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    var kiosk = kioskResult.KioskResult ??
+                        throw new InvalidOperationException(
+                            "Direct Link adoption requires a completed typed Kiosk status readback.");
+                    if (kioskResult.Mutation.Stage != OperatorMutationStage.Confirmed)
+                    {
+                        throw new InvalidDataException(
+                            "Direct Link adoption rejected a Kiosk status result without matching effective-state readback.");
+                    }
+                    var stagedFiles = await _client.ListStagingAsync(cancellationToken).ConfigureAwait(false);
+                    return Result(
+                        command,
+                        OperatorMutationStage.Confirmed,
+                        "Signed Direct Link, typed Kiosk, and staging adoption readbacks were confirmed.",
+                        Status: status,
+                        KioskResult: kiosk,
+                        StagedFiles: stagedFiles);
+                }
+
             case KioskDirectOperatorAction.Status:
                 return Result(command, OperatorMutationStage.Confirmed, "Signed Direct Link status was read back.",
                     Status: await _client.GetStatusAsync(cancellationToken).ConfigureAwait(false));

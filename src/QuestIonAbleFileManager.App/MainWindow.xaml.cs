@@ -1088,10 +1088,9 @@ public partial class MainWindow : Window
                 {
                     await AdoptKioskDirectClientAsync(session.Client, session);
                 }
-                catch
+                catch (Exception exception)
                 {
-                    await session.DisposeAsync();
-                    throw;
+                    throw await session.CloseAfterAdoptionFailureAsync(exception);
                 }
             },
             "Creating a memory-only Direct Link session over authorized USB…");
@@ -1107,19 +1106,12 @@ public partial class MainWindow : Window
         RustyKioskUsbDirectLinkSession? usbSession)
     {
         var directOperator = new KioskDirectOperatorExecutor(client);
-        var statusResult = await directOperator.ExecuteAsync(KioskDirectOperatorCommand.Status());
-        var status = statusResult.Status ??
+        var adoption = await directOperator.ExecuteAsync(KioskDirectOperatorCommand.Adopt());
+        var status = adoption.Status ??
             throw new InvalidOperationException("Direct Link returned no signed status.");
-        var kioskResult = await directOperator.ExecuteAsync(
-            KioskDirectOperatorCommand.Invoke(
-                RustyKioskCommand.Status,
-                value: null,
-                operatorConfirmed: true));
-        var kiosk = kioskResult.KioskResult ??
+        var kiosk = adoption.KioskResult ??
             throw new InvalidOperationException("Direct Link returned no Kiosk readback.");
-        var stagingResult = await directOperator.ExecuteAsync(
-            KioskDirectOperatorCommand.ListStaging());
-        var stagedFiles = stagingResult.StagedFiles ??
+        var stagedFiles = adoption.StagedFiles ??
             throw new InvalidOperationException("Direct Link returned no staging readback.");
 
         // Publish the process-memory session only after every required signed readback has

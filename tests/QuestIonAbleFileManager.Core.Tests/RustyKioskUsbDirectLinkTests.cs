@@ -135,6 +135,40 @@ public sealed class RustyKioskUsbDirectLinkTests
     }
 
     [Fact]
+    public async Task AdoptionFailureSurfacesCleanupUnknownWithoutRawFailureOrCredential()
+    {
+        var runner = new BootstrapRunner(
+            RustyKioskProductChannel.Labs,
+            enabledByRequest: true,
+            Now,
+            pendingCleanupStatusReads: 1,
+            crossedCleanupGeneration: true);
+        var session = await new RustyKioskUsbDirectLinkBootstrapper(
+                new AdbClient("adb", runner),
+                () => Now)
+            .ConnectAsync(
+                "USB_TARGET",
+                RustyKioskProductChannel.Labs,
+                operatorConfirmed: true,
+                new HttpClient(new SessionStatusHandler(runner.Secret, runner.SessionId, runner.Generation)));
+        var rawFailure = new HttpRequestException(
+            $"untrusted endpoint http://192.0.2.44:39873 contained {runner.SecretBase64}");
+
+        var combined = await session.CloseAfterAdoptionFailureAsync(rawFailure);
+
+        Assert.Equal("direct_transport_unavailable", combined.AdoptionFailureReasonCode);
+        Assert.Equal(typeof(HttpRequestException).FullName, combined.AdoptionFailureType);
+        Assert.Equal(OperatorMutationStage.CleanupUnknown, combined.CleanupReceipt.Stage);
+        Assert.Equal(combined.CleanupReceipt, session.CleanupReceipt);
+        Assert.Contains("cleanup_unknown", combined.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("http://", combined.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(runner.SecretBase64, combined.ToString(), StringComparison.Ordinal);
+        var callsAfterClose = runner.SensitiveCalls;
+        await session.DisposeAsync();
+        Assert.Equal(callsAfterClose, runner.SensitiveCalls);
+    }
+
+    [Fact]
     public async Task Connect_RejectsWifiAliasEvenWhenAnotherUsbDeviceIsReady()
     {
         var runner = new BootstrapRunner(

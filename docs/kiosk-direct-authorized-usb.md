@@ -21,6 +21,9 @@ host schema `rusty.kiosk.host_operator.v4` plus matching package/channel. The
 provider issues schema `rusty.kiosk.direct_usb_bootstrap.v2`. The shared wire
 fixture is
 `references/rusty-kiosk-direct-usb-bootstrap-contract.v2.json`.
+Bootstrap operation IDs live in a fixed, non-evicting 4,096-entry ledger scoped
+to Kiosk's app-private bootstrap-issuance epoch. Saturation, malformed state, or
+epoch mismatch fails closed; bridge-generation changes never clear replay IDs.
 
 ## Credential Lifetime And Cleanup
 
@@ -29,6 +32,9 @@ bytes; output buffers are zeroed, and no ordinary `CommandResult` can expose the
 session secret. The HTTP client owns the decoded key only in process memory and
 zeros it on close. Session identity and generation are checked again through
 authenticated `/v1/status` before any operator action is accepted.
+Connection adoption is one shared Core composite used by WPF and CLI status: it
+also requires a completed typed Kiosk status with matching effective-state
+readback and a signed staging inventory before the client is published.
 
 If bootstrap enabled the listener, cleanup sends `direct-disable` with the
 originating operation ID, session ID, and exact pre-disable generation. Disable
@@ -51,6 +57,11 @@ submits those commitments, not filenames alone. Kiosk rechecks the staged
 identity and counts and hashes bytes from the same opened handle used for the
 PackageInstaller copy, failing and abandoning the session if replacement is
 detected.
+If Kiosk cannot confirm abandonment, it returns incomplete `cleanup-required`.
+File Manager retries the identical install body once with a fresh authenticated
+transport request ID; Kiosk may retry cleanup only and cannot start a second
+install for that logical install request ID. Only returned abandonment or
+confirmed session absence becomes terminal `failed`.
 
 Each CLI invocation is one atomic session: cleanup completes before its single
 final JSON document is written. Success and failure both use
@@ -58,6 +69,10 @@ final JSON document is written. Success and failure both use
 fixed reason/message and never falls through to plaintext standard error. The
 WPF keeps a session only while its window is connected and reports cleanup
 separately on explicit disconnect. Window close also clears it.
+If a required WPF adoption readback fails after USB bootstrap, Core closes the
+owned session first and throws one sanitized combined failure containing both a
+fixed readback reason and the typed cleanup stage. `cleanup_unknown` is never
+hidden by rethrowing the earlier readback exception.
 
 ## CLI
 

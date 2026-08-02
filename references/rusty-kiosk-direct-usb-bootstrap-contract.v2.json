@@ -24,6 +24,14 @@
       "enabled_by_request": "boolean"
     }
   },
+  "operation_replay": {
+    "scope": "app-private-bootstrap-issuance-epoch",
+    "max_operation_ids": 4096,
+    "eviction": "none",
+    "saturation": "fail-closed-until-new-bootstrap-issuance-epoch",
+    "bridge_generation_change_clears_ids": false,
+    "malformed_ledger": "fail-closed"
+  },
   "cleanup_ownership": {
     "secret_retained": false,
     "fields": [
@@ -87,7 +95,11 @@
     ],
     "sha256": "lowercase-hex-64",
     "copy_rule": "same-opened-handle-count-and-digest-verified-before-packageinstaller-commit",
-    "replacement_policy": "fail-closed-and-abandon-session"
+    "replacement_policy": "fail-closed-and-abandon-session",
+    "abandon_return_or_absent_readback": "failed-completed",
+    "abandon_failure_present_or_unknown": "cleanup-required-incomplete",
+    "cleanup_retry": "repeat-same-install-body-with-fresh-authenticated-transport-request-id",
+    "cleanup_retry_starts_second_install": false
   },
   "status_returns_secret": false,
   "status": {

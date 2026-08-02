@@ -271,13 +271,67 @@ public sealed class OperatorActionRegistryTests
             "private async Task AdoptKioskDirectClientAsync",
             "private async Task DisconnectKioskDirectAsync");
 
-        var status = method.IndexOf("KioskDirectOperatorCommand.Status()", StringComparison.Ordinal);
-        var kiosk = method.IndexOf("KioskDirectOperatorCommand.Invoke(", StringComparison.Ordinal);
-        var staging = method.IndexOf("KioskDirectOperatorCommand.ListStaging()", StringComparison.Ordinal);
+        var adoption = method.IndexOf("KioskDirectOperatorCommand.Adopt()", StringComparison.Ordinal);
         var publish = method.IndexOf("_rustyKioskDirectClient = client;", StringComparison.Ordinal);
-        Assert.True(status >= 0 && kiosk > status && staging > kiosk && publish > staging);
+        Assert.True(adoption >= 0 && publish > adoption);
+        Assert.DoesNotContain("KioskDirectOperatorCommand.Status()", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("KioskDirectOperatorCommand.ListStaging()", method, StringComparison.Ordinal);
         Assert.Contains("_rustyKioskDirectClient = null;", method, StringComparison.Ordinal);
         Assert.Contains("KioskDirectStatusText.Text = \"Direct link: not connected\";", method, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DirectConnectRegistryAndCliUseTheSameCompositeAdoptionReadback()
+    {
+        var manual = Assert.Single(
+            OperatorActionRegistry.Actions,
+            action => action.Id == "kiosk.direct.connect.manual");
+        var usb = Assert.Single(
+            OperatorActionRegistry.Actions,
+            action => action.Id == "kiosk.direct.connect.usb");
+        var manualRoute = Assert.Single(manual.Routes);
+        var usbRoute = Assert.Single(usb.Routes);
+
+        Assert.Equal("KioskDirectOperatorCommand.Adopt", manualRoute.CoreOperation);
+        Assert.Contains("KioskDirectOperatorCommand.Adopt", usbRoute.CoreOperation, StringComparison.Ordinal);
+        Assert.Contains("signed Direct Link status", manualRoute.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("typed Kiosk status", manualRoute.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("staging inventory", manualRoute.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("exact bootstrap identity", usbRoute.ReadbackContract, StringComparison.Ordinal);
+
+        var root = FindRepositoryRoot();
+        var wpf = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.App",
+            "MainWindow.xaml.cs"));
+        var cli = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        Assert.Contains("KioskDirectOperatorCommand.Adopt()", wpf, StringComparison.Ordinal);
+        Assert.Contains("KioskDirectOperatorCommand.Adopt()", cli, StringComparison.Ordinal);
+        Assert.Contains("RustyKioskUsbDirectLinkBootstrapper", wpf, StringComparison.Ordinal);
+        Assert.Contains("RustyKioskUsbDirectLinkBootstrapper", cli, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WpfUsbAdoptionFailureClosesAndThrowsSanitizedCombinedReceipt()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.App",
+            "MainWindow.xaml.cs"));
+        var method = SourceMethod(
+            source,
+            "private async void OnConnectKioskDirectUsb",
+            "private async void OnDisconnectKioskDirect");
+
+        Assert.Contains("throw await session.CloseAfterAdoptionFailureAsync(exception);", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("session.DisposeAsync()", method, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -357,6 +411,18 @@ public sealed class OperatorActionRegistryTests
             rootElement.GetProperty("recover_disable").GetProperty("pending_stop_retry").GetString());
         Assert.Equal("same-opened-handle-count-and-digest-verified-before-packageinstaller-commit",
             rootElement.GetProperty("direct_install").GetProperty("copy_rule").GetString());
+        Assert.Equal(4096,
+            rootElement.GetProperty("operation_replay").GetProperty("max_operation_ids").GetInt32());
+        Assert.Equal("none",
+            rootElement.GetProperty("operation_replay").GetProperty("eviction").GetString());
+        Assert.False(
+            rootElement.GetProperty("operation_replay").GetProperty("bridge_generation_change_clears_ids").GetBoolean());
+        Assert.Equal("cleanup-required-incomplete",
+            rootElement.GetProperty("direct_install").GetProperty("abandon_failure_present_or_unknown").GetString());
+        Assert.Equal("repeat-same-install-body-with-fresh-authenticated-transport-request-id",
+            rootElement.GetProperty("direct_install").GetProperty("cleanup_retry").GetString());
+        Assert.False(
+            rootElement.GetProperty("direct_install").GetProperty("cleanup_retry_starts_second_install").GetBoolean());
         Assert.False(rootElement.GetProperty("persistent_pairing_code_exported").GetBoolean());
     }
 
