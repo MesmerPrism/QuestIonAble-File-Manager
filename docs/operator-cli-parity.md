@@ -2,8 +2,14 @@
 
 Every ADB device operation in the WPF app is represented by one immutable
 `OperatorCommand` in the core library. Direct Rusty Kiosk operations use the
-typed `RustyKioskDirectClient` instead. In both cases the WPF button and CLI use
-the same core method and readback model.
+immutable `KioskDirectOperatorCommand` and shared executor. In both cases the
+WPF button and CLI use the same core method, confirmation semantics, lifecycle
+receipt, and readback model. `operator-actions --json` projects the code-owned
+registry. Each executable route records its CLI vector, Core factory,
+confirmation requirement, and effective-state readback contract. A WPF action
+that can use Direct Link or the ADB host provider declares both routes rather
+than hiding the fallback. Tests require every WPF click action to map to those
+actual routes or one explicit local-interaction reason.
 The CLI is intended for agents and automation, so command text is deliberately
 not projected into the non-technical WPF interface.
 
@@ -43,6 +49,18 @@ The CLI can be invoked directly in PowerShell without translating GUI labels
 into a different automation model. Agents can include `--adb <path>` when an
 exact tool selection is part of the test.
 
+For app-provided launch options, WPF presents only the bounded read-only rows
+returned for Kiosk's current selected app. The CLI equivalent accepts the same
+opaque option id, with a 160-character limit. Neither surface can supply an
+activity, component, action, URI, flag, path, or arbitrary extra. A completed
+request remains pending until Kiosk reads back the exact dispatched option id
+together with the exact currently selected package. This confirms dispatch,
+not the destination app's foreground state or option semantics. Core also requires the optional
+package/UID/signer/version/provider/activity binding fields to be all-or-none
+and independently recomputes Kiosk's v1 binding SHA-256 before projection.
+Nonblank opaque ids are preserved ordinally, including leading or trailing
+whitespace; File Manager does not normalize an app-defined identifier.
+
 ## Operation Map
 
 | WPF operation | Equivalent CLI route |
@@ -63,9 +81,11 @@ exact tool selection is part of the test.
 | Refresh optional Kiosk status/catalog | `kiosk status` |
 | Install bundled Kiosk pair | `kiosk install --confirm-kiosk-setup` |
 | Provision installed Kiosk helper | `kiosk provision --confirm-kiosk-setup` |
-| Kiosk select/tag/launch/setup action | `kiosk command` |
+| Kiosk panel/focus/select/tag/launch/requirement/passthrough/setup action | `kiosk command` |
+| Launch one read-only app-provided option | `kiosk command --command launch-option --value <opaque-option-id> --confirm-kiosk-control` |
 | Export/import Kiosk tag file | `kiosk tags export` / `kiosk tags import` |
 | Connect/refresh Kiosk directly | `kiosk-direct status` |
+| Read/cancel one admitted direct request | `kiosk-direct request-status` / `kiosk-direct request-cancel` |
 | Direct Kiosk typed action | `kiosk-direct command` |
 | Direct tag export/import | `kiosk-direct tags export` / `kiosk-direct tags import` |
 | Direct staging list/upload/download/delete | `kiosk-direct files ...` |
@@ -82,6 +102,11 @@ exact tool selection is part of the test.
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
+The WPF **Disconnect** button clears its long-lived process-memory UI session.
+It is intentionally marked interactive-only: every CLI direct command is one
+atomic session and performs the equivalent cleanup before printing its single
+final result, so there is no separate `kiosk-direct disconnect` process route.
+
 Example shapes use placeholders rather than live device or local identities:
 
 ```powershell
@@ -97,14 +122,19 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' wifi disconnect --host <quest-ip> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --product-channel labs --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk-direct status --endpoint http://<quest-ip>:39873 --pairing-code <code> --json
-& '.\questionable-file-manager.exe' kiosk-direct command --endpoint http://<quest-ip>:39873 --pairing-code <code> --command launch-kiosk --confirm-kiosk-control --json
-& '.\questionable-file-manager.exe' kiosk-direct files upload --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <local-file> --json
-& '.\questionable-file-manager.exe' kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <base-apk> --confirm-local-install --json
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-option --value <opaque-option-id> --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command passthrough-contour --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --product-channel labs --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-option --value <opaque-option-id> --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command cancel-pending-launch --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <local-file> --confirm-staging-upload --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <base-apk> --confirm-local-install --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --duration-ms 28800000 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' fleet status --json
@@ -128,8 +158,35 @@ results even when the process exit status is nonzero.
 
 The WPF footer's progress bar is a transient projection of the same executor,
 not a separate operation. CLI arguments therefore remain identical. Machine-
-readable CLI output stays one final JSON document; agents use its per-target
-results rather than scraping GUI animation or mixed progress lines.
+readable Direct Link output stays one final
+`questionable.file_manager.kiosk_direct_cli_result.v1` JSON document after
+cleanup on success or failure; JSON failures use fixed sanitized reason codes
+and write no plaintext standard error. Agents use typed results rather than
+scraping GUI animation or mixed progress lines.
+
+Authorized-USB bootstrap failures retain that same one-document rule. A lost
+or malformed enable response is reconciled only with the original operation ID
+and no-argument provider status; its typed cleanup receipt is emitted even
+though no HTTP client lease was established. Direct installs pass the exact
+name, byte count, and lowercase SHA-256 returned by each completed upload, so a
+same-name staging replacement cannot silently change PackageInstaller input.
+The `kiosk-direct status` route is also the shared adoption projection: on one
+client lease it requires signed Direct Link status, a completed typed Kiosk
+status whose effective-state readback matches, and signed staging inventory.
+WPF publishes a connected session only after that same Core composite succeeds.
+
+Manual direct authentication is the explicit fallback:
+
+```powershell
+& '.\questionable-file-manager.exe' kiosk-direct status --endpoint http://<quest-ip>:39873 --credential-stdin --json
+```
+
+Type the on-headset credential into standard input and press Enter. Do not put
+it in a command, environment variable, transcript, or clipboard. The WPF uses
+a `PasswordBox` and offers only a local 15-second reveal. Turning reveal off
+remasks the value; reveal timeout, focus loss, deactivation, connection outcome,
+disconnect, profile-enrollment outcome, and window close clear both the masked
+and revealed projections.
 
 State-changing JSON results wrap the operation payload with a
 `mutation` receipt. Its ordered transitions are `sent`, `pending`, and only

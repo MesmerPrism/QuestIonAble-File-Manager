@@ -1444,7 +1444,7 @@ public sealed class FleetIntegrationTests
                 arguments[5],
                 StringComparison.Ordinal);
             Assert.Contains(
-                "opened=$(realpath /proc/self/fd/3)",
+                "opened=$(readlink /proc/$$/fd/3)",
                 arguments[5],
                 StringComparison.Ordinal);
             Assert.Contains(

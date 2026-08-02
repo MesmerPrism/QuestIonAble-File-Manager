@@ -122,7 +122,7 @@ headset.
 For every list or pull, one owner-issued Android shell command resolves both
 `/sdcard` and the requested path. The requested canonical path must equal the
 canonical root plus the validated lexical relative path exactly. The command
-then opens file descriptor 3, resolves `/proc/self/fd/3`, and repeats that exact
+then opens file descriptor 3, reads `/proc/$$/fd/3`, and repeats that exact
 comparison before listing or streaming through the descriptor. A symlink,
 intermediate indirection, canonical escape, path swap before open, wrong file
 kind, or unavailable proof fails closed.

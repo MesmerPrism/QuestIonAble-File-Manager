@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -7,14 +8,21 @@ namespace QuestIonAbleFileManager.Core;
 public enum RustyKioskCommand
 {
     Status,
+    ShowControls,
+    ShowApps,
     Reload,
+    FocusSearch,
+    FocusTagEditor,
     SetSearch,
     Select,
     FilterTag,
     AddTag,
     RemoveTag,
+    SetLaunchRequirement,
+    CancelPendingLaunch,
     LaunchNormal,
     LaunchKiosk,
+    LaunchOption,
     CheckSetupHelper,
     RequestWifiAdb,
     EnableWifiAfterBoot,
@@ -22,7 +30,29 @@ public enum RustyKioskCommand
     DisableWifiAdb,
     EnableAccessibility,
     DisableAccessibility,
+    PassthroughNatural,
+    PassthroughContour,
     ExitMetaHome
+}
+
+public enum RustyKioskLaunchRequirement
+{
+    Any,
+    WifiOn,
+    WifiOff
+}
+
+public enum RustyKioskPassthroughStyle
+{
+    Natural,
+    ContourLut
+}
+
+public enum RustyKioskLaunchOptionsStatus
+{
+    None,
+    Ready,
+    Rejected
 }
 
 public static class RustyKioskCommands
@@ -30,14 +60,21 @@ public static class RustyKioskCommands
     public static string ToWireName(this RustyKioskCommand command) => command switch
     {
         RustyKioskCommand.Status => "status",
+        RustyKioskCommand.ShowControls => "show-controls",
+        RustyKioskCommand.ShowApps => "show-apps",
         RustyKioskCommand.Reload => "reload",
+        RustyKioskCommand.FocusSearch => "focus-search",
+        RustyKioskCommand.FocusTagEditor => "focus-tag-editor",
         RustyKioskCommand.SetSearch => "set-search",
         RustyKioskCommand.Select => "select",
         RustyKioskCommand.FilterTag => "filter-tag",
         RustyKioskCommand.AddTag => "add-tag",
         RustyKioskCommand.RemoveTag => "remove-tag",
+        RustyKioskCommand.SetLaunchRequirement => "set-launch-requirement",
+        RustyKioskCommand.CancelPendingLaunch => "cancel-pending-launch",
         RustyKioskCommand.LaunchNormal => "launch-normal",
         RustyKioskCommand.LaunchKiosk => "launch-kiosk",
+        RustyKioskCommand.LaunchOption => "launch-option",
         RustyKioskCommand.CheckSetupHelper => "check-setup-helper",
         RustyKioskCommand.RequestWifiAdb => "request-wifi-adb",
         RustyKioskCommand.EnableWifiAfterBoot => "enable-wifi-adb-after-boot",
@@ -45,6 +82,8 @@ public static class RustyKioskCommands
         RustyKioskCommand.DisableWifiAdb => "disable-wifi-adb",
         RustyKioskCommand.EnableAccessibility => "enable-accessibility",
         RustyKioskCommand.DisableAccessibility => "disable-accessibility",
+        RustyKioskCommand.PassthroughNatural => "passthrough-natural",
+        RustyKioskCommand.PassthroughContour => "passthrough-contour",
         RustyKioskCommand.ExitMetaHome => "exit-meta-home",
         _ => throw new ArgumentOutOfRangeException(nameof(command))
     };
@@ -52,10 +91,86 @@ public static class RustyKioskCommands
     public static bool RequiresValue(this RustyKioskCommand command) => command is
         RustyKioskCommand.Select or
         RustyKioskCommand.AddTag or
-        RustyKioskCommand.RemoveTag;
+        RustyKioskCommand.RemoveTag or
+        RustyKioskCommand.SetLaunchRequirement or
+        RustyKioskCommand.LaunchOption;
 
     public static bool AllowsValue(this RustyKioskCommand command) =>
         command.RequiresValue() || command is RustyKioskCommand.SetSearch or RustyKioskCommand.FilterTag;
+
+    public static string? ValidateValue(this RustyKioskCommand command, string? value)
+    {
+        var normalized = command == RustyKioskCommand.LaunchOption
+            ? value
+            : value?.Trim();
+        if (normalized?.Length > RustyKioskContract.MaxCommandValueLength)
+        {
+            throw new ArgumentException(
+                $"Rusty Kiosk operator values may not exceed {RustyKioskContract.MaxCommandValueLength} characters.",
+                nameof(value));
+        }
+        if (command.RequiresValue() && string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
+        }
+        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
+        }
+        if (command == RustyKioskCommand.SetLaunchRequirement)
+        {
+            _ = ParseLaunchRequirement(normalized!);
+        }
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    public static string ToWireName(this RustyKioskLaunchRequirement requirement) => requirement switch
+    {
+        RustyKioskLaunchRequirement.Any => "any",
+        RustyKioskLaunchRequirement.WifiOn => "wifi-on",
+        RustyKioskLaunchRequirement.WifiOff => "wifi-off",
+        _ => throw new ArgumentOutOfRangeException(nameof(requirement))
+    };
+
+    public static RustyKioskLaunchRequirement ParseLaunchRequirement(string value) => value switch
+    {
+        "any" => RustyKioskLaunchRequirement.Any,
+        "wifi-on" => RustyKioskLaunchRequirement.WifiOn,
+        "wifi-off" => RustyKioskLaunchRequirement.WifiOff,
+        _ => throw new ArgumentException(
+            "Rusty Kiosk launch requirement must be exactly any, wifi-on, or wifi-off.",
+            nameof(value))
+    };
+
+    public static string ToWireName(this RustyKioskPassthroughStyle style) => style switch
+    {
+        RustyKioskPassthroughStyle.Natural => "natural",
+        RustyKioskPassthroughStyle.ContourLut => "contour-lut",
+        _ => throw new ArgumentOutOfRangeException(nameof(style))
+    };
+
+    public static RustyKioskPassthroughStyle ParsePassthroughStyle(string value) => value switch
+    {
+        "natural" => RustyKioskPassthroughStyle.Natural,
+        "contour-lut" => RustyKioskPassthroughStyle.ContourLut,
+        _ => throw new InvalidDataException($"Rusty Kiosk returned an unknown passthrough style: {value}")
+    };
+
+    public static string ToWireName(this RustyKioskLaunchOptionsStatus status) => status switch
+    {
+        RustyKioskLaunchOptionsStatus.None => "none",
+        RustyKioskLaunchOptionsStatus.Ready => "ready",
+        RustyKioskLaunchOptionsStatus.Rejected => "rejected",
+        _ => throw new ArgumentOutOfRangeException(nameof(status))
+    };
+
+    public static RustyKioskLaunchOptionsStatus ParseLaunchOptionsStatus(string value) => value switch
+    {
+        "none" => RustyKioskLaunchOptionsStatus.None,
+        "ready" => RustyKioskLaunchOptionsStatus.Ready,
+        "rejected" => RustyKioskLaunchOptionsStatus.Rejected,
+        _ => throw new InvalidDataException($"Rusty Kiosk returned an unknown launch-options status: {value}")
+    };
 
     public static RustyKioskCommand Parse(string value)
     {
@@ -79,14 +194,39 @@ public sealed record RustyKioskAppEntry(
     string? PackageName,
     bool Installed,
     bool Launchable,
-    IReadOnlyList<string> Tags)
+    IReadOnlyList<string> Tags,
+    RustyKioskLaunchRequirement LaunchRequirement = RustyKioskLaunchRequirement.Any)
 {
     public string StatusLabel => !Installed ? "Not installed" : Launchable ? "Installed" : "Installed, no public launch activity";
 
     public string TagLabel => Tags.Count == 0 ? "No tags" : string.Join(", ", Tags);
 
+    public string LaunchRequirementLabel => $"Launch requirement: {LaunchRequirement.ToWireName()}";
+
     public string DisplayLabel => $"{Name} — {StatusLabel}";
 }
+
+public sealed record RustyKioskLaunchOption(
+    int SchemaVersion,
+    string OptionId,
+    string DisplayLabel,
+    string Description)
+{
+    public string OperatorLabel => string.IsNullOrWhiteSpace(Description)
+        ? DisplayLabel
+        : $"{DisplayLabel} — {Description}";
+}
+
+public sealed record RustyKioskLaunchOptionsBinding(
+    string PackageName,
+    int Uid,
+    string SigningIdentity,
+    long VersionCode,
+    long LastUpdateTimeMilliseconds,
+    string ProviderAuthority,
+    string ProviderClass,
+    string OwnerActivity,
+    string BindingSha256);
 
 public sealed record RustyKioskState(
     int InstalledCount,
@@ -109,7 +249,22 @@ public sealed record RustyKioskState(
     bool GuardArmed,
     string? OperationInProgress,
     string StatusLine,
-    string TagFilePath)
+    string TagFilePath,
+    long SearchFocusRequest = 0,
+    long TagFocusRequest = 0,
+    bool? ControlsOpen = null,
+    RustyKioskLaunchRequirement? SelectedLaunchRequirement = null,
+    bool? PendingRequirementLaunch = null,
+    string? PendingRequirementLaunchId = null,
+    RustyKioskPassthroughStyle? PassthroughStyle = null,
+    bool? SystemPassthroughEnabled = null,
+    bool? PassthroughLutApplied = null,
+    RustyKioskLaunchOptionsStatus? SelectedLaunchOptionsStatus = null,
+    string? SelectedLaunchOptionsMessage = null,
+    IReadOnlyList<RustyKioskLaunchOption>? SelectedLaunchOptions = null,
+    RustyKioskLaunchOptionsBinding? SelectedLaunchOptionsBinding = null,
+    string? LastDispatchedOptionId = null,
+    string? LastDispatchedOptionPackage = null)
 {
     public IReadOnlyList<string> Tags => Entries
         .SelectMany(static entry => entry.Tags)
@@ -155,10 +310,15 @@ public sealed record RustyKioskOperatorResult(
                     .EnumerateArray()
                     .Select(static tag => tag.GetString() ?? string.Empty)
                     .Where(static tag => tag.Length > 0)
-                    .ToArray())))
+                    .ToArray()),
+                entry.TryGetProperty("launch_requirement", out var launchRequirement)
+                    ? ParseResultLaunchRequirement(launchRequirement)
+                    : RustyKioskLaunchRequirement.Any))
             .ToArray();
 
         var command = RustyKioskCommands.Parse(RequiredString(root, "command"));
+        var launchOptions = ParseLaunchOptions(state);
+        var launchOptionsBinding = ParseLaunchOptionsBinding(state);
         var parsedState = new RustyKioskState(
             state.GetProperty("installed_count").GetInt32(),
             state.GetProperty("not_installed_count").GetInt32(),
@@ -180,7 +340,42 @@ public sealed record RustyKioskOperatorResult(
             state.GetProperty("guard_armed").GetBoolean(),
             OptionalString(state, "operation_in_progress"),
             RequiredString(state, "status_line"),
-            OptionalString(state, "tag_file_path") ?? RustyKioskContract.TagFilePath);
+            OptionalString(state, "tag_file_path") ?? RustyKioskContract.TagFilePath,
+            OptionalInt64(state, "search_focus_request") ?? 0,
+            OptionalInt64(state, "tag_focus_request") ?? 0,
+            OptionalBoolean(state, "controls_open"),
+            OptionalString(state, "selected_launch_requirement") is { } selectedRequirement
+                ? ParseResultLaunchRequirement(selectedRequirement)
+                : null,
+            OptionalBoolean(state, "pending_requirement_launch"),
+            OptionalString(state, "pending_requirement_launch_id"),
+            OptionalString(state, "passthrough_style") is { } passthroughStyle
+                ? RustyKioskCommands.ParsePassthroughStyle(passthroughStyle)
+                : null,
+            OptionalBoolean(state, "system_passthrough_enabled"),
+            OptionalBoolean(state, "passthrough_lut_applied"),
+            OptionalString(state, "selected_launch_options_status") is { } launchOptionsStatus
+                ? RustyKioskCommands.ParseLaunchOptionsStatus(launchOptionsStatus)
+                : null,
+            OptionalString(state, "selected_launch_options_message"),
+            new ReadOnlyCollection<RustyKioskLaunchOption>(launchOptions),
+            launchOptionsBinding,
+            OptionalString(state, "last_dispatched_option_id"),
+            OptionalString(state, "last_dispatched_option_package"));
+        if (parsedState.SelectedLaunchOptionsStatus == RustyKioskLaunchOptionsStatus.Ready &&
+            (launchOptionsBinding is null ||
+             !string.Equals(launchOptionsBinding.PackageName, parsedState.SelectedPackage, StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk launch-option binding does not match the selected package.");
+        }
+        if (parsedState.SelectedLaunchOptionsStatus is
+                RustyKioskLaunchOptionsStatus.None or RustyKioskLaunchOptionsStatus.Rejected &&
+            (launchOptionsBinding is not null || launchOptions.Length != 0))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk returned launch options without a ready binding.");
+        }
 
         return new RustyKioskOperatorResult(
             schema,
@@ -206,6 +401,162 @@ public sealed record RustyKioskOperatorResult(
         }
 
         return property.GetString();
+    }
+
+    private static bool? OptionalBoolean(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind != JsonValueKind.Null
+            ? property.GetBoolean()
+            : null;
+
+    private static RustyKioskLaunchOption[] ParseLaunchOptions(JsonElement state)
+    {
+        if (!state.TryGetProperty("selected_launch_options", out var options))
+        {
+            return [];
+        }
+        if (options.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException("Rusty Kiosk selected_launch_options must be an array.");
+        }
+        var rows = options.EnumerateArray().ToArray();
+        if (rows.Length > RustyKioskContract.MaxLaunchOptions)
+        {
+            throw new InvalidDataException(
+                $"Rusty Kiosk returned more than {RustyKioskContract.MaxLaunchOptions} launch options.");
+        }
+
+        var parsed = rows.Select(static option =>
+        {
+            var schemaVersion = option.GetProperty("schema_version").GetInt32();
+            if (schemaVersion != RustyKioskContract.LaunchOptionSchemaVersion)
+            {
+                throw new InvalidDataException("Rusty Kiosk returned an unsupported launch-option schema version.");
+            }
+            var optionId = RequiredString(option, "option_id");
+            var label = RequiredString(option, "display_label");
+            var description = RequiredString(option, "description");
+            if (string.IsNullOrWhiteSpace(optionId) ||
+                optionId.Length > RustyKioskContract.MaxCommandValueLength ||
+                string.IsNullOrWhiteSpace(label) ||
+                label.Length > RustyKioskContract.MaxLaunchOptionLabelLength ||
+                description.Length > RustyKioskContract.MaxLaunchOptionDescriptionLength)
+            {
+                throw new InvalidDataException("Rusty Kiosk returned an out-of-bounds launch option.");
+            }
+            return new RustyKioskLaunchOption(schemaVersion, optionId, label, description);
+        }).ToArray();
+        if (parsed.Select(static option => option.OptionId).Distinct(StringComparer.Ordinal).Count() != parsed.Length)
+        {
+            throw new InvalidDataException("Rusty Kiosk returned duplicate launch-option ids.");
+        }
+        return parsed;
+    }
+
+    private static RustyKioskLaunchOptionsBinding? ParseLaunchOptionsBinding(JsonElement state)
+    {
+        var packageName = OptionalString(state, "selected_launch_options_package");
+        var uid = OptionalInt32(state, "selected_launch_options_uid");
+        var signingIdentity = OptionalString(state, "selected_launch_options_signing_identity");
+        var versionCode = OptionalInt64(state, "selected_launch_options_version_code");
+        var lastUpdateTime = OptionalInt64(state, "selected_launch_options_last_update_time_ms");
+        var providerAuthority = OptionalString(state, "selected_launch_options_provider_authority");
+        var providerClass = OptionalString(state, "selected_launch_options_provider_class");
+        var ownerActivity = OptionalString(state, "selected_launch_options_owner_activity");
+        var bindingSha256 = OptionalString(state, "selected_launch_options_binding_sha256");
+        var valuesPresent = new object?[]
+        {
+            packageName,
+            uid,
+            signingIdentity,
+            versionCode,
+            lastUpdateTime,
+            providerAuthority,
+            providerClass,
+            ownerActivity,
+            bindingSha256
+        }.Count(static value => value is not null);
+        if (valuesPresent == 0)
+        {
+            return null;
+        }
+        if (valuesPresent != 9)
+        {
+            throw new InvalidDataException("Rusty Kiosk returned an incomplete launch-option binding.");
+        }
+        if (uid <= 0 || versionCode < 0 || lastUpdateTime <= 0 ||
+            string.IsNullOrWhiteSpace(packageName) ||
+            string.IsNullOrWhiteSpace(providerAuthority) ||
+            string.IsNullOrWhiteSpace(providerClass) ||
+            string.IsNullOrWhiteSpace(ownerActivity) ||
+            packageName!.Length > 255 || providerAuthority!.Length > 255 ||
+            providerClass!.Length > 512 || ownerActivity!.Length > 512 ||
+            signingIdentity!.Length > 2048 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                signingIdentity,
+                "^[0-9a-f]{64}(,[0-9a-f]{64})*$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                bindingSha256!,
+                "^[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+        {
+            throw new InvalidDataException("Rusty Kiosk returned an invalid launch-option binding.");
+        }
+        var canonicalBinding = string.Join(
+            '\0',
+            RustyKioskContract.AppLaunchOptionsSchema,
+            packageName,
+            uid.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            signingIdentity,
+            lastUpdateTime.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            versionCode.GetValueOrDefault().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            providerAuthority,
+            providerClass,
+            ownerActivity);
+        var computedBindingSha256 = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(canonicalBinding)))
+            .ToLowerInvariant();
+        if (!string.Equals(computedBindingSha256, bindingSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Rusty Kiosk launch-option binding digest does not match its fields.");
+        }
+        return new RustyKioskLaunchOptionsBinding(
+            packageName,
+            uid.GetValueOrDefault(),
+            signingIdentity,
+            versionCode.GetValueOrDefault(),
+            lastUpdateTime.GetValueOrDefault(),
+            providerAuthority,
+            providerClass,
+            ownerActivity,
+            bindingSha256!);
+    }
+
+    private static int? OptionalInt32(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind != JsonValueKind.Null
+            ? property.GetInt32()
+            : null;
+
+    private static long? OptionalInt64(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind != JsonValueKind.Null
+            ? property.GetInt64()
+            : null;
+
+    private static RustyKioskLaunchRequirement ParseResultLaunchRequirement(JsonElement property) =>
+        property.ValueKind == JsonValueKind.String
+            ? ParseResultLaunchRequirement(property.GetString()!)
+            : throw new InvalidDataException("Rusty Kiosk launch_requirement must be a string.");
+
+    private static RustyKioskLaunchRequirement ParseResultLaunchRequirement(string value)
+    {
+        try
+        {
+            return RustyKioskCommands.ParseLaunchRequirement(value);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException("Rusty Kiosk returned an unknown launch requirement.", exception);
+        }
     }
 }
 
@@ -287,8 +638,79 @@ public sealed record RustyKioskInstallationStatus(
     bool SameSignerControlGranted,
     bool HostOperatorAvailable);
 
+public enum RustyKioskProductChannel
+{
+    Stable,
+    Labs
+}
+
+public sealed record RustyKioskProductContract(
+    RustyKioskProductChannel Channel,
+    string WireName,
+    string MainPackage,
+    string MainActivityClass,
+    string SetupHelperPackage,
+    string OperatorAuthority,
+    string SetupControlPermission,
+    string SetupHelperControlAction)
+{
+    public string OperatorUri => "content://" + OperatorAuthority;
+
+    public string MainActivity => MainPackage + "/" + MainActivityClass;
+
+    public static RustyKioskProductContract For(RustyKioskProductChannel channel) => channel switch
+    {
+        RustyKioskProductChannel.Stable => new(
+            channel,
+            "stable",
+            "io.github.mesmerprism.rustykiosk",
+            "io.github.mesmerprism.rustykiosk.RustyKioskActivity",
+            "io.github.mesmerprism.rustykiosk.setuphelper",
+            "io.github.mesmerprism.rustykiosk.operator",
+            "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL",
+            "io.github.mesmerprism.rustykiosk.setuphelper.action.CONTROL"),
+        RustyKioskProductChannel.Labs => new(
+            channel,
+            "labs",
+            "io.github.mesmerprism.rustykiosk.labs",
+            "io.github.mesmerprism.rustykiosk.RustyKioskActivity",
+            "io.github.mesmerprism.rustykiosk.setuphelper.labs",
+            "io.github.mesmerprism.rustykiosk.labs.operator",
+            "io.github.mesmerprism.rustykiosk.labs.permission.SETUP_CONTROL",
+            "io.github.mesmerprism.rustykiosk.setuphelper.labs.action.CONTROL"),
+        _ => throw new ArgumentOutOfRangeException(nameof(channel))
+    };
+
+    public static RustyKioskProductContract Parse(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return value.Trim() switch
+        {
+            "stable" => For(RustyKioskProductChannel.Stable),
+            "labs" => For(RustyKioskProductChannel.Labs),
+            _ => throw new ArgumentException(
+                "Rusty Kiosk product channel must be exactly stable or labs.",
+                nameof(value))
+        };
+    }
+
+    public static RustyKioskProductContract RequireKnown(RustyKioskProductContract product)
+    {
+        ArgumentNullException.ThrowIfNull(product);
+        var canonical = For(product.Channel);
+        if (product != canonical)
+        {
+            throw new ArgumentException(
+                "Rusty Kiosk product identity must be the exact fixed Stable or Labs contract.",
+                nameof(product));
+        }
+        return canonical;
+    }
+}
+
 public static class RustyKioskContract
 {
+    public const string AppLaunchOptionsSchema = "rusty.quest.app_launch_options.v1";
     public const string MainPackage = "io.github.mesmerprism.rustykiosk";
     public const string SetupHelperPackage = "io.github.mesmerprism.rustykiosk.setuphelper";
     public const string MainActivity = ".RustyKioskActivity";
@@ -299,11 +721,19 @@ public static class RustyKioskContract
     public const string SetupControlPermission = "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL";
     public const string ResultSchema = "rusty.kiosk.cli_result.v1";
     public const string HostOperatorSchema = "rusty.kiosk.host_operator.v2";
+    public const string HostOperatorSuccessorSchema = "rusty.kiosk.host_operator.v4";
+    public const string DirectUsbBootstrapSchema = "rusty.kiosk.direct_usb_bootstrap.v2";
     public const string TagFileSchema = "rusty.kiosk.app_tags.v1";
+    public const string TagFileSuccessorSchema = "rusty.kiosk.app_tags.v2";
     public const string TagFilePath = "/sdcard/Android/data/io.github.mesmerprism.rustykiosk/files/tags/app-tags.v1.json";
     public const string MainApkFileName = "rusty-kiosk.apk";
     public const string SetupHelperApkFileName = "rusty-kiosk-setup-helper.apk";
     public const int MaxTagFileBytes = 256 * 1024;
+    public const int MaxCommandValueLength = 160;
+    public const int LaunchOptionSchemaVersion = 1;
+    public const int MaxLaunchOptions = 64;
+    public const int MaxLaunchOptionLabelLength = 96;
+    public const int MaxLaunchOptionDescriptionLength = 160;
 }
 
 public static class RustyKioskTagFile
@@ -323,13 +753,29 @@ public static class RustyKioskTagFile
             throw new InvalidDataException($"Rusty Kiosk tag file exceeds {RustyKioskContract.MaxTagFileBytes} bytes.");
         }
 
-        var json = File.ReadAllText(fullPath);
+        return Validate(File.ReadAllText(fullPath));
+    }
+
+    public static string Validate(string json)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        if (Encoding.UTF8.GetByteCount(json) > RustyKioskContract.MaxTagFileBytes)
+        {
+            throw new InvalidDataException($"Rusty Kiosk tag file exceeds {RustyKioskContract.MaxTagFileBytes} bytes.");
+        }
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        if (!root.TryGetProperty("schema", out var schema) ||
-            !string.Equals(schema.GetString(), RustyKioskContract.TagFileSchema, StringComparison.Ordinal))
+        if (!root.TryGetProperty("schema", out var schema) || schema.ValueKind != JsonValueKind.String ||
+            (schema.GetString() != RustyKioskContract.TagFileSchema &&
+             schema.GetString() != RustyKioskContract.TagFileSuccessorSchema))
         {
-            throw new InvalidDataException("The file is not a rusty.kiosk.app_tags.v1 tag file.");
+            throw new InvalidDataException("The file is not a supported Rusty Kiosk tag file.");
+        }
+
+        var strictSuccessor = schema.GetString() == RustyKioskContract.TagFileSuccessorSchema;
+        if (strictSuccessor)
+        {
+            RequireExactFields(root, ["schema", "apps"], ["schema", "apps"]);
         }
 
         if (!root.TryGetProperty("apps", out var apps) || apps.ValueKind != JsonValueKind.Array)
@@ -337,26 +783,104 @@ public static class RustyKioskTagFile
             throw new InvalidDataException("The Rusty Kiosk tag file must contain an apps array.");
         }
 
+        if (apps.GetArrayLength() > 500)
+        {
+            throw new InvalidDataException("The Rusty Kiosk tag file contains too many app records.");
+        }
+
+        var identities = new HashSet<string>(StringComparer.Ordinal);
         foreach (var app in apps.EnumerateArray())
         {
+            if (app.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException("Every Rusty Kiosk tag entry must be an object.");
+            }
+            if (strictSuccessor)
+            {
+                RequireExactFields(app, ["name"], ["name", "package", "tags", "requirements"]);
+            }
             if (!app.TryGetProperty("name", out var name) ||
+                name.ValueKind != JsonValueKind.String ||
                 string.IsNullOrWhiteSpace(name.GetString()) ||
                 name.GetString()!.Trim().Length > 160)
             {
                 throw new InvalidDataException("Every Rusty Kiosk tag entry requires a bounded app name.");
             }
 
-            if (!app.TryGetProperty("tags", out var tags) || tags.ValueKind != JsonValueKind.Array)
+            if (!app.TryGetProperty("tags", out var tags))
+            {
+                if (!strictSuccessor)
+                {
+                    throw new InvalidDataException("Every Rusty Kiosk tag entry requires a tags array.");
+                }
+                tags = default;
+            }
+            if (tags.ValueKind != JsonValueKind.Undefined && tags.ValueKind != JsonValueKind.Array)
             {
                 throw new InvalidDataException("Every Rusty Kiosk tag entry requires a tags array.");
             }
 
-            if (tags.EnumerateArray().Any(static tag => tag.ValueKind != JsonValueKind.String || tag.GetString()!.Trim().Length > 40))
+            if (tags.ValueKind == JsonValueKind.Array &&
+                (tags.GetArrayLength() > 64 || tags.EnumerateArray().Any(static tag =>
+                    tag.ValueKind != JsonValueKind.String || tag.GetString()!.Trim().Length > 40)))
             {
-                throw new InvalidDataException("Rusty Kiosk tags must be strings no longer than 40 characters.");
+                throw new InvalidDataException("Rusty Kiosk tags must be at most 64 strings no longer than 40 characters.");
+            }
+
+            if (strictSuccessor)
+            {
+                var packageName = app.TryGetProperty("package", out var package)
+                    ? package.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(package.GetString())
+                        ? package.GetString()!.Trim()
+                        : throw new InvalidDataException("Rusty Kiosk v2 package values must be non-empty strings.")
+                    : null;
+                if (packageName is not null && !System.Text.RegularExpressions.Regex.IsMatch(
+                        packageName,
+                        "^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*)+$"))
+                {
+                    throw new InvalidDataException("Rusty Kiosk v2 package values must be Android package names.");
+                }
+                var identity = packageName is null
+                    ? "name:" + string.Join(' ', name.GetString()!.Trim().Split(
+                        (char[]?)null,
+                        StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant()
+                    : "package:" + packageName;
+                if (!identities.Add(identity))
+                {
+                    throw new InvalidDataException("Rusty Kiosk v2 app identities must be unique.");
+                }
+
+                if (app.TryGetProperty("requirements", out var requirements))
+                {
+                    if (requirements.ValueKind != JsonValueKind.Array || requirements.GetArrayLength() > 1)
+                    {
+                        throw new InvalidDataException("A Rusty Kiosk app may have at most one launch requirement.");
+                    }
+                    foreach (var requirement in requirements.EnumerateArray())
+                    {
+                        if (requirement.ValueKind != JsonValueKind.String ||
+                            requirement.GetString() is not ("wifi-on" or "wifi-off"))
+                        {
+                            throw new InvalidDataException(
+                                "Rusty Kiosk active requirements must be exactly wifi-on or wifi-off.");
+                        }
+                    }
+                }
             }
         }
 
         return json;
+    }
+
+    private static void RequireExactFields(
+        JsonElement element,
+        IReadOnlyCollection<string> required,
+        IReadOnlyCollection<string> allowed)
+    {
+        var actual = element.EnumerateObject().Select(static property => property.Name).ToHashSet(StringComparer.Ordinal);
+        if (required.Any(field => !actual.Contains(field)) || actual.Any(field => !allowed.Contains(field)))
+        {
+            throw new InvalidDataException("Rusty Kiosk tag-file fields do not match the strict v2 schema.");
+        }
     }
 }

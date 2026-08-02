@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using QuestIonAbleFileManager.Core;
 using Microsoft.Win32;
 
@@ -21,6 +22,9 @@ public partial class MainWindow : Window
     private RustyKioskInstallationStatus? _rustyKioskInstallation;
     private RustyKioskState? _rustyKioskState;
     private RustyKioskDirectClient? _rustyKioskDirectClient;
+    private KioskDirectOperatorExecutor? _rustyKioskDirectOperator;
+    private RustyKioskUsbDirectLinkSession? _rustyKioskUsbDirectSession;
+    private readonly DispatcherTimer _pairingCodeRevealTimer;
     private string[] _rustyKioskDirectApkPaths = [];
     private string? _rustyKioskDirectInstallRequestId;
     private OperatorCommand? _pendingMutationCommand;
@@ -28,10 +32,16 @@ public partial class MainWindow : Window
     private IProgress<OperatorProgress>? _activeProgress;
     private int _progressGeneration;
     private bool _busy;
+    private bool _closingAfterDirectCleanup;
 
     public MainWindow()
     {
         InitializeComponent();
+        _pairingCodeRevealTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(15)
+        };
+        _pairingCodeRevealTimer.Tick += (_, _) => ClearManualPairingInput();
         WifiInstallTargetsList.ItemsSource = _wifiInstallTargets;
         CpuLevelBox.ItemsSource = Enumerable.Range(0, 6);
         GpuLevelBox.ItemsSource = Enumerable.Range(0, 6);
@@ -322,7 +332,7 @@ public partial class MainWindow : Window
             if (privateDocument is not null)
                 CryptographicOperations.ZeroMemory(privateDocument);
             KioskDirectEndpointBox.Clear();
-            KioskDirectPairingCodeBox.Clear();
+            ClearManualPairingInput();
         }
     }
 
@@ -996,41 +1006,223 @@ public partial class MainWindow : Window
 
     private async void OnConnectKioskDirect(object sender, RoutedEventArgs eventArgs)
     {
-        RustyKioskDirectEndpoint endpoint;
         try
         {
-            endpoint = RustyKioskDirectEndpoint.Parse(
-                KioskDirectEndpointBox.Text,
-                KioskDirectPairingCodeBox.Password);
+            RustyKioskDirectEndpoint endpoint;
+            try
+            {
+                endpoint = RustyKioskDirectEndpoint.Parse(
+                    KioskDirectEndpointBox.Text,
+                    KioskDirectPairingCodeBox.Password);
+            }
+            catch (ArgumentException exception)
+            {
+                ShowInputMessage(exception.Message);
+                return;
+            }
+
+            await RunBusyAsync(
+                async () =>
+                {
+                    await DisconnectKioskDirectAsync(updateUi: false);
+                    var client = new RustyKioskDirectClient(endpoint);
+                    try
+                    {
+                        await AdoptKioskDirectClientAsync(client, usbSession: null);
+                    }
+                    catch
+                    {
+                        client.Dispose();
+                        throw;
+                    }
+                },
+                "Authenticating Rusty Kiosk direct link…");
         }
-        catch (ArgumentException exception)
+        finally
+        {
+            ClearManualPairingInput();
+        }
+    }
+
+    private async void OnConnectKioskDirectUsb(object sender, RoutedEventArgs eventArgs)
+    {
+        ClearManualPairingInput();
+        if (_client is null)
+        {
+            ShowInputMessage("ADB is unavailable. Use the manual Direct Link fields or configure Platform Tools.");
+            return;
+        }
+        QuestDevice device;
+        try
+        {
+            device = RequireReadyUsbDevice();
+        }
+        catch (InvalidOperationException exception)
         {
             ShowInputMessage(exception.Message);
+            return;
+        }
+        var product = SelectedKioskProduct();
+        if (MessageBox.Show(
+                this,
+                $"Use the authorized USB connection to {product.WireName} Rusty Kiosk to mint one short-lived Direct Link session?\n\n" +
+                "The endpoint and session credential stay in this process. If this request starts the listener, Disconnect or closing this window will stop that owned generation.",
+                "Confirm authorized-USB Direct Link",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
             return;
         }
 
         await RunBusyAsync(
             async () =>
             {
-                var client = new RustyKioskDirectClient(endpoint);
-                var status = await client.GetStatusAsync();
-                _rustyKioskDirectClient = client;
-                KioskDirectStatusText.Text =
-                    $"Direct link: connected · installer {(status.InstallerAllowed ? "allowed" : "needs wearer permission")}";
-                await RefreshKioskAsync();
-                await RefreshKioskDirectStagingAsync();
+                await DisconnectKioskDirectAsync(updateUi: false);
+                var session = await new RustyKioskUsbDirectLinkBootstrapper(_client)
+                    .ConnectAsync(
+                        device.Serial,
+                        product.Channel,
+                        operatorConfirmed: true);
+                try
+                {
+                    await AdoptKioskDirectClientAsync(session.Client, session);
+                }
+                catch (Exception exception)
+                {
+                    throw await session.CloseAfterAdoptionFailureAsync(exception);
+                }
             },
-            "Authenticating Rusty Kiosk direct link…");
+            "Creating a memory-only Direct Link session over authorized USB…");
     }
 
-    private void OnDisconnectKioskDirect(object sender, RoutedEventArgs eventArgs)
+    private async void OnDisconnectKioskDirect(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await DisconnectKioskDirectAsync(updateUi: true),
+            "Clearing the Direct Link session…");
+
+    private async Task AdoptKioskDirectClientAsync(
+        RustyKioskDirectClient client,
+        RustyKioskUsbDirectLinkSession? usbSession)
     {
+        var directOperator = new KioskDirectOperatorExecutor(client);
+        var adoption = await directOperator.ExecuteAsync(KioskDirectOperatorCommand.Adopt());
+        var status = adoption.Status ??
+            throw new InvalidOperationException("Direct Link returned no signed status.");
+        var kiosk = adoption.KioskResult ??
+            throw new InvalidOperationException("Direct Link returned no Kiosk readback.");
+        var stagedFiles = adoption.StagedFiles ??
+            throw new InvalidOperationException("Direct Link returned no staging readback.");
+
+        // Publish the process-memory session only after every required signed readback has
+        // succeeded. Callers still own and dispose an unadopted client/session on failure.
+        try
+        {
+            _rustyKioskDirectClient = client;
+            _rustyKioskDirectOperator = directOperator;
+            _rustyKioskUsbDirectSession = usbSession;
+            KioskDirectStatusText.Text =
+                $"Direct link: connected · {(usbSession is null ? "manual" : "authorized USB session")} · " +
+                $"installer {(status.InstallerAllowed ? "allowed" : "needs wearer permission")}";
+            ApplyKioskResult(kiosk);
+            KioskDirectStagingList.ItemsSource = stagedFiles;
+            StatusText.Text =
+                $"Direct staging readback: {stagedFiles.Count} file{(stagedFiles.Count == 1 ? string.Empty : "s")}.";
+        }
+        catch
+        {
+            _rustyKioskDirectClient = null;
+            _rustyKioskDirectOperator = null;
+            _rustyKioskUsbDirectSession = null;
+            _rustyKioskDirectInstallRequestId = null;
+            KioskDirectStagingList.ItemsSource = null;
+            KioskDirectStatusText.Text = "Direct link: not connected";
+            throw;
+        }
+    }
+
+    private async Task DisconnectKioskDirectAsync(bool updateUi)
+    {
+        ClearManualPairingInput();
+        var usb = _rustyKioskUsbDirectSession;
+        var client = _rustyKioskDirectClient;
+        _rustyKioskUsbDirectSession = null;
         _rustyKioskDirectClient = null;
+        _rustyKioskDirectOperator = null;
         _rustyKioskDirectInstallRequestId = null;
+        RustyKioskUsbDirectCleanupReceipt? cleanup = null;
+        if (usb is not null)
+        {
+            cleanup = await usb.CloseAsync();
+        }
+        else
+        {
+            client?.Dispose();
+        }
         KioskDirectStagingList.ItemsSource = null;
         KioskDirectStatusText.Text = "Direct link: not connected";
         KioskDirectInstallStatusText.Text = "Local install: no request sent";
-        StatusText.Text = "Disconnected the PC from Rusty Kiosk's direct link. The headset setting was not changed.";
+        if (updateUi)
+        {
+            StatusText.Text = cleanup is null
+                ? "Cleared the PC Direct Link credential."
+                : $"Cleared the PC Direct Link credential. Cleanup {cleanup.Stage.ToString().ToLowerInvariant()}: {cleanup.Message}";
+        }
+    }
+
+    private void OnKioskDirectRevealChanged(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskDirectShowPairingCodeBox.IsChecked == true)
+        {
+            KioskDirectPairingCodeRevealText.Text = KioskDirectPairingCodeBox.Password;
+            KioskDirectPairingCodeBox.Visibility = Visibility.Collapsed;
+            KioskDirectPairingCodeRevealText.Visibility = Visibility.Visible;
+            _pairingCodeRevealTimer.Stop();
+            _pairingCodeRevealTimer.Start();
+        }
+        else
+        {
+            RemaskPairingCode();
+        }
+    }
+
+    private void OnKioskDirectRevealLostFocus(object sender, RoutedEventArgs eventArgs) =>
+        ClearManualPairingInput();
+
+    private void OnDeactivated(object? sender, EventArgs eventArgs) =>
+        ClearManualPairingInput();
+
+    private void RemaskPairingCode()
+    {
+        _pairingCodeRevealTimer.Stop();
+        KioskDirectPairingCodeRevealText.Text = string.Empty;
+        KioskDirectPairingCodeRevealText.Visibility = Visibility.Collapsed;
+        KioskDirectPairingCodeBox.Visibility = Visibility.Visible;
+        KioskDirectShowPairingCodeBox.IsChecked = false;
+    }
+
+    private void ClearManualPairingInput()
+    {
+        RemaskPairingCode();
+        KioskDirectPairingCodeBox.Clear();
+    }
+
+    private async void OnClosing(object? sender, CancelEventArgs eventArgs)
+    {
+        if (_closingAfterDirectCleanup)
+        {
+            return;
+        }
+        eventArgs.Cancel = true;
+        _closingAfterDirectCleanup = true;
+        try
+        {
+            ClearManualPairingInput();
+            await DisconnectKioskDirectAsync(updateUi: false);
+        }
+        finally
+        {
+            Close();
+        }
     }
 
     private async void OnRefreshKioskDirectStaging(object sender, RoutedEventArgs eventArgs) =>
@@ -1052,7 +1244,11 @@ public partial class MainWindow : Window
         await RunBusyAsync(
             async () =>
             {
-                await client.UploadToStagingAsync(dialog.FileName);
+                await RequireKioskDirectOperator().ExecuteAsync(
+                    KioskDirectOperatorCommand.Upload(
+                        dialog.FileName,
+                        stagedName: null,
+                        operatorConfirmed: true));
                 await RefreshKioskDirectStagingAsync();
                 StatusText.Text = $"Confirmed {Path.GetFileName(dialog.FileName)} in direct staging.";
             },
@@ -1080,7 +1276,8 @@ public partial class MainWindow : Window
         await RunBusyAsync(
             async () =>
             {
-                await client.DeleteStagedAsync(file.Name);
+                await RequireKioskDirectOperator().ExecuteAsync(
+                    KioskDirectOperatorCommand.Delete(file.Name, operatorConfirmed: true));
                 await RefreshKioskDirectStagingAsync();
                 StatusText.Text = $"Confirmed deletion of staged file {file.Name}.";
             },
@@ -1109,8 +1306,10 @@ public partial class MainWindow : Window
         await RunBusyAsync(
             async () =>
             {
-                var output = await client.DownloadFromStagingAsync(file.Name, dialog.FileName, overwrite: true);
-                StatusText.Text = $"Confirmed and downloaded staged file to {output}.";
+                var result = await RequireKioskDirectOperator().ExecuteAsync(
+                    KioskDirectOperatorCommand.Download(file.Name, dialog.FileName, overwrite: true));
+                StatusText.Text =
+                    $"Confirmed and downloaded staged file {result.LocalFileName}.";
             },
             $"Downloading and verifying {file.Name}…");
     }
@@ -1162,15 +1361,15 @@ public partial class MainWindow : Window
             async () =>
             {
                 KioskDirectInstallStatusText.Text = "Local install: sent · staging verified APK parts";
-                foreach (var path in _rustyKioskDirectApkPaths)
-                {
-                    await client.UploadToStagingAsync(path);
-                }
                 var requestId = "install_" + Guid.NewGuid().ToString("N");
                 _rustyKioskDirectInstallRequestId = requestId;
-                var receipt = await client.RequestInstallAsync(
-                    _rustyKioskDirectApkPaths.Select(Path.GetFileName).Select(static name => name!).ToArray(),
-                    requestId);
+                var operation = await RequireKioskDirectOperator().ExecuteAsync(
+                    KioskDirectOperatorCommand.Install(
+                        _rustyKioskDirectApkPaths,
+                        operatorConfirmed: true,
+                        requestId));
+                var receipt = operation.InstallReceipt ??
+                    throw new InvalidOperationException("Direct Link install returned no receipt.");
                 ShowDirectInstallReceipt(receipt);
                 await RefreshKioskDirectStagingAsync();
             },
@@ -1186,8 +1385,13 @@ public partial class MainWindow : Window
             return;
         }
         await RunBusyAsync(
-            async () => ShowDirectInstallReceipt(
-                await client.ReadInstallReceiptAsync(_rustyKioskDirectInstallRequestId)),
+            async () =>
+            {
+                var operation = await RequireKioskDirectOperator().ExecuteAsync(
+                    KioskDirectOperatorCommand.InstallStatus(_rustyKioskDirectInstallRequestId));
+                ShowDirectInstallReceipt(operation.InstallReceipt ??
+                    throw new InvalidOperationException("Direct Link install status returned no receipt."));
+            },
             "Reading Android's matching install receipt…");
     }
 
@@ -1196,9 +1400,58 @@ public partial class MainWindow : Window
 
     private void OnKioskAppSelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
     {
-        var tags = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Tags ?? [];
+        var entry = KioskAppsList.SelectedItem as RustyKioskAppEntry;
+        var tags = entry?.Tags ?? [];
         KioskSelectedTagsBox.ItemsSource = tags;
         KioskSelectedTagsBox.SelectedIndex = tags.Count > 0 ? 0 : -1;
+        var requirement = entry?.LaunchRequirement.ToWireName() ?? "any";
+        KioskLaunchRequirementBox.SelectedItem = KioskLaunchRequirementBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, requirement, StringComparison.Ordinal));
+        var stateMatchesEntry = entry is not null &&
+            string.Equals(entry.Key, _rustyKioskState?.SelectedKey, StringComparison.Ordinal);
+        var options = stateMatchesEntry
+                ? _rustyKioskState?.SelectedLaunchOptions ?? []
+                : [];
+        KioskLaunchOptionsBox.ItemsSource = options;
+        KioskLaunchOptionsBox.SelectedIndex = options.Count > 0 ? 0 : -1;
+        KioskLaunchOptionsStatusText.Text = stateMatchesEntry &&
+            _rustyKioskState is { } state
+                ? KioskLaunchOptionsStatusLabel(state)
+                : entry is null
+                    ? "App launch options: select an app"
+                    : "App launch options: use Read options for this app";
+    }
+
+    private async void OnKioskShowControls(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.ShowControls),
+            "Showing Kiosk controls on the headset…");
+
+    private async void OnKioskShowApps(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.ShowApps),
+            "Showing the Kiosk app catalog on the headset…");
+
+    private async void OnKioskFocusSearch(object sender, RoutedEventArgs eventArgs) =>
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.FocusSearch),
+            "Requesting headset search focus…");
+
+    private async void OnKioskFocusTagEditor(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                await SelectCurrentKioskEntryAsync();
+                await RunKioskCommandAsync(RustyKioskCommand.FocusTagEditor);
+            },
+            "Requesting headset tag-editor focus…");
     }
 
     private async void OnKioskLaunchNormal(object sender, RoutedEventArgs eventArgs) =>
@@ -1206,6 +1459,86 @@ public partial class MainWindow : Window
 
     private async void OnKioskLaunchGuarded(object sender, RoutedEventArgs eventArgs) =>
         await LaunchSelectedKioskAppAsync(guarded: true);
+
+    private async void OnReadKioskLaunchOptions(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Select {entry.Name} on the headset and read its validated launch options?",
+                "Confirm launch-option discovery",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+        await RunBusyAsync(
+            SelectCurrentKioskEntryAsync,
+            $"Reading {entry.Name}'s launch options…");
+    }
+
+    private async void OnKioskLaunchOption(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry ||
+            !string.Equals(entry.Key, _rustyKioskState?.SelectedKey, StringComparison.Ordinal))
+        {
+            ShowInputMessage("Use Read options for the selected app before choosing one of its launch options.");
+            return;
+        }
+        if (KioskLaunchOptionsBox.SelectedItem is not RustyKioskLaunchOption option)
+        {
+            ShowInputMessage("The selected app has no validated launch option to run.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Launch {entry.Name} with option '{option.DisplayLabel}'?",
+                "Confirm app launch option",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.LaunchOption, option.OptionId),
+            $"Launching {entry.Name} with {option.DisplayLabel}…");
+    }
+
+    private async void OnSetKioskLaunchRequirement(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        if (KioskLaunchRequirementBox.SelectedItem is not ComboBoxItem { Tag: string value })
+        {
+            ShowInputMessage("Choose a launch requirement first.");
+            return;
+        }
+        _ = RustyKioskCommands.ParseLaunchRequirement(value);
+        if (MessageBox.Show(
+                this,
+                $"Set {entry.Name}'s launch requirement to {value}?",
+                "Confirm active launch requirement",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+        await RunBusyAsync(
+            async () =>
+            {
+                await SelectCurrentKioskEntryAsync();
+                await RunKioskCommandAsync(RustyKioskCommand.SetLaunchRequirement, value);
+            },
+            $"Setting launch requirement to {value}…");
+    }
 
     private async void OnAddKioskTag(object sender, RoutedEventArgs eventArgs)
     {
@@ -1261,7 +1594,7 @@ public partial class MainWindow : Window
             Filter = "JSON files (*.json)|*.json",
             DefaultExt = ".json",
             AddExtension = true,
-            FileName = "app-tags.v1.json",
+            FileName = "app-tags.json",
             OverwritePrompt = true
         };
         if (dialog.ShowDialog(this) != true)
@@ -1274,11 +1607,15 @@ public partial class MainWindow : Window
             {
                 if (_rustyKioskDirectClient is { } direct)
                 {
-                    await File.WriteAllBytesAsync(dialog.FileName, await direct.ReadTagsAsync());
+                    await RequireKioskDirectOperator().ExecuteAsync(
+                        KioskDirectOperatorCommand.ExportTags(dialog.FileName));
                 }
                 else
                 {
-                    await ExecuteOperatorAsync(OperatorCommands.PullRustyKioskTags(device!.Serial, dialog.FileName));
+                    await ExecuteOperatorAsync(OperatorCommands.PullRustyKioskTags(
+                        device!.Serial,
+                        dialog.FileName,
+                        SelectedKioskProduct()));
                 }
                 StatusText.Text = $"Exported the Rusty Kiosk tag file to {dialog.FileName}.";
             },
@@ -1334,9 +1671,13 @@ public partial class MainWindow : Window
                 if (_rustyKioskDirectClient is { } direct)
                 {
                     KioskSyncStatusText.Text = "PC/headset sync: sent · tag file replacement";
-                    await direct.WriteTagsAsync(await File.ReadAllBytesAsync(dialog.FileName));
+                    var directResult = await RequireKioskDirectOperator().ExecuteAsync(
+                        KioskDirectOperatorCommand.ImportTags(
+                            dialog.FileName,
+                            operatorConfirmed: true));
                     KioskSyncStatusText.Text = "PC/headset sync: pending · reading hotloaded catalogue";
-                    ApplyKioskResult(await direct.InvokeKioskAsync(RustyKioskCommand.Reload));
+                    ApplyKioskResult(directResult.KioskResult ??
+                        throw new InvalidOperationException("Direct tag import returned no Kiosk readback."));
                     KioskSyncStatusText.Text = "PC/headset sync: confirmed · tag file hotloaded and catalogue read back";
                 }
                 else
@@ -1345,7 +1686,8 @@ public partial class MainWindow : Window
                         OperatorCommands.PushRustyKioskTags(
                             device!.Serial,
                             dialog.FileName,
-                            operatorConfirmed: true));
+                            operatorConfirmed: true,
+                            product: SelectedKioskProduct()));
                     ApplyKioskExecution(execution);
                 }
             },
@@ -1381,6 +1723,21 @@ public partial class MainWindow : Window
         await ConfirmAndRunKioskControlAsync(
             RustyKioskCommand.DisableAccessibility,
             "Disable Rusty Kiosk's Accessibility watchdog?");
+
+    private async void OnCancelKioskPendingLaunch(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.CancelPendingLaunch,
+            "Cancel the pending launch that is waiting for its active Wi-Fi requirement?");
+
+    private async void OnKioskPassthroughNatural(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.PassthroughNatural,
+            "Switch Rusty Kiosk to natural system passthrough?");
+
+    private async void OnKioskPassthroughContour(object sender, RoutedEventArgs eventArgs) =>
+        await ConfirmAndRunKioskControlAsync(
+            RustyKioskCommand.PassthroughContour,
+            "Switch Rusty Kiosk to its contour-LUT passthrough style?");
 
     private async void OnEnableKeepAwake(object sender, RoutedEventArgs eventArgs) =>
         await SetKeepAwakeAsync(enabled: true);
@@ -1465,14 +1822,25 @@ public partial class MainWindow : Window
     {
         if (_rustyKioskDirectClient is { } direct)
         {
-            var directStatus = await direct.GetStatusAsync();
+            var statusOperation = await RequireKioskDirectOperator().ExecuteAsync(
+                KioskDirectOperatorCommand.Status());
+            var directStatus = statusOperation.Status ??
+                throw new InvalidOperationException("Direct Link returned no signed status.");
             KioskDirectStatusText.Text =
                 $"Direct link: connected · installer {(directStatus.InstallerAllowed ? "allowed" : "needs wearer permission")}";
-            ApplyKioskResult(await direct.InvokeKioskAsync(RustyKioskCommand.Status));
+            var kioskOperation = await RequireKioskDirectOperator().ExecuteAsync(
+                KioskDirectOperatorCommand.Invoke(
+                    RustyKioskCommand.Status,
+                    value: null,
+                    operatorConfirmed: true));
+            ApplyKioskResult(kioskOperation.KioskResult ??
+                throw new InvalidOperationException("Direct Link returned no Kiosk readback."));
             return;
         }
 
-        var command = OperatorCommands.InspectRustyKiosk(RequireReadyDevice().Serial);
+        var command = OperatorCommands.InspectRustyKiosk(
+            RequireReadyDevice().Serial,
+            SelectedKioskProduct());
         var execution = await ExecuteOperatorAsync(command);
         ApplyKioskExecution(execution);
         ReconcilePendingMutation(execution);
@@ -1488,8 +1856,9 @@ public partial class MainWindow : Window
 
     private async Task RefreshKioskDirectStagingAsync()
     {
-        var client = RequireKioskDirectClient();
-        var files = await client.ListStagingAsync();
+        var result = await RequireKioskDirectOperator().ExecuteAsync(
+            KioskDirectOperatorCommand.ListStaging());
+        var files = result.StagedFiles ?? [];
         KioskDirectStagingList.ItemsSource = files;
         StatusText.Text = $"Direct staging readback: {files.Count} file{(files.Count == 1 ? string.Empty : "s")}.";
     }
@@ -1497,6 +1866,10 @@ public partial class MainWindow : Window
     private RustyKioskDirectClient RequireKioskDirectClient() =>
         _rustyKioskDirectClient ?? throw new InvalidOperationException(
             "Connect Rusty Kiosk's direct link with the headset address and pairing code first.");
+
+    private KioskDirectOperatorExecutor RequireKioskDirectOperator() =>
+        _rustyKioskDirectOperator ?? throw new InvalidOperationException(
+            "Connect Rusty Kiosk's Direct Link first.");
 
     private void ShowDirectInstallReceipt(RustyKioskDirectInstallReceipt receipt)
     {
@@ -1585,7 +1958,18 @@ public partial class MainWindow : Window
         if (_rustyKioskDirectClient is { } direct)
         {
             KioskSyncStatusText.Text = $"PC/headset sync: sent · {command.ToWireName()}";
-            var result = await direct.InvokeKioskAsync(command, value);
+            var operation = await RequireKioskDirectOperator().ExecuteAsync(
+                KioskDirectOperatorCommand.Invoke(
+                    command,
+                    value,
+                    operatorConfirmed: true));
+            var result = operation.KioskResult;
+            if (result is null)
+            {
+                KioskSyncStatusText.Text =
+                    $"PC/headset sync: {operation.Mutation.Stage.ToString().ToLowerInvariant()} · {operation.Mutation.Message}";
+                return;
+            }
             KioskSyncStatusText.Text = $"PC/headset sync: pending · checking signed effective state for {command.ToWireName()}";
             ApplyKioskResult(result);
             KioskSyncStatusText.Text = RustyKioskReadback.Confirms(command, value, result)
@@ -1599,8 +1983,15 @@ public partial class MainWindow : Window
                 RequireReadyDevice().Serial,
                 command,
                 value,
-                operatorConfirmed: true));
+                operatorConfirmed: true,
+                product: SelectedKioskProduct()));
         ApplyKioskExecution(execution);
+    }
+
+    private RustyKioskProductContract SelectedKioskProduct()
+    {
+        var channel = (KioskProductChannelBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "stable";
+        return RustyKioskProductContract.Parse(channel);
     }
 
     private async Task SetKeepAwakeAsync(bool enabled)
@@ -1658,6 +2049,7 @@ public partial class MainWindow : Window
         _rustyKioskState = null;
         KioskAppsList.ItemsSource = null;
         KioskSelectedTagsBox.ItemsSource = null;
+        KioskLaunchOptionsBox.ItemsSource = null;
         KioskTagFilterBox.ItemsSource = new[] { "All tags" };
         KioskTagFilterBox.SelectedIndex = 0;
         KioskInstallStatusText.Text = "Rusty Kiosk: not checked";
@@ -1665,6 +2057,10 @@ public partial class MainWindow : Window
         KioskWifiStatusText.Text = "Wireless debugging: not checked";
         KioskAutoWifiStatusText.Text = "Request after restart: not checked";
         KioskAccessibilityStatusText.Text = "Accessibility guard: not checked";
+        KioskPanelStatusText.Text = "Headset panel: not checked";
+        KioskPendingLaunchStatusText.Text = "Pending requirement launch: not checked";
+        KioskPassthroughStatusText.Text = "Passthrough: not checked";
+        KioskLaunchOptionsStatusText.Text = "App launch options: not checked";
         HeadsetBatteryText.Text = "Headset battery: not checked";
         ControllerBatteryText.Text = "Controllers: not checked";
         KeepAwakeStatusText.Text = "Keep awake: not checked";
@@ -1704,6 +2100,24 @@ public partial class MainWindow : Window
         KioskAccessibilityStatusText.Text =
             $"Accessibility guard: {(kiosk.State.AccessibilityEnabled ? "enabled" : "disabled")}; " +
             $"guard {(kiosk.State.GuardArmed ? "armed" : "inactive")}";
+        KioskPanelStatusText.Text = kiosk.State.ControlsOpen switch
+        {
+            true => "Headset panel: controls",
+            false => "Headset panel: apps",
+            null => "Headset panel: unavailable in this Kiosk version"
+        };
+        KioskPendingLaunchStatusText.Text = kiosk.State.PendingRequirementLaunch switch
+        {
+            true => $"Pending requirement launch: {kiosk.State.PendingRequirementLaunchId ?? "waiting for wearer action"}",
+            false => "Pending requirement launch: none",
+            null => "Pending requirement launch: unavailable in this Kiosk version"
+        };
+        KioskPassthroughStatusText.Text = kiosk.State.PassthroughStyle is { } style
+            ? $"Passthrough: {style.ToWireName()}; system " +
+              $"{(kiosk.State.SystemPassthroughEnabled == true ? "enabled" : "disabled")}; " +
+              $"LUT {(kiosk.State.PassthroughLutApplied == true ? "applied" : "not applied")}"
+            : "Passthrough: unavailable in this Kiosk version";
+        KioskLaunchOptionsStatusText.Text = KioskLaunchOptionsStatusLabel(kiosk.State);
         var previousTag = KioskTagFilterBox.SelectedItem as string;
         var tagChoices = new[] { "All tags" }.Concat(kiosk.State.Tags).ToArray();
         KioskTagFilterBox.ItemsSource = tagChoices;
@@ -1714,6 +2128,21 @@ public partial class MainWindow : Window
         StatusText.Text = kiosk.Message;
     }
 
+    private static string KioskLaunchOptionsStatusLabel(RustyKioskState state)
+    {
+        if (state.SelectedLaunchOptionsStatus is not { } status)
+        {
+            return "App launch options: unavailable in this Kiosk version";
+        }
+        var message = string.IsNullOrWhiteSpace(state.SelectedLaunchOptionsMessage)
+            ? string.Empty
+            : $" · {state.SelectedLaunchOptionsMessage}";
+        var binding = state.SelectedLaunchOptionsBinding is { } exact
+            ? $" · owner {exact.PackageName} · UID {exact.Uid} · binding {exact.BindingSha256[..12]}"
+            : string.Empty;
+        return $"App launch options: {status.ToWireName()}{message}{binding}";
+    }
+
     private void UpdateKioskAppProjection()
     {
         if (_rustyKioskState is null)
@@ -1721,7 +2150,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selectedKey = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Key;
+        var selectedKey = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Key ??
+            _rustyKioskState.SelectedKey;
         var search = KioskSearchBox.Text.Trim();
         var tag = KioskTagFilterBox.SelectedItem as string;
         var entries = _rustyKioskState.Entries

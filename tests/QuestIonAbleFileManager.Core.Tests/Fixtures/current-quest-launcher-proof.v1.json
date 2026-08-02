@@ -1,0 +1,8 @@
+{
+  "schema": "questionable.file_manager.launcher_proof_fixture.v1",
+  "provenance": "sanitized-current-quest-shell-output",
+  "package": "io.github.mesmerprism.rustyquest.spatial_camera_panel",
+  "activity": ".SpatialCameraPanelActivity",
+  "query_stdout": "io.github.mesmerprism.rustyquest.spatial_camera_panel/.SpatialCameraPanelActivity\n",
+  "package_dump_excerpt": "Activity Resolver Table:\n  Non-Data Actions:\n      android.intent.action.MAIN:\n        2c9cd07 io.github.mesmerprism.rustyquest.spatial_camera_panel/.SpatialCameraPanelActivity filter 6ce9e34\n          Action: \"android.intent.action.MAIN\"\n          Category: \"com.oculus.intent.category.VR\"\n          Category: \"android.intent.category.LAUNCHER\"\n"
+}

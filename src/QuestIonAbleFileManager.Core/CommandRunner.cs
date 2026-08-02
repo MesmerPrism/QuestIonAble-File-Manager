@@ -4,7 +4,7 @@ using System.Text;
 
 namespace QuestIonAbleFileManager.Core;
 
-public sealed class CommandRunner : IStreamingCommandRunner
+public sealed class CommandRunner : IStreamingCommandRunner, ISensitiveCommandRunner
 {
     private const int StreamBufferBytes = 64 * 1024;
     private const int MaximumStandardErrorCharacters = 64 * 1024;
@@ -274,6 +274,96 @@ public sealed class CommandRunner : IStreamingCommandRunner
             Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant());
     }
 
+    public async Task<SensitiveCommandResult<T>> RunSensitiveAsync<T>(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        int maximumStandardOutputBytes,
+        int maximumStandardErrorBytes,
+        TimeSpan timeout,
+        Func<ReadOnlyMemory<byte>, T> parseStandardOutput,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStandardOutputBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStandardErrorBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(parseStandardOutput);
+
+        var startInfo = CreateStartInfo(fileName, arguments);
+        using var process = new Process { StartInfo = startInfo };
+        var stopwatch = Stopwatch.StartNew();
+        StartProcess(process, fileName);
+
+        using var timeoutSource = new CancellationTokenSource(timeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+        var outputTask = ReadBoundedSensitiveBytesAsync(
+            process.StandardOutput.BaseStream,
+            maximumStandardOutputBytes,
+            linkedSource.Token);
+        var errorTask = ReadBoundedSensitiveBytesAsync(
+            process.StandardError.BaseStream,
+            maximumStandardErrorBytes,
+            linkedSource.Token);
+        byte[]? output = null;
+        byte[]? error = null;
+        try
+        {
+            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            output = await outputTask.ConfigureAwait(false);
+            error = await errorTask.ConfigureAwait(false);
+            stopwatch.Stop();
+            if (process.ExitCode != 0)
+            {
+                throw new SensitiveCommandException(
+                    $"{Path.GetFileName(fileName)} rejected the sensitive request with exit code {process.ExitCode}; output was withheld.");
+            }
+
+            T value;
+            try
+            {
+                value = parseStandardOutput(output);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                throw new SensitiveCommandException(
+                    $"{Path.GetFileName(fileName)} returned a malformed sensitive response; output was withheld.");
+            }
+            return new SensitiveCommandResult<T>(value, process.ExitCode, stopwatch.Elapsed);
+        }
+        catch (OperationCanceledException) when (
+            timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await ClearSensitiveTaskAsync(outputTask).ConfigureAwait(false);
+            await ClearSensitiveTaskAsync(errorTask).ConfigureAwait(false);
+            throw new TimeoutException(
+                $"{Path.GetFileName(fileName)} timed out while handling a sensitive response; output was withheld.");
+        }
+        catch
+        {
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await ClearSensitiveTaskAsync(outputTask).ConfigureAwait(false);
+            await ClearSensitiveTaskAsync(errorTask).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            if (output is not null)
+            {
+                CryptographicOperations.ZeroMemory(output);
+            }
+            if (error is not null)
+            {
+                CryptographicOperations.ZeroMemory(error);
+            }
+        }
+    }
+
     private static ProcessStartInfo CreateStartInfo(
         string fileName,
         IReadOnlyList<string> arguments,
@@ -346,6 +436,44 @@ public sealed class CommandRunner : IStreamingCommandRunner
         return builder.ToString();
     }
 
+    private static async Task<byte[]> ReadBoundedSensitiveBytesAsync(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        using var output = new MemoryStream(Math.Min(maximumBytes, 4 * 1024));
+        var buffer = new byte[Math.Min(StreamBufferBytes, maximumBytes + 1)];
+        try
+        {
+            while (true)
+            {
+                var remainingWithSentinel = maximumBytes - checked((int)output.Length) + 1;
+                var readLength = Math.Min(buffer.Length, remainingWithSentinel);
+                var count = await stream.ReadAsync(
+                    buffer.AsMemory(0, readLength),
+                    cancellationToken).ConfigureAwait(false);
+                if (count == 0)
+                {
+                    return output.ToArray();
+                }
+                if (output.Length + count > maximumBytes)
+                {
+                    throw new SensitiveCommandException(
+                        "A sensitive process stream exceeded its fixed byte limit; output was withheld.");
+                }
+                output.Write(buffer, 0, count);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(buffer);
+            if (output.TryGetBuffer(out var segment) && segment.Array is not null)
+            {
+                CryptographicOperations.ZeroMemory(segment.Array);
+            }
+        }
+    }
+
     private static async Task WaitAfterKillAsync(Process process)
     {
         try
@@ -367,6 +495,20 @@ public sealed class CommandRunner : IStreamingCommandRunner
         catch
         {
             // Process cleanup must not replace the bounded-transfer failure.
+        }
+    }
+
+    private static async Task ClearSensitiveTaskAsync(Task<byte[]> task)
+    {
+        try
+        {
+            var value = await task.ConfigureAwait(false);
+            CryptographicOperations.ZeroMemory(value);
+        }
+        catch
+        {
+            // The primary process failure remains authoritative. The bounded reader clears its
+            // internal buffer even when it cannot return a completed byte array.
         }
     }
 

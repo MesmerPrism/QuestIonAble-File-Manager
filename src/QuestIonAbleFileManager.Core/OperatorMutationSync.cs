@@ -8,7 +8,12 @@ public enum OperatorMutationStage
     Pending,
     Confirmed,
     Failed,
-    TimedOut
+    TimedOut,
+    PendingWearerAction,
+    Rejected,
+    Expired,
+    Cancelled,
+    CleanupUnknown
 }
 
 public sealed record OperatorMutationTransition(
@@ -28,7 +33,11 @@ public sealed record OperatorMutationReceipt(
 {
     public bool IsTerminal => Stage is
         OperatorMutationStage.Confirmed or
-        OperatorMutationStage.Failed;
+        OperatorMutationStage.Failed or
+        OperatorMutationStage.Rejected or
+        OperatorMutationStage.Expired or
+        OperatorMutationStage.Cancelled or
+        OperatorMutationStage.CleanupUnknown;
 }
 
 public static class OperatorMutationReconciler
@@ -376,7 +385,7 @@ internal static class OperatorMutations
 
         var value = command.RustyKioskValue;
         var state = kiosk.State;
-        var confirmed = RustyKioskReadback.Confirms(command.RustyKioskCommand!.Value, value, kiosk);
+        var confirmed = RustyKioskReadback.Confirms(command, result.Command, kiosk);
         var observed = KioskObservedState(state);
         return confirmed
             ? OperatorMutationObservation.Confirmed(observed)
@@ -395,6 +404,10 @@ internal static class OperatorMutations
         $"Wi-Fi ADB={(state.WifiAdbEnabled ? "on" : "off")}; " +
         $"Accessibility={(state.AccessibilityEnabled ? "on" : "off")}; " +
         $"guard={(state.GuardArmed ? "armed" : "inactive")}; " +
+        $"requirement={state.SelectedLaunchRequirement?.ToWireName() ?? "unknown"}; " +
+        $"pending-launch={state.PendingRequirementLaunch?.ToString().ToLowerInvariant() ?? "unknown"}; " +
+        $"passthrough={state.PassthroughStyle?.ToWireName() ?? "unknown"}; " +
+        $"last-dispatch={state.LastDispatchedOptionId ?? "none"}@{state.LastDispatchedOptionPackage ?? "none"}; " +
         $"selected={state.SelectedKey ?? "none"}.";
 
     private static string DisplayOverride(string value) =>
@@ -407,9 +420,34 @@ public static class RustyKioskReadback
         RustyKioskCommand command,
         string? value,
         RustyKioskOperatorResult result)
+        => Confirms(command, value, result, allowStatusSnapshot: false);
+
+    public static bool Confirms(
+        OperatorCommand originalCommand,
+        OperatorCommand readbackCommand,
+        RustyKioskOperatorResult result)
+    {
+        ArgumentNullException.ThrowIfNull(originalCommand);
+        ArgumentNullException.ThrowIfNull(readbackCommand);
+        var command = originalCommand.RustyKioskCommand ??
+            throw new InvalidOperationException("The original operation is missing its typed Rusty Kiosk command.");
+        return Confirms(
+            command,
+            originalCommand.RustyKioskValue,
+            result,
+            IsMatchingStatusSnapshot(originalCommand, readbackCommand, result));
+    }
+
+    private static bool Confirms(
+        RustyKioskCommand command,
+        string? value,
+        RustyKioskOperatorResult result,
+        bool allowStatusSnapshot)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (!result.Accepted || !result.Completed)
+        if (!result.Accepted ||
+            !result.Completed ||
+            (result.Command != command && !allowStatusSnapshot))
         {
             return false;
         }
@@ -417,6 +455,9 @@ public static class RustyKioskReadback
         var state = result.State;
         return command switch
         {
+            RustyKioskCommand.ShowControls => state.ControlsOpen == true,
+            RustyKioskCommand.ShowApps => state.ControlsOpen == false,
+            RustyKioskCommand.FocusSearch or RustyKioskCommand.FocusTagEditor => false,
             RustyKioskCommand.RequestWifiAdb => state.WifiAdbEnabled,
             RustyKioskCommand.EnableWifiAfterBoot => state.RequestWifiAdbAfterBoot,
             RustyKioskCommand.DisableWifiAfterBoot => !state.RequestWifiAdbAfterBoot,
@@ -425,6 +466,14 @@ public static class RustyKioskReadback
             RustyKioskCommand.DisableAccessibility => !state.AccessibilityEnabled,
             RustyKioskCommand.LaunchKiosk => state.GuardArmed,
             RustyKioskCommand.LaunchNormal => !state.GuardArmed,
+            RustyKioskCommand.LaunchOption =>
+                !string.IsNullOrWhiteSpace(value) &&
+                string.Equals(state.LastDispatchedOptionId, value, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(state.SelectedPackage) &&
+                string.Equals(
+                    state.LastDispatchedOptionPackage,
+                    state.SelectedPackage,
+                    StringComparison.Ordinal),
             RustyKioskCommand.SetSearch => string.Equals(state.Search, value ?? string.Empty, StringComparison.Ordinal),
             RustyKioskCommand.FilterTag => string.Equals(state.TagFilter ?? string.Empty, value ?? string.Empty, StringComparison.OrdinalIgnoreCase),
             RustyKioskCommand.Select => string.Equals(state.SelectedKey, value, StringComparison.Ordinal),
@@ -434,8 +483,62 @@ public static class RustyKioskReadback
             RustyKioskCommand.RemoveTag => state.Entries.Any(entry =>
                 string.Equals(entry.Key, state.SelectedKey, StringComparison.Ordinal) &&
                 !entry.Tags.Contains(value ?? string.Empty, StringComparer.OrdinalIgnoreCase)),
+            RustyKioskCommand.SetLaunchRequirement => value is not null &&
+                state.SelectedLaunchRequirement == RustyKioskCommands.ParseLaunchRequirement(value) &&
+                state.Entries.Any(entry =>
+                    string.Equals(entry.Key, state.SelectedKey, StringComparison.Ordinal) &&
+                    entry.LaunchRequirement == state.SelectedLaunchRequirement),
+            RustyKioskCommand.CancelPendingLaunch => state.PendingRequirementLaunch == false,
+            RustyKioskCommand.PassthroughNatural =>
+                state.SystemPassthroughEnabled == true &&
+                state.PassthroughStyle == RustyKioskPassthroughStyle.Natural,
+            RustyKioskCommand.PassthroughContour =>
+                state.SystemPassthroughEnabled == true &&
+                state.PassthroughStyle == RustyKioskPassthroughStyle.ContourLut &&
+                state.PassthroughLutApplied == true,
             RustyKioskCommand.Reload or RustyKioskCommand.ExitMetaHome => true,
             _ => true
         };
     }
+
+    private static bool IsMatchingStatusSnapshot(
+        OperatorCommand originalCommand,
+        OperatorCommand readbackCommand,
+        RustyKioskOperatorResult result)
+    {
+        if (result.Command != RustyKioskCommand.Status ||
+            readbackCommand.Kind != OperatorCommandKind.InspectRustyKiosk ||
+            readbackCommand.RustyKioskCommand != RustyKioskCommand.Status ||
+            string.IsNullOrWhiteSpace(originalCommand.Serial) ||
+            !string.Equals(originalCommand.Serial, readbackCommand.Serial, StringComparison.Ordinal) ||
+            originalCommand.RustyKioskProduct is null ||
+            readbackCommand.RustyKioskProduct is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return RustyKioskProductContract.RequireKnown(originalCommand.RustyKioskProduct) ==
+                RustyKioskProductContract.RequireKnown(readbackCommand.RustyKioskProduct);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+}
+
+public static class RustyKioskCliExitCodes
+{
+    public static int For(OperatorMutationReceipt? receipt, bool accepted) => receipt?.Stage switch
+    {
+        OperatorMutationStage.Confirmed or OperatorMutationStage.Cancelled => accepted ? 0 : 1,
+        OperatorMutationStage.Pending or
+        OperatorMutationStage.PendingWearerAction or
+        OperatorMutationStage.TimedOut => 3,
+        OperatorMutationStage.Rejected or OperatorMutationStage.Expired => 2,
+        null => accepted ? 0 : 1,
+        _ => 1
+    };
 }

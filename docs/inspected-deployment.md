@@ -23,10 +23,24 @@ serial plus both expected and installed byte evidence.
 only from the inspected APK, requires matching installed identity, queries the
 installed base digest, and size before querying the fixed exported
 `MAIN`/`LAUNCHER` surface. It requires exactly one safe component and starts
-that result only after the package dump explicitly proves `exported=true`.
+that result only after a same-package export proof. A matching
+`ActivityInfo`/`Activity` detail record is authoritative and must contain
+exactly one `exported=true` value. When current Quest package dumps omit those
+detail records, the fallback accepts only the exact queried component appearing
+exactly once beneath `Activity Resolver Table` -> `Non-Data Actions` ->
+`android.intent.action.MAIN`, with that same filter declaring both the exact
+`MAIN` action and `LAUNCHER` category. Shorthand and full same-package class
+names normalize to one component. Cross-package, alias/substitution, ambiguous,
+explicitly unexported, malformed, or incomplete evidence fails before dispatch.
 Callers cannot supply components, actions, categories, intents,
 extras, paths, shell fragments, or generic ADB arguments. Confirmation requires
 exact resumed-component readback.
+
+`apk launch ... --json` writes exactly one
+`questionable.file_manager.apk_launch_result.v1` document to standard output on
+success or failure. Failure documents contain a stable sanitized reason and
+whether fixed-component dispatch was attempted; they do not mirror command
+output to standard error or claim successful dispatch after `am start` fails.
 
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
 installed package and byte facts, foreground/top-resumed flags, and package

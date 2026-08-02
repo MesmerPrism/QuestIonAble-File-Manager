@@ -151,10 +151,11 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk status --serial <q
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk install --serial <usb-serial> --confirm-kiosk-setup --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags export --serial <quest-serial> --output ./app-tags.v1.json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags import --serial <quest-serial> --file ./app-tags.v1.json --confirm-kiosk-control --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --endpoint http://<quest-ip>:39873 --pairing-code <on-headset-code> --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct command --endpoint http://<quest-ip>:39873 --pairing-code <code> --command launch-kiosk --confirm-kiosk-control --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct files upload --endpoint http://<quest-ip>:39873 --pairing-code <code> --file ./example.apk
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file ./example.apk --confirm-local-install --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk command --serial <quest-serial> --product-channel labs --command launch-option --value <opaque-option-id> --confirm-kiosk-control --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-staging-upload --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-local-install --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device status --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
@@ -171,6 +172,20 @@ dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- --descr
 dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- --describe-json
 dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- --describe-json
 ```
+
+The optional `launch-option` route carries only one app-discovered opaque id,
+bounded to 160 characters. Kiosk owns provider, package, signer, UID, activity,
+and option revalidation; File Manager never accepts a component, intent action,
+URI, flag, path, or free-form extra for this route. Confirmation requires exact
+readback of both the dispatched option id and the currently selected package.
+Opaque ids are nonblank but otherwise preserved exactly, including any leading
+or trailing whitespace declared by the app.
+The parsed status also preserves Kiosk's exact package/UID/signer/version,
+provider/activity, and installation-time binding evidence; Core independently
+recomputes its v1 binding SHA-256 before projecting it to CLI or WPF.
+This receipt proves Kiosk dispatched the exact owner-defined option. The
+destination app's own markers remain authoritative for foreground, locked-mode,
+timing, looping, and other app semantics.
 
 The optional `questionable-file-manager-api` executable is inert unless
 explicitly started. It requires a private bearer value in
@@ -343,8 +358,19 @@ link. Receipts contain only the Fleet device ID, sanitized state, and stable
 reason code; no profile route contacts a headset or claims Wi-Fi usability.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
-network or a private Windows hotspot. The pairing code can be supplied through
-`RUSTY_KIOSK_PAIRING_CODE` instead of a command-line argument.
+network or a private Windows hotspot. Prefer authorized-USB bootstrap: choose
+the exact USB serial and fixed `stable` or `labs` product channel, and the
+channel-bound Kiosk provider issues one memory-only session. Manual fallback
+uses `--endpoint <url> --credential-stdin`; type the on-headset credential and
+press Enter. Credentials are never accepted through arguments or environment
+variables. Each CLI command closes its session before emitting its one final
+`questionable.file_manager.kiosk_direct_cli_result.v1` JSON result on success
+or failure; JSON failures use fixed sanitized reasons and no plaintext standard
+error. A listener started by that command is disabled only through its exact
+operation/session/generation binding and stopped-state readback; a pre-existing
+wearer-owned listener is preserved. A lost bootstrap response is reconciled
+through an operation-ID-only recovery call and no-argument stopped-state
+readback, without requesting or exposing another credential.
 
 The **APKs (ADB default)** tab is the normal installation route. Once the PC's
 ADB key is authorized, it can install multiple packages without repeated
@@ -352,6 +378,9 @@ in-headset confirmation. Kiosk's direct local installer is an attended fallback:
 the one-time “install unknown apps” grant allows Kiosk to request installs, but
 Android can still require one confirmation for every app installation session.
 A base APK and its split APKs are submitted together as one session.
+Every part is bound to the name, positive byte count, and lowercase SHA-256
+confirmed by its upload so Kiosk can reject a same-name staging replacement
+while copying the same opened handle into PackageInstaller.
 
 ## Design And Safety
 
@@ -364,6 +393,7 @@ A base APK and its split APKs are submitted together as one session.
 - [Two-headset Wi-Fi validation receipt](docs/wifi-adb-parallel-live-validation-2026-07-17.md)
 - [Progress reporting contract](docs/progress-reporting.md)
 - [Rusty Kiosk integration and synchronization](docs/rusty-kiosk-integration.md)
+- [Authorized-USB Kiosk Direct Link](docs/kiosk-direct-authorized-usb.md)
 - [Optional Rusty Fleet integration](docs/fleet-integration.md)
 - [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)

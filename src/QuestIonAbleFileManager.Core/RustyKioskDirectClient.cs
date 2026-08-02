@@ -3,10 +3,13 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace QuestIonAbleFileManager.Core;
 
-public sealed record RustyKioskDirectEndpoint(Uri BaseUri, string PairingCode)
+public sealed record RustyKioskDirectEndpoint(
+    Uri BaseUri,
+    [property: JsonIgnore] string PairingCode)
 {
     public static RustyKioskDirectEndpoint Parse(string endpoint, string pairingCode)
     {
@@ -30,6 +33,8 @@ public sealed record RustyKioskDirectEndpoint(Uri BaseUri, string PairingCode)
         };
         return new RustyKioskDirectEndpoint(builder.Uri, normalizedCode);
     }
+
+    public override string ToString() => BaseUri.AbsoluteUri;
 }
 
 public sealed record RustyKioskDirectStatus(
@@ -37,9 +42,15 @@ public sealed record RustyKioskDirectStatus(
     string? Endpoint,
     bool InstallerAllowed,
     string StagingDirectoryKind,
-    string Message);
+    string Message,
+    long? BridgeGeneration = null,
+    string? SessionId = null);
 
-public sealed record RustyKioskStagedFile(string Name, long Bytes, long ModifiedAtMs)
+public sealed record RustyKioskStagedFile(
+    string Name,
+    long Bytes,
+    long ModifiedAtMs,
+    string? Sha256 = null)
 {
     public string DisplayLabel => $"{Name} · {Bytes:N0} bytes";
 }
@@ -55,6 +66,29 @@ public sealed record RustyKioskDirectInstallReceipt(
     public bool Installed => Completed && string.Equals(State, "installed", StringComparison.Ordinal);
     public bool Failed => Completed && !Installed;
     public bool NeedsWearerAction => State is "pending-wearer-confirmation" or "needs-wearer-permission";
+    public bool NeedsCleanup => !Completed && string.Equals(State, "cleanup-required", StringComparison.Ordinal);
+}
+
+public sealed record RustyKioskDirectRequestReceipt(
+    string RequestId,
+    string OperationState,
+    bool Accepted,
+    bool Completed,
+    string Message,
+    long? EnqueuedAtMs,
+    long? ExpiresAtMs)
+{
+    public OperatorMutationStage MutationStage => OperationState switch
+    {
+        "pending" => OperatorMutationStage.Pending,
+        "pending_wearer_action" => OperatorMutationStage.PendingWearerAction,
+        "confirmed" => OperatorMutationStage.Confirmed,
+        "rejected" => OperatorMutationStage.Rejected,
+        "expired" => OperatorMutationStage.Expired,
+        "cancelled" => OperatorMutationStage.Cancelled,
+        "unknown" => OperatorMutationStage.Failed,
+        _ => throw new InvalidDataException("Rusty Kiosk returned an unknown request lifecycle state.")
+    };
 }
 
 /// <summary>
@@ -62,26 +96,107 @@ public sealed record RustyKioskDirectInstallReceipt(
 /// Every request has an expiring HMAC envelope and replay id; every successful or authenticated
 /// error response is independently signed and verified before it is returned to callers.
 /// </summary>
-public sealed class RustyKioskDirectClient
+public sealed class RustyKioskDirectClient : IDisposable
 {
-    public const string ContractSchema = "rusty.kiosk.direct_operator.v1";
+    public const string ContractSchema = "rusty.kiosk.direct_operator.v2";
     private const int MaxTagBytes = 256 * 1024;
+    private const int MaxJsonResponseBytes = 1024 * 1024;
     private const long MaxStagedFileBytes = 2L * 1024L * 1024L * 1024L;
-    private readonly RustyKioskDirectEndpoint _endpoint;
+    private readonly Uri _baseUri;
+    private readonly byte[] _authenticationKey;
+    private readonly string? _sessionId;
+    private readonly long? _expectedBridgeGeneration;
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
+    private readonly int _maxJsonResponseBytes;
+    private readonly long _maxStagedFileBytes;
+    private int _disposed;
 
     public RustyKioskDirectClient(
         RustyKioskDirectEndpoint endpoint,
         HttpClient? httpClient = null)
+        : this(endpoint, httpClient, MaxJsonResponseBytes, MaxStagedFileBytes)
     {
-        _endpoint = endpoint;
+    }
+
+    internal RustyKioskDirectClient(
+        RustyKioskDirectEndpoint endpoint,
+        HttpClient? httpClient,
+        int maxJsonResponseBytes,
+        long maxStagedFileBytes)
+        : this(
+            endpoint.BaseUri,
+            Encoding.UTF8.GetBytes(endpoint.PairingCode),
+            sessionId: null,
+            expectedBridgeGeneration: null,
+            httpClient,
+            maxJsonResponseBytes,
+            maxStagedFileBytes)
+    {
+    }
+
+    internal RustyKioskDirectClient(
+        Uri baseUri,
+        byte[] authenticationKey,
+        string? sessionId,
+        long? expectedBridgeGeneration,
+        HttpClient? httpClient = null,
+        int maxJsonResponseBytes = MaxJsonResponseBytes,
+        long maxStagedFileBytes = MaxStagedFileBytes)
+    {
+        ArgumentNullException.ThrowIfNull(baseUri);
+        ArgumentNullException.ThrowIfNull(authenticationKey);
+        if (authenticationKey.Length is < 16 or > 128)
+        {
+            throw new ArgumentException(
+                "The direct-link authentication key must contain 16 to 128 bytes.",
+                nameof(authenticationKey));
+        }
+        if (sessionId is not null &&
+            !System.Text.RegularExpressions.Regex.IsMatch(sessionId, "^[A-Za-z0-9_-]{8,64}$"))
+        {
+            throw new ArgumentException("The direct-link session id is invalid.", nameof(sessionId));
+        }
+        if (expectedBridgeGeneration is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(expectedBridgeGeneration));
+        }
+        if (maxJsonResponseBytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxJsonResponseBytes));
+        }
+        if (maxStagedFileBytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxStagedFileBytes));
+        }
+        _baseUri = baseUri;
+        _authenticationKey = authenticationKey;
+        _sessionId = sessionId;
+        _expectedBridgeGeneration = expectedBridgeGeneration;
+        _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient
         {
             Timeout = Timeout.InfiniteTimeSpan
         };
+        _maxJsonResponseBytes = maxJsonResponseBytes;
+        _maxStagedFileBytes = maxStagedFileBytes;
     }
 
-    public RustyKioskDirectEndpoint Endpoint => _endpoint;
+    public Uri BaseUri => _baseUri;
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+        CryptographicOperations.ZeroMemory(_authenticationKey);
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+    }
 
     public async Task<RustyKioskDirectStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -94,12 +209,25 @@ public sealed class RustyKioskDirectClient
             throw new InvalidDataException($"Unsupported Rusty Kiosk direct-link schema: {schema}");
         }
 
-        return new RustyKioskDirectStatus(
+        var status = new RustyKioskDirectStatus(
             schema,
             OptionalString(root, "endpoint"),
             root.GetProperty("installer_allowed").GetBoolean(),
             RequiredString(root, "staging_directory_kind"),
-            RequiredString(root, "message"));
+            RequiredString(root, "message"),
+            root.TryGetProperty("bridge_generation", out var generation) &&
+            generation.ValueKind == JsonValueKind.Number
+                ? generation.GetInt64()
+                : null,
+            OptionalString(root, "session_id"));
+        if (_sessionId is not null &&
+            (!string.Equals(status.SessionId, _sessionId, StringComparison.Ordinal) ||
+             status.BridgeGeneration != _expectedBridgeGeneration))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk direct-link status did not match the authorized USB session generation.");
+        }
+        return status;
     }
 
     public async Task<RustyKioskOperatorResult> InvokeKioskAsync(
@@ -108,31 +236,68 @@ public sealed class RustyKioskDirectClient
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default)
     {
-        if (command.RequiresValue() && string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
-        }
-        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
-        }
+        var admitted = await AdmitKioskRequestAsync(
+                command,
+                value,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        return await WaitForKioskResultAsync(
+                admitted.RequestId,
+                command,
+                timeout,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 
-        var requestId = NewRequestId("kiosk");
+    public async Task<RustyKioskDirectRequestReceipt> AdmitKioskRequestAsync(
+        RustyKioskCommand command,
+        string? value = null,
+        string? requestId = null,
+        CancellationToken cancellationToken = default)
+    {
+        value = command.ValidateValue(value);
+
+        requestId ??= NewRequestId("kiosk");
+        ValidateRequestId(requestId);
         var payload = new Dictionary<string, object?>
         {
             ["request_id"] = requestId,
             ["command"] = command.ToWireName(),
-            ["value"] = string.IsNullOrWhiteSpace(value) ? null : value.Trim()
+            ["value"] = value
         };
-        using (var admitted = await SendJsonAsync(HttpMethod.Post, "v1/kiosk/invoke", payload, cancellationToken)
-                   .ConfigureAwait(false))
+        using var admitted = await SendJsonAsync(HttpMethod.Post, "v1/kiosk/invoke", payload, cancellationToken)
+            .ConfigureAwait(false);
+        if (!admitted.RootElement.GetProperty("accepted").GetBoolean())
         {
-            if (!admitted.RootElement.GetProperty("accepted").GetBoolean())
-            {
-                throw new InvalidOperationException(RequiredString(admitted.RootElement, "message"));
-            }
+            throw new InvalidOperationException(RequiredString(admitted.RootElement, "message"));
         }
+        var returnedId = OptionalString(admitted.RootElement, "request_id") ?? requestId;
+        if (!string.Equals(returnedId, requestId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk admitted a different action request id.");
+        }
+        return new RustyKioskDirectRequestReceipt(
+            requestId,
+            OptionalString(admitted.RootElement, "operation_state") ?? "pending",
+            Accepted: true,
+            admitted.RootElement.TryGetProperty("completed", out var completed) && completed.GetBoolean(),
+            RequiredString(admitted.RootElement, "message"),
+            admitted.RootElement.TryGetProperty("enqueued_at_ms", out var enqueued) && enqueued.ValueKind == JsonValueKind.Number
+                ? enqueued.GetInt64()
+                : null,
+            admitted.RootElement.TryGetProperty("expires_at_ms", out var expires) && expires.ValueKind == JsonValueKind.Number
+                ? expires.GetInt64()
+                : null);
+    }
 
+    public async Task<RustyKioskOperatorResult> WaitForKioskResultAsync(
+        string requestId,
+        RustyKioskCommand command,
+        TimeSpan? timeout = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequestId(requestId);
         var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(12));
         do
         {
@@ -177,6 +342,34 @@ public sealed class RustyKioskDirectClient
         throw new TimeoutException("Rusty Kiosk admitted the direct request but did not publish matching readback in time.");
     }
 
+    public async Task<RustyKioskDirectRequestReceipt> ReadKioskRequestStatusAsync(
+        string requestId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequestId(requestId);
+        using var response = await SendJsonAsync(
+                HttpMethod.Get,
+                "v1/kiosk/request-status?request_id=" + Uri.EscapeDataString(requestId),
+                null,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return ParseRequestReceipt(response.RootElement, requestId);
+    }
+
+    public async Task<RustyKioskDirectRequestReceipt> CancelKioskRequestAsync(
+        string requestId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRequestId(requestId);
+        using var response = await SendJsonAsync(
+                HttpMethod.Post,
+                "v1/kiosk/cancel",
+                new Dictionary<string, object?> { ["request_id"] = requestId },
+                cancellationToken)
+            .ConfigureAwait(false);
+        return ParseRequestReceipt(response.RootElement, requestId);
+    }
+
     public async Task<byte[]> ReadTagsAsync(CancellationToken cancellationToken = default)
     {
         var bytes = await SendBytesAsync(HttpMethod.Get, "v1/tags", null, cancellationToken)
@@ -185,12 +378,7 @@ public sealed class RustyKioskDirectClient
         {
             throw new InvalidDataException("Rusty Kiosk returned an empty or oversized tag file.");
         }
-        using var json = JsonDocument.Parse(bytes);
-        var schema = RequiredString(json.RootElement, "schema");
-        if (!string.Equals(schema, RustyKioskContract.TagFileSchema, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException($"Unsupported Rusty Kiosk tag schema: {schema}");
-        }
+        _ = RustyKioskTagFile.Validate(Encoding.UTF8.GetString(bytes));
         return bytes;
     }
 
@@ -201,20 +389,23 @@ public sealed class RustyKioskDirectClient
         {
             throw new ArgumentException("The tag file is empty or exceeds the bounded size.", nameof(validatedJson));
         }
-        using var parsed = JsonDocument.Parse(validatedJson);
-        if (!string.Equals(
-                RequiredString(parsed.RootElement, "schema"),
-                RustyKioskContract.TagFileSchema,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("The tag file does not use Rusty Kiosk's supported schema.");
-        }
+        _ = RustyKioskTagFile.Validate(Encoding.UTF8.GetString(validatedJson));
 
         using var response = await SendJsonBytesAsync(HttpMethod.Put, "v1/tags", validatedJson, cancellationToken)
             .ConfigureAwait(false);
         if (!response.RootElement.GetProperty("accepted").GetBoolean())
         {
             throw new InvalidOperationException(RequiredString(response.RootElement, "message"));
+        }
+        var expectedSha = Convert.ToHexString(SHA256.HashData(validatedJson)).ToLowerInvariant();
+        var returnedSha = RequiredString(response.RootElement, "sha256").ToLowerInvariant();
+        if (response.RootElement.GetProperty("bytes").GetInt64() != validatedJson.Length ||
+            !CryptographicOperations.FixedTimeEquals(
+                Encoding.ASCII.GetBytes(returnedSha),
+                Encoding.ASCII.GetBytes(expectedSha)))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk tag replacement readback did not match the validated document.");
         }
     }
 
@@ -258,10 +449,22 @@ public sealed class RustyKioskDirectClient
                 timeout: TimeSpan.FromMinutes(20))
             .ConfigureAwait(false);
         var root = response.RootElement;
-        return new RustyKioskStagedFile(
+        var staged = new RustyKioskStagedFile(
             RequiredString(root, "name"),
             root.GetProperty("bytes").GetInt64(),
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            RequiredString(root, "sha256").ToLowerInvariant());
+        if (!string.Equals(staged.Name, name, StringComparison.Ordinal) ||
+            staged.Bytes != info.Length ||
+            staged.Sha256 is null ||
+            !CryptographicOperations.FixedTimeEquals(
+                Encoding.ASCII.GetBytes(staged.Sha256),
+                Encoding.ASCII.GetBytes(contentSha)))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk staging readback did not match the uploaded filename, size, and digest.");
+        }
+        return staged;
     }
 
     public async Task DeleteStagedAsync(string stagedName, CancellationToken cancellationToken = default)
@@ -282,6 +485,7 @@ public sealed class RustyKioskDirectClient
         IProgress<long>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
         var name = ValidateStagedName(stagedName);
         var fullOutput = Path.GetFullPath(outputPath);
         if (File.Exists(fullOutput) && !overwrite)
@@ -293,7 +497,7 @@ public sealed class RustyKioskDirectClient
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var contentSha = Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant();
         var relativePath = "v1/staging/files/" + Uri.EscapeDataString(name);
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_endpoint.BaseUri, relativePath));
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_baseUri, relativePath));
         var requestTarget = Uri.UnescapeDataString(request.RequestUri!.PathAndQuery);
         request.Headers.TryAddWithoutValidation("X-Rusty-Request-Id", requestId);
         request.Headers.TryAddWithoutValidation("X-Rusty-Timestamp", timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -301,12 +505,13 @@ public sealed class RustyKioskDirectClient
         request.Headers.TryAddWithoutValidation(
             "X-Rusty-Signature",
             RustyKioskDirectAuth.SignRequest(
-                _endpoint.PairingCode,
+                _authenticationKey,
                 "GET",
                 requestTarget,
                 requestId,
                 timestamp,
                 contentSha));
+        AddSessionHeader(request);
 
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromMinutes(20));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
@@ -317,29 +522,56 @@ public sealed class RustyKioskDirectClient
             .ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            var errorBytes = await response.Content.ReadAsByteArrayAsync(linked.Token).ConfigureAwait(false);
+            var errorBytes = await ReadBoundedBytesAsync(
+                    response.Content,
+                    _maxJsonResponseBytes,
+                    linked.Token)
+                .ConfigureAwait(false);
             VerifyResponse(response, requestId, errorBytes);
             throw new InvalidOperationException(
                 TryReadMessage(errorBytes) ?? $"Rusty Kiosk direct link returned HTTP {(int)response.StatusCode}.");
+        }
+
+        var declaredLength = response.Content.Headers.ContentLength;
+        if (declaredLength is { } responseLength &&
+            (responseLength < 0 || responseLength > _maxStagedFileBytes))
+        {
+            throw new InvalidDataException("The staged download exceeds the bounded size limit.");
         }
 
         var temporary = fullOutput + "." + requestId + ".part";
         try
         {
             await using var input = await response.Content.ReadAsStreamAsync(linked.Token).ConfigureAwait(false);
-            await using var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024, true);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[1024 * 1024];
             long copied = 0;
-            int read;
-            while ((read = await input.ReadAsync(buffer, linked.Token).ConfigureAwait(false)) > 0)
+            await using (var output = new FileStream(
+                temporary,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                1024 * 1024,
+                true))
             {
-                hash.AppendData(buffer, 0, read);
-                await output.WriteAsync(buffer.AsMemory(0, read), linked.Token).ConfigureAwait(false);
-                copied += read;
-                progress?.Report(copied);
+                int read;
+                while ((read = await input.ReadAsync(buffer, linked.Token).ConfigureAwait(false)) > 0)
+                {
+                    if (copied > _maxStagedFileBytes - read)
+                    {
+                        throw new InvalidDataException("The staged download exceeds the bounded size limit.");
+                    }
+                    hash.AppendData(buffer, 0, read);
+                    await output.WriteAsync(buffer.AsMemory(0, read), linked.Token).ConfigureAwait(false);
+                    copied += read;
+                    progress?.Report(copied);
+                }
+                await output.FlushAsync(linked.Token).ConfigureAwait(false);
             }
-            await output.FlushAsync(linked.Token).ConfigureAwait(false);
+            if (declaredLength is { } expectedLength && copied != expectedLength)
+            {
+                throw new InvalidDataException("The staged download did not match its declared byte count.");
+            }
             var actualSha = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
             VerifyResponseDigest(response, requestId, actualSha);
             File.Move(temporary, fullOutput, overwrite);
@@ -347,39 +579,77 @@ public sealed class RustyKioskDirectClient
         }
         catch
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
+            try
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+            catch
+            {
+                // Cleanup failure must not replace the authenticated transfer failure.
+            }
             throw;
         }
     }
 
     public async Task<RustyKioskDirectInstallReceipt> RequestInstallAsync(
-        IReadOnlyList<string> stagedApkNames,
+        IReadOnlyList<RustyKioskStagedFile> stagedApks,
         string? requestId = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(stagedApkNames);
-        if (stagedApkNames.Count is < 1 or > 32)
+        ArgumentNullException.ThrowIfNull(stagedApks);
+        if (stagedApks.Count is < 1 or > 32)
         {
-            throw new ArgumentException("Choose between one and 32 staged APK parts.", nameof(stagedApkNames));
+            throw new ArgumentException("Choose between one and 32 staged APK parts.", nameof(stagedApks));
         }
-        var names = stagedApkNames.Select(ValidateStagedName).ToArray();
-        if (names.Any(static name => !name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase)))
+        var commitments = stagedApks.Select(file => new
         {
-            throw new ArgumentException("Every local install part must be an APK.", nameof(stagedApkNames));
+            name = ValidateStagedName(file.Name),
+            bytes = file.Bytes,
+            sha256 = file.Sha256
+        }).ToArray();
+        if (commitments.Any(static file =>
+                !file.name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase) ||
+                file.bytes <= 0 ||
+                file.sha256 is null ||
+                !System.Text.RegularExpressions.Regex.IsMatch(file.sha256, "^[a-f0-9]{64}$")))
+        {
+            throw new ArgumentException(
+                "Every install part requires an APK name, positive byte count, and lowercase SHA-256 commitment.",
+                nameof(stagedApks));
+        }
+        if (commitments.Select(static file => file.name).Distinct(StringComparer.Ordinal).Count() != commitments.Length)
+        {
+            throw new ArgumentException("Every staged APK part name must be distinct.", nameof(stagedApks));
         }
         requestId ??= NewRequestId("install");
-        using var response = await SendJsonAsync(
-                HttpMethod.Post,
-                "v1/install",
-                new Dictionary<string, object?>
-                {
-                    ["request_id"] = requestId,
-                    ["files"] = names
-                },
-                cancellationToken,
-                timeout: TimeSpan.FromMinutes(20))
-            .ConfigureAwait(false);
-        return ParseInstallReceipt(response.RootElement);
+        var payload = new Dictionary<string, object?>
+        {
+            ["request_id"] = requestId,
+            ["files"] = commitments
+        };
+        RustyKioskDirectInstallReceipt? receipt = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var response = await SendJsonAsync(
+                    HttpMethod.Post,
+                    "v1/install",
+                    payload,
+                    cancellationToken,
+                    timeout: TimeSpan.FromMinutes(20))
+                .ConfigureAwait(false);
+            receipt = ParseInstallReceipt(response.RootElement);
+            if (!string.Equals(receipt.RequestId, requestId, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Rusty Kiosk returned an install receipt for a different request id.");
+            }
+            if (!receipt.NeedsCleanup)
+            {
+                return receipt;
+            }
+        }
+        return receipt ?? throw new InvalidOperationException(
+            "Rusty Kiosk returned no install cleanup receipt.");
     }
 
     public async Task<RustyKioskDirectInstallReceipt> ReadInstallReceiptAsync(
@@ -393,7 +663,13 @@ public sealed class RustyKioskDirectClient
                 null,
                 cancellationToken)
             .ConfigureAwait(false);
-        return ParseInstallReceipt(response.RootElement);
+        var receipt = ParseInstallReceipt(response.RootElement);
+        if (!string.Equals(receipt.RequestId, requestId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk returned install status for a different request id.");
+        }
+        return receipt;
     }
 
     private async Task<JsonDocument> SendJsonAsync(
@@ -468,15 +744,20 @@ public sealed class RustyKioskDirectClient
         CancellationToken cancellationToken,
         TimeSpan? timeout)
     {
-        using var request = new HttpRequestMessage(method, new Uri(_endpoint.BaseUri, relativePath))
+        ThrowIfDisposed();
+        using var request = new HttpRequestMessage(method, new Uri(_baseUri, relativePath))
         {
             Content = content
         };
+        // NanoHTTPD can retain the preceding request's query string when a keep-alive
+        // connection is reused. One signed request per connection keeps the server's
+        // effective request target identical to the target authenticated below.
+        request.Headers.ConnectionClose = true;
         var authRequestId = NewRequestId("http");
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var requestTarget = Uri.UnescapeDataString(request.RequestUri!.PathAndQuery);
         var signature = RustyKioskDirectAuth.SignRequest(
-            _endpoint.PairingCode,
+            _authenticationKey,
             method.Method,
             requestTarget,
             authRequestId,
@@ -486,13 +767,18 @@ public sealed class RustyKioskDirectClient
         request.Headers.TryAddWithoutValidation("X-Rusty-Timestamp", timestamp.ToString(System.Globalization.CultureInfo.InvariantCulture));
         request.Headers.TryAddWithoutValidation("X-Rusty-Content-Sha256", contentSha);
         request.Headers.TryAddWithoutValidation("X-Rusty-Signature", signature);
+        AddSessionHeader(request);
 
         using var timeoutSource = new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
         var effectiveToken = linked.Token;
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, effectiveToken)
             .ConfigureAwait(false);
-        var bytes = await response.Content.ReadAsByteArrayAsync(effectiveToken).ConfigureAwait(false);
+        var bytes = await ReadBoundedBytesAsync(
+                response.Content,
+                _maxJsonResponseBytes,
+                effectiveToken)
+            .ConfigureAwait(false);
         VerifyResponse(response, authRequestId, bytes);
         if (!response.IsSuccessStatusCode)
         {
@@ -524,7 +810,7 @@ public sealed class RustyKioskDirectClient
             throw new InvalidDataException("The direct-link response body failed its signed digest check.");
         }
         var expected = RustyKioskDirectAuth.SignResponse(
-            _endpoint.PairingCode,
+            _authenticationKey,
             requestId,
             (int)response.StatusCode,
             contentSha);
@@ -546,6 +832,32 @@ public sealed class RustyKioskDirectClient
                 ? session.GetInt32()
                 : null,
             OptionalString(root, "package"));
+
+    private static RustyKioskDirectRequestReceipt ParseRequestReceipt(
+        JsonElement root,
+        string expectedRequestId)
+    {
+        var requestId = RequiredString(root, "request_id");
+        if (!string.Equals(requestId, expectedRequestId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Rusty Kiosk returned lifecycle state for a different request id.");
+        }
+        var receipt = new RustyKioskDirectRequestReceipt(
+            requestId,
+            RequiredString(root, "operation_state"),
+            root.GetProperty("accepted").GetBoolean(),
+            root.GetProperty("completed").GetBoolean(),
+            RequiredString(root, "message"),
+            root.TryGetProperty("enqueued_at_ms", out var enqueued) && enqueued.ValueKind == JsonValueKind.Number
+                ? enqueued.GetInt64()
+                : null,
+            root.TryGetProperty("expires_at_ms", out var expires) && expires.ValueKind == JsonValueKind.Number
+                ? expires.GetInt64()
+                : null);
+        _ = receipt.MutationStage;
+        return receipt;
+    }
 
     private static string ValidateStagedName(string value)
     {
@@ -598,6 +910,47 @@ public sealed class RustyKioskDirectClient
         }
     }
 
+    private void AddSessionHeader(HttpRequestMessage request)
+    {
+        if (_sessionId is not null)
+        {
+            request.Headers.TryAddWithoutValidation("X-Rusty-Session-Id", _sessionId);
+        }
+    }
+
+    private void ThrowIfDisposed() =>
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    private static async Task<byte[]> ReadBoundedBytesAsync(
+        HttpContent content,
+        int maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        var declaredLength = content.Headers.ContentLength;
+        if (declaredLength is { } boundedLength &&
+            (boundedLength < 0 || boundedLength > maximumBytes))
+        {
+            throw new InvalidDataException("The direct-link response exceeds the bounded size limit.");
+        }
+
+        await using var input = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var output = new MemoryStream(
+            declaredLength is { } length
+                ? checked((int)length)
+                : Math.Min(maximumBytes, 16 * 1024));
+        var buffer = new byte[16 * 1024];
+        int read;
+        while ((read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (output.Length > maximumBytes - read)
+            {
+                throw new InvalidDataException("The direct-link response exceeds the bounded size limit.");
+            }
+            output.Write(buffer, 0, read);
+        }
+        return output.ToArray();
+    }
+
     private static async Task<string> Sha256FileAsync(string path, CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, true);
@@ -615,8 +968,23 @@ public static class RustyKioskDirectAuth
         string requestId,
         long timestampSeconds,
         string contentSha256) =>
+        WithUtf8Key(pairingCode, key => SignRequest(
+            key,
+            method,
+            requestTarget,
+            requestId,
+            timestampSeconds,
+            contentSha256));
+
+    internal static string SignRequest(
+        byte[] authenticationKey,
+        string method,
+        string requestTarget,
+        string requestId,
+        long timestampSeconds,
+        string contentSha256) =>
         Hmac(
-            pairingCode,
+            authenticationKey,
             string.Join('\n',
                 method.ToUpperInvariant(),
                 requestTarget,
@@ -629,18 +997,42 @@ public static class RustyKioskDirectAuth
         string requestId,
         int statusCode,
         string contentSha256) =>
+        WithUtf8Key(pairingCode, key => SignResponse(
+            key,
+            requestId,
+            statusCode,
+            contentSha256));
+
+    internal static string SignResponse(
+        byte[] authenticationKey,
+        string requestId,
+        int statusCode,
+        string contentSha256) =>
         Hmac(
-            pairingCode,
+            authenticationKey,
             string.Join('\n',
                 "RESPONSE",
                 requestId,
                 statusCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 contentSha256.ToLowerInvariant()));
 
-    private static string Hmac(string key, string canonical)
+    private static string Hmac(byte[] key, string canonical)
     {
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(key));
+        using var hmac = new HMACSHA256(key);
         return Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+    }
+
+    private static string WithUtf8Key(string value, Func<byte[], string> action)
+    {
+        var key = Encoding.UTF8.GetBytes(value);
+        try
+        {
+            return action(key);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
     }
 }
 

@@ -6,7 +6,9 @@
         Height="820"
         MinWidth="880"
         MinHeight="620"
-        Loaded="OnLoaded">
+        Loaded="OnLoaded"
+        Closing="OnClosing"
+        Deactivated="OnDeactivated">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="76" />
@@ -462,7 +464,18 @@
                                                Text="Direct link after setup" />
                                     <TextBlock Foreground="{StaticResource MutedTextBrush}"
                                                TextWrapping="Wrap"
-                                               Text="Enable the direct link in the headset panel, then enter its address and pairing code. This path needs Wi-Fi, but not ADB." />
+                                               Text="Use authorized USB to mint a short-lived memory-only session, or manually enter the address and pairing code shown in the headset. Routine Direct Link traffic needs ordinary Wi-Fi, not Wi-Fi ADB." />
+                                    <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                                        <ComboBox x:Name="KioskProductChannelBox"
+                                                  Width="120"
+                                                  SelectedIndex="0">
+                                            <ComboBoxItem Content="Stable" Tag="stable" />
+                                            <ComboBoxItem Content="Labs" Tag="labs" />
+                                        </ComboBox>
+                                        <Button Margin="8,0,0,0"
+                                                Click="OnConnectKioskDirectUsb"
+                                                Content="Connect using authorized USB" />
+                                    </StackPanel>
                                     <Grid Margin="0,8,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="1.2*" />
@@ -470,17 +483,31 @@
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBox x:Name="KioskDirectEndpointBox" ToolTip="For example http://192.168.137.42:39873" />
-                                        <PasswordBox x:Name="KioskDirectPairingCodeBox"
-                                                     Grid.Column="2"
-                                                     AutomationProperties.Name="Rusty Kiosk direct-link pairing code"
-                                                     ToolTip="Pairing code shown in Rusty Kiosk" />
+                                        <Grid Grid.Column="2">
+                                            <PasswordBox x:Name="KioskDirectPairingCodeBox"
+                                                         AutomationProperties.Name="Rusty Kiosk direct-link pairing code"
+                                                         ToolTip="Pairing code shown in Rusty Kiosk" />
+                                            <TextBlock x:Name="KioskDirectPairingCodeRevealText"
+                                                       Visibility="Collapsed"
+                                                       VerticalAlignment="Center"
+                                                       Padding="6,3"
+                                                       Background="{StaticResource SurfaceBrush}"
+                                                       AutomationProperties.Name="Temporarily revealed Rusty Kiosk pairing code" />
+                                        </Grid>
                                     </Grid>
                                     <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
-                                        <Button Click="OnConnectKioskDirect" Content="Connect without ADB" />
+                                        <Button Click="OnConnectKioskDirect" Content="Connect with manual code" />
                                         <Button Margin="8,0,0,0"
                                                 Style="{StaticResource SecondaryButton}"
                                                 Click="OnDisconnectKioskDirect"
                                                 Content="Disconnect direct link" />
+                                        <CheckBox x:Name="KioskDirectShowPairingCodeBox"
+                                                  Margin="12,0,0,0"
+                                                  VerticalAlignment="Center"
+                                                  Checked="OnKioskDirectRevealChanged"
+                                                  Unchecked="OnKioskDirectRevealChanged"
+                                                  LostFocus="OnKioskDirectRevealLostFocus"
+                                                  Content="Show locally (15 s)" />
                                     </StackPanel>
                                     <TextBlock x:Name="KioskDirectStatusText"
                                                Margin="0,6,0,0"
@@ -560,6 +587,9 @@
                                                     <TextBlock Margin="0,2,0,0"
                                                                Foreground="{StaticResource MutedTextBrush}"
                                                                Text="{Binding TagLabel}" />
+                                                    <TextBlock Margin="0,2,0,0"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding LaunchRequirementLabel}" />
                                                 </StackPanel>
                                             </DataTemplate>
                                         </ListBox.ItemTemplate>
@@ -568,6 +598,10 @@
                                         <StackPanel Orientation="Horizontal">
                                             <Button Click="OnKioskLaunchNormal" Content="Normal launch" />
                                             <Button Margin="8,0,0,0" Click="OnKioskLaunchGuarded" Content="Kiosk launch" />
+                                            <Button Margin="8,0,0,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Click="OnKioskFocusSearch"
+                                                    Content="Headset search" />
                                         </StackPanel>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
@@ -586,6 +620,53 @@
                                                     Click="OnRemoveKioskTag"
                                                     Content="Remove" />
                                         </Grid>
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="KioskLaunchRequirementBox"
+                                                      ToolTip="Active requirement applied before launching this app">
+                                                <ComboBoxItem Tag="any" Content="Any Wi-Fi state" />
+                                                <ComboBoxItem Tag="wifi-on" Content="Wi-Fi required on" />
+                                                <ComboBoxItem Tag="wifi-off" Content="Wi-Fi required off" />
+                                            </ComboBox>
+                                            <Button Grid.Column="1"
+                                                    Margin="8,0,0,0"
+                                                    Click="OnSetKioskLaunchRequirement"
+                                                    Content="Apply requirement" />
+                                            <Button Grid.Column="2"
+                                                    Margin="8,0,0,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Click="OnKioskFocusTagEditor"
+                                                    Content="Headset tag editor" />
+                                        </Grid>
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="KioskLaunchOptionsBox"
+                                                      DisplayMemberPath="OperatorLabel"
+                                                      ToolTip="Read-only launch options discovered by the selected app" />
+                                            <Button Grid.Column="1"
+                                                    Margin="8,0,0,0"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Click="OnReadKioskLaunchOptions"
+                                                    Content="Read options" />
+                                            <Button Grid.Column="2"
+                                                    Margin="8,0,0,0"
+                                                    Click="OnKioskLaunchOption"
+                                                    Content="Launch option" />
+                                        </Grid>
+                                        <TextBlock x:Name="KioskLaunchOptionsStatusText"
+                                                   Margin="0,5,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Text="App launch options: not checked" />
                                         <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
                                             <Button Style="{StaticResource SecondaryButton}"
                                                     Click="OnExportKioskTags"
@@ -614,13 +695,27 @@
                                                TextWrapping="Wrap"
                                                Text="These are the same fixed operations as the headset panel. Each change asks for confirmation and refreshes effective state." />
                                     <WrapPanel>
+                                        <Button Margin="0,0,8,8" Click="OnKioskShowControls" Content="Show controls" />
+                                        <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnKioskShowApps" Content="Show apps" />
                                         <Button Margin="0,0,8,8" Click="OnKioskRequestWifiAdb" Content="Request Wi-Fi ADB" />
                                         <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnKioskDisableWifiAdb" Content="Disable Wi-Fi ADB" />
                                         <Button Margin="0,0,8,8" Click="OnKioskEnableAutoWifi" Content="Ask after restart" />
                                         <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnKioskDisableAutoWifi" Content="Stop asking" />
                                         <Button Margin="0,0,8,8" Click="OnKioskEnableAccessibility" Content="Enable Accessibility" />
                                         <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnKioskDisableAccessibility" Content="Disable Accessibility" />
+                                        <Button Margin="0,0,8,8" Click="OnKioskPassthroughNatural" Content="Natural passthrough" />
+                                        <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnKioskPassthroughContour" Content="Contour passthrough" />
+                                        <Button Margin="0,0,8,8" Style="{StaticResource SecondaryButton}" Click="OnCancelKioskPendingLaunch" Content="Cancel pending launch" />
                                     </WrapPanel>
+                                    <TextBlock x:Name="KioskPanelStatusText"
+                                               Margin="0,8,0,0"
+                                               Text="Headset panel: not checked" />
+                                    <TextBlock x:Name="KioskPendingLaunchStatusText"
+                                               Margin="0,4,0,0"
+                                               Text="Pending requirement launch: not checked" />
+                                    <TextBlock x:Name="KioskPassthroughStatusText"
+                                               Margin="0,4,0,0"
+                                               Text="Passthrough: not checked" />
                                 </StackPanel>
                             </Border>
                         </Grid>

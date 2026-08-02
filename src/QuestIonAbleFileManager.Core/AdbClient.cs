@@ -22,6 +22,8 @@ public sealed partial class AdbClient
 
     public string AdbPath { get; }
 
+    internal ICommandRunner CommandRunner => _runner;
+
     internal ApkArtifactInspector CreateApkInspector() =>
         new(_runner, _buildTools ?? AndroidBuildToolPaths.FindFromAdb(AdbPath));
 
@@ -570,30 +572,26 @@ public sealed partial class AdbClient
              artifact.Identity.PackageName],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         query.EnsureSuccess("Resolve exported launcher activity");
-        var components = query.StandardOutput.ReplaceLineEndings("\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => line.StartsWith(artifact.Identity.PackageName + "/", StringComparison.Ordinal))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (components.Length != 1 || !IsSafeComponent(components[0], artifact.Identity.PackageName))
-        {
-            throw new InvalidDataException(
-                "Package must resolve to exactly one exported launcher activity.");
-        }
+        var component = RequireUniqueLauncherComponent(
+            query.StandardOutput,
+            artifact.Identity.PackageName);
         var packageDump = await RunForDeviceAsync(
             serial,
             ["shell", "dumpsys", "package", artifact.Identity.PackageName],
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         packageDump.EnsureSuccess("Prove launcher activity export state");
-        if (!ProvesExportedActivity(packageDump.StandardOutput, components[0]))
+        if (!ProvesExportedActivity(
+                packageDump.StandardOutput,
+                component.Canonical,
+                artifact.Identity.PackageName))
         {
             throw new InvalidDataException(
                 "The resolved launcher activity was not proven exported before dispatch.");
         }
 
         var start = await RunForDeviceAsync(
-            serial, ["shell", "am", "start", "-n", components[0]],
+            serial, ["shell", "am", "start", "-n", component.Wire],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         start.EnsureSuccess("Start resolved launcher activity");
         var activities = await RunForDeviceAsync(
@@ -603,11 +601,13 @@ public sealed partial class AdbClient
         var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
             .Any(line => (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
                           line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
-                         line.Contains(components[0], StringComparison.Ordinal));
+                         (line.Contains(component.Wire, StringComparison.Ordinal) ||
+                          line.Contains(component.Canonical, StringComparison.Ordinal) ||
+                          line.Contains(component.Shorthand, StringComparison.Ordinal)));
         return new ResolvedAppLaunchResult(
             artifact with { Path = reportedPath },
             installed,
-            components[0],
+            component.Wire,
             start,
             observed);
     }
@@ -688,53 +688,282 @@ public sealed partial class AdbClient
         }
     }
 
-    private static bool IsSafeComponent(string component, string packageName)
+    private static ResolvedLauncherComponent RequireUniqueLauncherComponent(
+        string queryOutput,
+        string packageName)
     {
+        var lines = queryOutput.ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length != 1 ||
+            !TryNormalizeComponent(lines[0], packageName, out var canonical))
+        {
+            throw new InvalidDataException(
+                "Package must resolve to exactly one same-package launcher activity.");
+        }
+        var fullActivity = canonical[(canonical.IndexOf('/') + 1)..];
+        var shorthand = packageName + "/" + fullActivity[packageName.Length..];
+        return new ResolvedLauncherComponent(lines[0], canonical, shorthand);
+    }
+
+    private static bool TryNormalizeComponent(
+        string component,
+        string packageName,
+        out string canonical)
+    {
+        canonical = string.Empty;
         var slash = component.IndexOf('/');
-        if (slash <= 0 || slash == component.Length - 1 ||
+        if (slash <= 0 || slash != component.LastIndexOf('/') ||
+            slash == component.Length - 1 ||
             !string.Equals(component[..slash], packageName, StringComparison.Ordinal))
         {
             return false;
         }
         var activity = component[(slash + 1)..];
-        return Regex.IsMatch(activity, @"^(?:\.[A-Za-z0-9_$]+|[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+)$",
-            RegexOptions.CultureInvariant);
+        var fullActivity = activity.StartsWith(".", StringComparison.Ordinal)
+            ? packageName + activity
+            : activity;
+        if (!fullActivity.StartsWith(packageName + ".", StringComparison.Ordinal) ||
+            !Regex.IsMatch(
+                fullActivity,
+                @"^[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+$",
+                RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+        canonical = packageName + "/" + fullActivity;
+        return true;
     }
 
-    private static bool ProvesExportedActivity(string packageDump, string component)
+    private static bool ProvesExportedActivity(
+        string packageDump,
+        string canonicalComponent,
+        string packageName)
     {
         var lines = packageDump.ReplaceLineEndings("\n").Split('\n');
+        var matchingDetails = new List<ActivityExportEvidence>();
         for (var index = 0; index < lines.Length; index++)
         {
-            var activity = Regex.Match(
-                lines[index],
-                @"ActivityInfo\{[^}\r\n]*\s(?<component>[^\s}]+)\}",
-                RegexOptions.CultureInvariant);
+            var activity = MatchActivityDetailHeader(lines[index]);
             if (!activity.Success ||
-                !string.Equals(
+                !TryNormalizeComponent(
                     activity.Groups["component"].Value,
-                    component,
-                    StringComparison.Ordinal))
+                    packageName,
+                    out var detailCanonical) ||
+                !string.Equals(detailCanonical, canonicalComponent, StringComparison.Ordinal))
             {
                 continue;
             }
             var activityIndent = lines[index].TakeWhile(char.IsWhiteSpace).Count();
+            bool? exported = null;
+            var alias = false;
+            var malformed = false;
+            AccumulateActivityFields(lines[index], ref exported, ref alias, ref malformed);
             for (var detail = index + 1; detail < lines.Length; detail++)
             {
                 var value = lines[detail].Trim();
                 if (value.Length == 0) continue;
-                var detailIndent = lines[detail].TakeWhile(char.IsWhiteSpace).Count();
-                if (detailIndent <= activityIndent ||
-                    value.StartsWith("Activity #", StringComparison.Ordinal) ||
-                    value.Contains("ActivityInfo{", StringComparison.Ordinal))
+                if (MatchActivityDetailHeader(lines[detail]).Success)
+                {
                     break;
-                if (value.StartsWith("exported=", StringComparison.Ordinal))
-                    return string.Equals(value, "exported=true", StringComparison.Ordinal);
+                }
+                var detailIndent = lines[detail].TakeWhile(char.IsWhiteSpace).Count();
+                if (detailIndent <= activityIndent || value.StartsWith("Activity #", StringComparison.Ordinal))
+                {
+                    break;
+                }
+                AccumulateActivityFields(value, ref exported, ref alias, ref malformed);
             }
+            matchingDetails.Add(new ActivityExportEvidence(exported, alias, malformed));
+        }
+
+        if (matchingDetails.Count > 1)
+        {
             return false;
         }
-        return false;
+        if (matchingDetails.Count == 1)
+        {
+            var detail = matchingDetails[0];
+            return !detail.Alias && !detail.Malformed && detail.Exported == true;
+        }
+
+        return ProvesLauncherResolverFilter(lines, canonicalComponent, packageName);
     }
+
+    private static Match MatchActivityDetailHeader(string line)
+    {
+        var activityInfo = Regex.Match(
+            line,
+            @"ActivityInfo\{[^}\r\n]*\s(?<component>[A-Za-z][A-Za-z0-9_.]*/[^\s}]+)\}",
+            RegexOptions.CultureInvariant);
+        if (activityInfo.Success)
+        {
+            return activityInfo;
+        }
+        return Regex.Match(
+            line,
+            @"Activity\{[^}\r\n]*\s(?<component>[A-Za-z][A-Za-z0-9_.]*/[^\s}]+)\}:",
+            RegexOptions.CultureInvariant);
+    }
+
+    private static void AccumulateActivityFields(
+        string value,
+        ref bool? exported,
+        ref bool alias,
+        ref bool malformed)
+    {
+        if (Regex.IsMatch(
+                value,
+                @"(?:^|\s)(?:targetActivity=[^\s]+|isAlias=true)(?=\s|$)",
+                RegexOptions.CultureInvariant))
+        {
+            alias = true;
+        }
+        var exportedFields = Regex.Matches(
+            value,
+            @"(?:^|\s)exported=(?<value>true|false)(?=\s|$)",
+            RegexOptions.CultureInvariant);
+        if (exportedFields.Count > 1 || (exportedFields.Count == 1 && exported is not null))
+        {
+            malformed = true;
+        }
+        else if (exportedFields.Count == 1)
+        {
+            exported = string.Equals(
+                exportedFields[0].Groups["value"].Value,
+                "true",
+                StringComparison.Ordinal);
+        }
+    }
+
+    private static bool ProvesLauncherResolverFilter(
+        IReadOnlyList<string> lines,
+        string canonicalComponent,
+        string packageName)
+    {
+        var matches = 0;
+        var inResolverTable = false;
+        var resolverIndent = -1;
+        var inNonDataActions = false;
+        var nonDataIndent = -1;
+        var inMainAction = false;
+        var mainIndent = -1;
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var raw = lines[index];
+            var value = raw.Trim();
+            if (value.Length == 0)
+            {
+                continue;
+            }
+            var indent = raw.TakeWhile(char.IsWhiteSpace).Count();
+            if (string.Equals(value, "Activity Resolver Table:", StringComparison.Ordinal))
+            {
+                inResolverTable = true;
+                resolverIndent = indent;
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (!inResolverTable)
+            {
+                continue;
+            }
+            if (indent <= resolverIndent)
+            {
+                inResolverTable = false;
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (string.Equals(value, "Non-Data Actions:", StringComparison.Ordinal))
+            {
+                inNonDataActions = true;
+                nonDataIndent = indent;
+                inMainAction = false;
+                continue;
+            }
+            if (!inNonDataActions)
+            {
+                continue;
+            }
+            if (indent <= nonDataIndent)
+            {
+                inNonDataActions = false;
+                inMainAction = false;
+                continue;
+            }
+            if (string.Equals(value, "android.intent.action.MAIN:", StringComparison.Ordinal))
+            {
+                inMainAction = true;
+                mainIndent = indent;
+                continue;
+            }
+            if (!inMainAction)
+            {
+                continue;
+            }
+            if (indent <= mainIndent)
+            {
+                inMainAction = false;
+                continue;
+            }
+
+            var entry = Regex.Match(
+                value,
+                @"^[0-9a-fA-F]+\s+(?<component>[^\s]+)\s+filter\s+[0-9a-fA-F]+$",
+                RegexOptions.CultureInvariant);
+            if (!entry.Success ||
+                !TryNormalizeComponent(
+                    entry.Groups["component"].Value,
+                    packageName,
+                    out var resolverCanonical) ||
+                !string.Equals(resolverCanonical, canonicalComponent, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var entryIndent = indent;
+            var hasMain = false;
+            var hasLauncher = false;
+            var alias = false;
+            for (var detail = index + 1; detail < lines.Count; detail++)
+            {
+                var detailRaw = lines[detail];
+                var detailValue = detailRaw.Trim();
+                if (detailValue.Length == 0)
+                {
+                    continue;
+                }
+                if (detailRaw.TakeWhile(char.IsWhiteSpace).Count() <= entryIndent)
+                {
+                    break;
+                }
+                hasMain |= string.Equals(
+                    detailValue,
+                    "Action: \"android.intent.action.MAIN\"",
+                    StringComparison.Ordinal);
+                hasLauncher |= string.Equals(
+                    detailValue,
+                    "Category: \"android.intent.category.LAUNCHER\"",
+                    StringComparison.Ordinal);
+                alias |= detailValue.Contains("targetActivity=", StringComparison.Ordinal) ||
+                    string.Equals(detailValue, "isAlias=true", StringComparison.Ordinal);
+            }
+            if (alias || !hasMain || !hasLauncher)
+            {
+                return false;
+            }
+            matches++;
+        }
+        return matches == 1;
+    }
+
+    private sealed record ResolvedLauncherComponent(
+        string Wire,
+        string Canonical,
+        string Shorthand);
+
+    private sealed record ActivityExportEvidence(bool? Exported, bool Alias, bool Malformed);
 
     public async Task<ApkBundleInstallResult> InstallApkBundleAsync(
         string serial,
@@ -1099,27 +1328,37 @@ public sealed partial class AdbClient
             new FileInfo(fullOutputPath).Length);
     }
 
+    public Task<RustyKioskInstallationStatus> GetRustyKioskInstallationStatusAsync(
+        string serial,
+        CancellationToken cancellationToken = default) =>
+        GetRustyKioskInstallationStatusAsync(
+            serial,
+            RustyKioskProductContract.For(RustyKioskProductChannel.Stable),
+            cancellationToken);
+
     public async Task<RustyKioskInstallationStatus> GetRustyKioskInstallationStatusAsync(
         string serial,
+        RustyKioskProductContract product,
         CancellationToken cancellationToken = default)
     {
         serial = AndroidInput.RequireSerial(serial);
-        var mainDump = await GetPackageDumpAsync(serial, RustyKioskContract.MainPackage, cancellationToken)
+        product = RustyKioskProductContract.RequireKnown(product);
+        var mainDump = await GetPackageDumpAsync(serial, product.MainPackage, cancellationToken)
             .ConfigureAwait(false);
-        var helperDump = await GetPackageDumpAsync(serial, RustyKioskContract.SetupHelperPackage, cancellationToken)
+        var helperDump = await GetPackageDumpAsync(serial, product.SetupHelperPackage, cancellationToken)
             .ConfigureAwait(false);
         var mainInstalled = mainDump.Succeeded && mainDump.StandardOutput.Contains(
-            $"Package [{RustyKioskContract.MainPackage}]",
+            $"Package [{product.MainPackage}]",
             StringComparison.Ordinal);
         var helperInstalled = helperDump.Succeeded && helperDump.StandardOutput.Contains(
-            $"Package [{RustyKioskContract.SetupHelperPackage}]",
+            $"Package [{product.SetupHelperPackage}]",
             StringComparison.Ordinal);
         var helperReady = helperInstalled && HasGrantedPermission(
             helperDump.StandardOutput,
             RustyKioskContract.WriteSecureSettingsPermission);
         var controlGranted = mainInstalled && HasGrantedPermission(
             mainDump.StandardOutput,
-            RustyKioskContract.SetupControlPermission);
+            product.SetupControlPermission);
         var operatorAvailable = false;
         if (mainInstalled)
         {
@@ -1127,17 +1366,21 @@ public sealed partial class AdbClient
                 serial,
                 [
                     "shell", "content", "call",
-                    "--uri", RustyKioskContract.OperatorUri,
+                    "--uri", product.OperatorUri,
                     "--method", "contract"
                 ],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false);
+            var schema = BundleValue(contract.StandardOutput, "schema");
+            var successorIdentityMatches =
+                !string.Equals(schema, RustyKioskContract.HostOperatorSuccessorSchema, StringComparison.Ordinal) ||
+                (string.Equals(BundleValue(contract.StandardOutput, "package"), product.MainPackage, StringComparison.Ordinal) &&
+                 string.Equals(BundleValue(contract.StandardOutput, "product_channel"), product.WireName, StringComparison.Ordinal));
             operatorAvailable = contract.Succeeded &&
                 BundleBoolean(contract.StandardOutput, "accepted") == true &&
-                string.Equals(
-                    BundleValue(contract.StandardOutput, "schema"),
-                    RustyKioskContract.HostOperatorSchema,
-                    StringComparison.Ordinal);
+                (string.Equals(schema, RustyKioskContract.HostOperatorSchema, StringComparison.Ordinal) ||
+                 string.Equals(schema, RustyKioskContract.HostOperatorSuccessorSchema, StringComparison.Ordinal)) &&
+                successorIdentityMatches;
         }
 
         return new RustyKioskInstallationStatus(
@@ -1237,30 +1480,19 @@ public sealed partial class AdbClient
         string serial,
         RustyKioskCommand command,
         string? value = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
-        value = value?.Trim();
-        if (command.RequiresValue() && string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} requires a value.", nameof(value));
-        }
-
-        if (!command.AllowsValue() && !string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{command.ToWireName()} does not accept a value.", nameof(value));
-        }
-
-        if ((value?.Length ?? 0) > 160)
-        {
-            throw new ArgumentException("Rusty Kiosk operator values may not exceed 160 characters.", nameof(value));
-        }
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
+        value = command.ValidateValue(value);
 
         var requestId = "pc-" + Guid.NewGuid().ToString("N");
         var invokeArguments = new List<string>
         {
             "shell", "content", "call",
-            "--uri", RustyKioskContract.OperatorUri,
+            "--uri", product.OperatorUri,
             "--method", "invoke",
             "--arg", command.ToWireName(),
             "--extra", $"request_id:s:{requestId}"
@@ -1289,7 +1521,7 @@ public sealed partial class AdbClient
             serial,
             [
                 "shell", "am", "start", "-W",
-                "-n", RustyKioskContract.MainPackage + "/" + RustyKioskContract.MainActivity,
+                "-n", product.MainActivity,
                 "--es", RustyKioskContract.PendingRequestExtra, requestId
             ],
             ConnectionTimeout,
@@ -1309,7 +1541,7 @@ public sealed partial class AdbClient
                 serial,
                 [
                     "shell", "content", "call",
-                    "--uri", RustyKioskContract.OperatorUri,
+                    "--uri", product.OperatorUri,
                     "--method", "result",
                     "--arg", requestId
                 ],
@@ -1326,6 +1558,10 @@ public sealed partial class AdbClient
                 {
                     throw new InvalidDataException("Rusty Kiosk returned a mismatched request id.");
                 }
+                if (parsed.Command != command)
+                {
+                    throw new InvalidDataException("Rusty Kiosk returned a mismatched typed command.");
+                }
 
                 return parsed;
             }
@@ -1339,9 +1575,12 @@ public sealed partial class AdbClient
     public async Task<CommandResult> PullRustyKioskTagFileAsync(
         string serial,
         string localPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
         var fullLocalPath = Path.GetFullPath(localPath);
         var parent = Path.GetDirectoryName(fullLocalPath);
@@ -1359,6 +1598,7 @@ public sealed partial class AdbClient
             var offset = checked((int)output.Length);
             lastResult = await CallRustyKioskProviderAsync(
                 serial,
+                product,
                 "tag-read",
                 [$"offset:i:{offset}"],
                 cancellationToken).ConfigureAwait(false);
@@ -1403,9 +1643,12 @@ public sealed partial class AdbClient
     public async Task<CommandResult> PushRustyKioskTagFileAsync(
         string serial,
         string localPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         var json = RustyKioskTagFile.ValidateAndRead(localPath);
         var bytes = Encoding.UTF8.GetBytes(json);
         var sha = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
@@ -1418,6 +1661,7 @@ public sealed partial class AdbClient
         };
         var begin = await CallRustyKioskProviderAsync(
             serial,
+            product,
             "tag-write-begin",
             common,
             cancellationToken).ConfigureAwait(false);
@@ -1430,6 +1674,7 @@ public sealed partial class AdbClient
             var encoded = Convert.ToBase64String(bytes, offset, length);
             var chunk = await CallRustyKioskProviderAsync(
                 serial,
+                product,
                 "tag-write-chunk",
                 [
                     $"transfer_id:s:{transferId}",
@@ -1446,6 +1691,7 @@ public sealed partial class AdbClient
 
         var commit = await CallRustyKioskProviderAsync(
             serial,
+            product,
             "tag-write-commit",
             common,
             cancellationToken).ConfigureAwait(false);
@@ -1622,6 +1868,7 @@ public sealed partial class AdbClient
 
     private async Task<CommandResult> CallRustyKioskProviderAsync(
         string serial,
+        RustyKioskProductContract product,
         string method,
         IReadOnlyList<string> typedExtras,
         CancellationToken cancellationToken)
@@ -1629,7 +1876,7 @@ public sealed partial class AdbClient
         var arguments = new List<string>
         {
             "shell", "content", "call",
-            "--uri", RustyKioskContract.OperatorUri,
+            "--uri", product.OperatorUri,
             "--method", method
         };
         foreach (var extra in typedExtras)
@@ -1723,21 +1970,11 @@ public sealed partial class AdbClient
                 "The configured command runner does not support bounded installed-APK readback.");
         }
 
-        var invariantMaximum = maximumBytes.ToString(
-            System.Globalization.CultureInfo.InvariantCulture);
         var command =
             $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || {{ " +
             "printf 'qfm-integration:path-absent\\n' >&2; exit 41; }; " +
             "expected=\"$candidate\"; " +
             BuildOpenedRemoteHandleProof() +
-            "if [ ! -f /proc/self/fd/3 ]; then " +
-            "printf 'qfm-integration:path-not-file\\n' >&2; exit 44; fi; " +
-            "size=$(stat -c %s -- /proc/self/fd/3) || { " +
-            "printf 'qfm-integration:size-unavailable\\n' >&2; exit 45; }; " +
-            "case \"$size\" in ''|*[!0-9]*) " +
-            "printf 'qfm-integration:size-invalid\\n' >&2; exit 46;; esac; " +
-            $"if [ \"$size\" -gt {invariantMaximum} ]; then " +
-            "printf 'qfm-integration:maximum-bytes\\n' >&2; exit 47; fi; " +
             "exec cat <&3";
         var arguments = new[] { "-s", serial, "exec-out", "sh", "-c", command };
         var result = await streamingRunner.RunToStreamAsync(
@@ -1946,7 +2183,7 @@ public sealed partial class AdbClient
     private static string BuildOpenedRemoteHandleProof() =>
         "exec 3<\"$candidate\" || { " +
         "printf 'qfm-integration:path-open-failed\\n' >&2; exit 48; }; " +
-        "opened=$(realpath /proc/self/fd/3) || { " +
+        "opened=$(readlink /proc/$$/fd/3) || { " +
         "printf 'qfm-integration:path-open-proof-failed\\n' >&2; exit 49; }; " +
         "if [ \"$opened\" != \"$expected\" ]; then " +
         "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; ";

@@ -1,11 +1,451 @@
 using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
 public sealed class RustyKioskIntegrationTests
 {
+    [Fact]
+    public void CommandVocabularyExactlyMatchesPinnedKioskContract()
+    {
+        var root = FindRepositoryRoot();
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            root,
+            "references",
+            "rusty-kiosk-cli-command-contract.v1.json")));
+        var expected = fixture.RootElement.GetProperty("commands").EnumerateArray()
+            .Select(command => (
+                WireName: command.GetProperty("wire_name").GetString()!,
+                ValueRule: command.GetProperty("value_rule").GetString()!))
+            .ToArray();
+        var actual = Enum.GetValues<RustyKioskCommand>()
+            .Select(command => (
+                WireName: command.ToWireName(),
+                ValueRule: command.RequiresValue()
+                    ? "required"
+                    : command.AllowsValue() ? "optional" : "none"))
+            .ToArray();
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(
+            RustyKioskContract.MaxCommandValueLength,
+            fixture.RootElement.GetProperty("max_value_length").GetInt32());
+        Assert.Equal(
+            ["any", "wifi-on", "wifi-off"],
+            fixture.RootElement.GetProperty("launch_requirement_values")
+                .EnumerateArray()
+                .Select(static value => value.GetString()!)
+                .ToArray());
+    }
+
+    [Theory]
+    [InlineData("any", RustyKioskLaunchRequirement.Any)]
+    [InlineData("wifi-on", RustyKioskLaunchRequirement.WifiOn)]
+    [InlineData("wifi-off", RustyKioskLaunchRequirement.WifiOff)]
+    public void ActiveLaunchRequirementValuesAreStrictAndRoundTrip(
+        string value,
+        RustyKioskLaunchRequirement expected)
+    {
+        Assert.Equal(value, RustyKioskCommand.SetLaunchRequirement.ValidateValue(value));
+        Assert.Equal(expected, RustyKioskCommands.ParseLaunchRequirement(value));
+        Assert.Equal(value, expected.ToWireName());
+    }
+
+    [Theory]
+    [InlineData("Wifi-On")]
+    [InlineData("wifi_on")]
+    [InlineData("on")]
+    public void ActiveLaunchRequirementValuesFailClosed(string value) =>
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetLaunchRequirement.ValidateValue(value));
+
+    [Fact]
+    public void CommandValuesAreBoundedAndRejectedWhenTheCommandHasNoValue()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetSearch.ValidateValue(new string('x', 161)));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.ShowApps.ValidateValue("unexpected"));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.SetLaunchRequirement.ValidateValue(null));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.LaunchOption.ValidateValue(null));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.LaunchOption.ValidateValue(new string('x', 161)));
+        Assert.Null(RustyKioskCommand.SetSearch.ValidateValue("   "));
+    }
+
+    [Fact]
+    public void LaunchOptionUsesOnlyTheBoundedOpaqueValueOnAdbAndDirectRoutes()
+    {
+        const string optionId = " playlist.example-1 ";
+        var adb = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: true,
+            product: RustyKioskProductContract.For(RustyKioskProductChannel.Labs));
+        var direct = KioskDirectOperatorCommand.Invoke(
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: true);
+
+        Assert.Equal(optionId, adb.RustyKioskValue);
+        Assert.Equal(optionId, direct.Value);
+        Assert.Equal(
+            [
+                "kiosk", "command", "--serial", "QUEST123",
+                "--product-channel", "labs",
+                "--command", "launch-option",
+                "--value", optionId,
+                "--confirm-kiosk-control"
+            ],
+            adb.CliArguments);
+        Assert.DoesNotContain(adb.CliArguments, argument =>
+            argument.Contains("component", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("activity", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("uri", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("intent", StringComparison.OrdinalIgnoreCase));
+        Assert.Throws<InvalidOperationException>(() => OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: false));
+    }
+
+    [Fact]
+    public void ActiveRequirementUsesTheTypedAdbAndDirectCommandFactories()
+    {
+        var adb = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.SetLaunchRequirement,
+            " wifi-off ",
+            operatorConfirmed: true);
+        var direct = KioskDirectOperatorCommand.Invoke(
+            RustyKioskCommand.SetLaunchRequirement,
+            " wifi-off ",
+            operatorConfirmed: true);
+
+        Assert.Equal("wifi-off", adb.RustyKioskValue);
+        Assert.Equal("wifi-off", direct.Value);
+        Assert.Contains("--command", adb.CliArguments);
+        Assert.Contains("set-launch-requirement", adb.CliArguments);
+        Assert.Contains("--value", adb.CliArguments);
+        Assert.Contains("wifi-off", adb.CliArguments);
+        Assert.Contains("--confirm-kiosk-control", adb.CliArguments);
+    }
+
+    [Theory]
+    [InlineData(
+        RustyKioskProductChannel.Stable,
+        "stable",
+        "io.github.mesmerprism.rustykiosk/io.github.mesmerprism.rustykiosk.RustyKioskActivity")]
+    [InlineData(
+        RustyKioskProductChannel.Labs,
+        "labs",
+        "io.github.mesmerprism.rustykiosk.labs/io.github.mesmerprism.rustykiosk.RustyKioskActivity")]
+    public void AdbOperatorFactoriesPreserveExactProductChannel(
+        RustyKioskProductChannel channel,
+        string wireName,
+        string expectedMainActivity)
+    {
+        var product = RustyKioskProductContract.For(channel);
+        var commands = new[]
+        {
+            OperatorCommands.InspectRustyKiosk("QUEST123", product),
+            OperatorCommands.InvokeRustyKiosk(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: product),
+            OperatorCommands.PullRustyKioskTags("QUEST123", "tags.json", product)
+        };
+
+        Assert.All(commands, command =>
+        {
+            Assert.Equal(product, command.RustyKioskProduct);
+            var channelIndex = command.CliArguments.ToList().IndexOf("--product-channel");
+            Assert.True(channelIndex >= 0);
+            Assert.Equal(wireName, command.CliArguments[channelIndex + 1]);
+            Assert.Equal(expectedMainActivity, product.MainActivity);
+        });
+    }
+
+    [Fact]
+    public void AdbOperatorFactoriesRejectForgedCrossChannelProductIdentity()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var forged = labs with
+        {
+            MainPackage = stable.MainPackage,
+            OperatorAuthority = stable.OperatorAuthority
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.InspectRustyKiosk("QUEST123", forged));
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.InvokeRustyKiosk(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: forged));
+    }
+
+    [Theory]
+    [InlineData(RustyKioskProductChannel.Stable)]
+    [InlineData(RustyKioskProductChannel.Labs)]
+    public async Task AdbStatusAndCommandUseOnlyTheSelectedProductIdentity(
+        RustyKioskProductChannel channel)
+    {
+        var product = RustyKioskProductContract.For(channel);
+        var other = RustyKioskProductContract.For(
+            channel == RustyKioskProductChannel.Stable
+                ? RustyKioskProductChannel.Labs
+                : RustyKioskProductChannel.Stable);
+        string? requestId = null;
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (arguments.Contains("dumpsys", StringComparer.Ordinal) &&
+                arguments.Contains("package", StringComparer.Ordinal))
+            {
+                var package = arguments.Last();
+                var permission = package == product.MainPackage
+                    ? product.SetupControlPermission
+                    : RustyKioskContract.WriteSecureSettingsPermission;
+                return Success($"Package [{package}]\nversionName=0.6.7\n  {permission}: granted=true\n");
+            }
+            if (ProviderMethod(arguments) == "contract")
+            {
+                return Bundle(
+                    $"accepted=true, completed=true, schema={RustyKioskContract.HostOperatorSuccessorSchema}, " +
+                    $"package={product.MainPackage}, product_channel={product.WireName}");
+            }
+            if (ProviderMethod(arguments) == "invoke")
+            {
+                requestId = Extra(arguments, "request_id:s:");
+                return Bundle("accepted=true, completed=true, message=accepted");
+            }
+            if (arguments.Contains("am", StringComparer.Ordinal) &&
+                arguments.Contains("start", StringComparer.Ordinal))
+            {
+                return Success("Status: ok\n");
+            }
+            if (ProviderMethod(arguments) == "result")
+            {
+                var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                    ResultJson(requestId!, "show-apps", wifiAdbEnabled: false)));
+                return Bundle($"accepted=true, completed=true, result_base64={encoded}");
+            }
+            return new CommandResult("adb-test", arguments, 1, string.Empty, "unexpected call", TimeSpan.Zero);
+        });
+        var client = new AdbClient("adb-test", runner);
+
+        var status = await client.GetRustyKioskInstallationStatusAsync("QUEST123", product);
+        var result = await client.InvokeRustyKioskAsync(
+            "QUEST123",
+            RustyKioskCommand.ShowApps,
+            product: product);
+
+        Assert.True(status.MainInstalled);
+        Assert.True(status.SetupHelperInstalled);
+        Assert.True(status.HostOperatorAvailable);
+        Assert.Equal(RustyKioskCommand.ShowApps, result.Command);
+        Assert.Contains(runner.Calls, call => call.Arguments.Contains(product.MainActivity));
+        Assert.All(
+            runner.Calls.Where(call => call.Arguments.Contains("content")),
+            call => Assert.Contains(product.OperatorUri, call.Arguments));
+        Assert.DoesNotContain(
+            runner.Calls.SelectMany(static call => call.Arguments),
+            argument => argument == other.OperatorUri ||
+                        argument == other.MainPackage ||
+                        argument == other.SetupHelperPackage ||
+                        argument == other.MainActivity);
+    }
+
+    [Fact]
+    public async Task AdbCommandRejectsCompletedResultForCrossedTypedCommand()
+    {
+        var product = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        string? requestId = null;
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (ProviderMethod(arguments) == "invoke")
+            {
+                requestId = Extra(arguments, "request_id:s:");
+                return Bundle("accepted=true, completed=true, message=accepted");
+            }
+            if (arguments.Contains("am", StringComparer.Ordinal))
+            {
+                return Success("Status: ok\n");
+            }
+            if (ProviderMethod(arguments) == "result")
+            {
+                var crossed = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                    ResultJson(requestId!, "show-controls", wifiAdbEnabled: false)));
+                return Bundle($"accepted=true, completed=true, result_base64={crossed}");
+            }
+            return new CommandResult("adb-test", arguments, 1, string.Empty, "unexpected call", TimeSpan.Zero);
+        });
+        var client = new AdbClient("adb-test", runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            client.InvokeRustyKioskAsync(
+                "QUEST123",
+                RustyKioskCommand.ShowApps,
+                product: product));
+
+        Assert.Contains("typed command", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(RustyKioskCommand.FocusSearch)]
+    [InlineData(RustyKioskCommand.FocusTagEditor)]
+    public void AcceptedFocusCommandsMapPendingReceiptToCliExitThree(RustyKioskCommand command)
+    {
+        var result = RustyKioskOperatorResult.Parse(ResultJson(
+            "pc-focus",
+            command.ToWireName(),
+            wifiAdbEnabled: false,
+            completed: false));
+        var receipt = new OperatorMutationReceipt(
+            "pc-focus",
+            OperatorCommandKind.InvokeRustyKiosk,
+            "QUEST123",
+            command.ToWireName(),
+            OperatorMutationStage.Pending,
+            "Keyboard focus cannot be confirmed remotely.",
+            HeadsetReadback: true,
+            [new OperatorMutationTransition(
+                OperatorMutationStage.Pending,
+                DateTimeOffset.UtcNow,
+                "Pending wearer confirmation")]);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Completed);
+        Assert.False(RustyKioskReadback.Confirms(command, null, result));
+        Assert.Equal(3, RustyKioskCliExitCodes.For(receipt, accepted: true));
+    }
+
+    [Fact]
+    public void OperatorResultParsesLaunchOptionStateAndConfirmsTypedReadback()
+    {
+        var result = RustyKioskOperatorResult.Parse(LaunchOptionResultJson());
+
+        Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.Entries.Single().LaunchRequirement);
+        Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.SelectedLaunchRequirement);
+        Assert.Equal(RustyKioskPassthroughStyle.ContourLut, result.State.PassthroughStyle);
+        Assert.True(result.State.ControlsOpen);
+        Assert.False(result.State.PendingRequirementLaunch);
+        Assert.True(result.State.SystemPassthroughEnabled);
+        Assert.True(result.State.PassthroughLutApplied);
+        var option = Assert.Single(result.State.SelectedLaunchOptions!);
+        Assert.Equal(1, option.SchemaVersion);
+        Assert.Equal("playlist.example-1", option.OptionId);
+        Assert.Equal("Example playlist", option.DisplayLabel);
+        Assert.Equal("Loop two profiles", option.Description);
+        Assert.Equal(RustyKioskLaunchOptionsStatus.Ready, result.State.SelectedLaunchOptionsStatus);
+        Assert.NotNull(result.State.SelectedLaunchOptionsBinding);
+        Assert.Equal("com.example.installed", result.State.SelectedLaunchOptionsBinding.PackageName);
+        Assert.Equal(10123, result.State.SelectedLaunchOptionsBinding.Uid);
+        Assert.Equal(new string('a', 64), result.State.SelectedLaunchOptionsBinding.SigningIdentity);
+        Assert.Equal("34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf", result.State.SelectedLaunchOptionsBinding.BindingSha256);
+        Assert.Equal("playlist.example-1", result.State.LastDispatchedOptionId);
+        Assert.Equal("com.example.installed", result.State.LastDispatchedOptionPackage);
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.SetLaunchRequirement,
+            "wifi-on",
+            result));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.ShowControls,
+            null,
+            result with { Command = RustyKioskCommand.ShowControls }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.CancelPendingLaunch,
+            null,
+            result with { Command = RustyKioskCommand.CancelPendingLaunch }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.PassthroughContour,
+            null,
+            result with { Command = RustyKioskCommand.PassthroughContour }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.PassthroughNatural,
+            null,
+            result with { Command = RustyKioskCommand.PassthroughNatural }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.ShowApps,
+            null,
+            result with { Command = RustyKioskCommand.ShowControls }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.example-1",
+            result with { Command = RustyKioskCommand.LaunchOption }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.other",
+            result with { Command = RustyKioskCommand.LaunchOption }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.example-1",
+            result with
+            {
+                Command = RustyKioskCommand.LaunchOption,
+                State = result.State with { LastDispatchedOptionPackage = "com.example.other" }
+            }));
+    }
+
+    [Fact]
+    public void OperatorResultRejectsUnknownLaunchRequirement()
+    {
+        var json = LaunchOptionResultJson().Replace(
+            "\"launch_requirement\": \"wifi-on\"",
+            "\"launch_requirement\": \"bluetooth-on\"",
+            StringComparison.Ordinal);
+
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(json));
+    }
+
+    [Fact]
+    public void OperatorResultRejectsMalformedOrDuplicateLaunchOptions()
+    {
+        var wrongSchema = LaunchOptionResultJson().Replace(
+            "\"schema_version\": 1",
+            "\"schema_version\": 2",
+            StringComparison.Ordinal);
+        var oversizedId = LaunchOptionResultJson().Replace(
+            "playlist.example-1",
+            new string('x', RustyKioskContract.MaxCommandValueLength + 1),
+            StringComparison.Ordinal);
+        var unknownStatus = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_status\": \"ready\"",
+            "\"selected_launch_options_status\": \"maybe\"",
+            StringComparison.Ordinal);
+        var mismatchedBinding = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_package\": \"com.example.installed\"",
+            "\"selected_launch_options_package\": \"com.example.other\"",
+            StringComparison.Ordinal);
+        var invalidBindingDigest = LaunchOptionResultJson().Replace(
+            "34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf",
+            new string('B', 64),
+            StringComparison.Ordinal);
+        var incompleteBinding = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_uid\": 10123",
+            "\"selected_launch_options_uid\": null",
+            StringComparison.Ordinal);
+        var duplicateNode = JsonNode.Parse(LaunchOptionResultJson())!;
+        var duplicateOptions = duplicateNode["state"]!["selected_launch_options"]!.AsArray();
+        duplicateOptions.Add(JsonNode.Parse(duplicateOptions[0]!.ToJsonString()));
+        var duplicate = duplicateNode.ToJsonString();
+
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(wrongSchema));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(oversizedId));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(unknownStatus));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(mismatchedBinding));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(invalidBindingDigest));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(incompleteBinding));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(duplicate));
+    }
     [Fact]
     public void OperatorResultPreservesCompleteCatalogIncludingNamedMissingApps()
     {
@@ -76,6 +516,67 @@ public sealed class RustyKioskIntegrationTests
                 OperatorMutationStage.Confirmed
             ],
             confirmed.Transitions.Select(static transition => transition.Stage));
+    }
+
+    [Fact]
+    public void StatusReconciliationRequiresExactSerialAndCanonicalProduct()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var original = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.RequestWifiAdb,
+            operatorConfirmed: true,
+            product: labs);
+        var pending = new OperatorMutationReceipt(
+            "pc-status-bind",
+            original.Kind,
+            "QUEST123",
+            "Rusty Kiosk request-wifi-adb",
+            OperatorMutationStage.Pending,
+            "Wi-Fi ADB=off",
+            HeadsetReadback: true,
+            [new OperatorMutationTransition(
+                OperatorMutationStage.Pending,
+                DateTimeOffset.UtcNow,
+                "Waiting for matching status")]);
+        var status = RustyKioskOperatorResult.Parse(ResultJson(
+            "status-bound",
+            "status",
+            wifiAdbEnabled: true));
+        var sameTarget = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST123", labs),
+            RustyKioskOperatorResult: status);
+        var crossedSerial = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST999", labs),
+            RustyKioskOperatorResult: status);
+        var crossedChannel = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST123", stable),
+            RustyKioskOperatorResult: status);
+        var untypedStatus = new OperatorExecutionResult(
+            new OperatorCommand(
+                OperatorCommandKind.InspectRustyKiosk,
+                ["kiosk", "status"],
+                serial: "QUEST123",
+                rustyKioskProduct: labs),
+            RustyKioskOperatorResult: status);
+
+        Assert.Equal(
+            OperatorMutationStage.Confirmed,
+            OperatorMutationReconciler.Reconcile(pending, original, sameTarget).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, crossedSerial).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, crossedChannel).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, untypedStatus).Stage);
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.RequestWifiAdb,
+            value: null,
+            status));
     }
 
     [Fact]
@@ -193,6 +694,49 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
+    public async Task TagFileValidationAcceptsStrictV2ActiveRequirementAndRejectsUnknownValues()
+    {
+        var validPath = Path.Combine(Path.GetTempPath(), $"rusty-kiosk-tags-v2-{Guid.NewGuid():N}.json");
+        var invalidPath = Path.Combine(Path.GetTempPath(), $"rusty-kiosk-tags-v2-bad-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(
+            validPath,
+            """
+            {
+              "schema": "rusty.kiosk.app_tags.v2",
+              "apps": [
+                {
+                  "name": "Morphovision",
+                  "package": "io.github.mesmerprism.rustyquest.spatial_camera_panel",
+                  "tags": ["360"],
+                  "requirements": ["wifi-on"]
+                }
+              ]
+            }
+            """);
+        await File.WriteAllTextAsync(
+            invalidPath,
+            """
+            {
+              "schema": "rusty.kiosk.app_tags.v2",
+              "apps": [
+                { "name": "Morphovision", "requirements": ["bluetooth-on"] }
+              ]
+            }
+            """);
+
+        try
+        {
+            Assert.Contains("wifi-on", RustyKioskTagFile.ValidateAndRead(validPath), StringComparison.Ordinal);
+            Assert.Throws<InvalidDataException>(() => RustyKioskTagFile.ValidateAndRead(invalidPath));
+        }
+        finally
+        {
+            File.Delete(validPath);
+            File.Delete(invalidPath);
+        }
+    }
+
+    [Fact]
     public async Task TagTransferUsesBoundedProviderChunksAndShaInsteadOfRawAndroidDataPaths()
     {
         var entries = string.Join(
@@ -255,8 +799,9 @@ public sealed class RustyKioskIntegrationTests
 
         try
         {
-            await client.PushRustyKioskTagFileAsync("QUEST123", input);
-            await client.PullRustyKioskTagFileAsync("QUEST123", output);
+            var product = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+            await client.PushRustyKioskTagFileAsync("QUEST123", input, product: product);
+            await client.PullRustyKioskTagFileAsync("QUEST123", output, product: product);
 
             Assert.Equal(bytes, await File.ReadAllBytesAsync(output));
             Assert.True(runner.Calls.Count(call => call.Arguments.Contains("tag-write-chunk")) >= 2);
@@ -266,7 +811,10 @@ public sealed class RustyKioskIntegrationTests
                 static call =>
                 {
                     Assert.Equal(["-s", "QUEST123"], call.Arguments.Take(2));
-                    Assert.Contains(RustyKioskContract.OperatorUri, call.Arguments);
+                    Assert.Contains(
+                        RustyKioskProductContract.For(RustyKioskProductChannel.Labs).OperatorUri,
+                        call.Arguments);
+                    Assert.DoesNotContain(RustyKioskContract.OperatorUri, call.Arguments);
                     Assert.DoesNotContain("push", call.Arguments);
                     Assert.DoesNotContain(RustyKioskContract.TagFilePath, call.Arguments);
                 });
@@ -278,14 +826,18 @@ public sealed class RustyKioskIntegrationTests
         }
     }
 
-    private static string ResultJson(string requestId, string command, bool wifiAdbEnabled) => $$"""
+    private static string ResultJson(
+        string requestId,
+        string command,
+        bool wifiAdbEnabled,
+        bool completed = true) => $$"""
         {
           "schema": "rusty.kiosk.cli_result.v1",
           "request_id": "{{requestId}}",
           "command": "{{command}}",
           "accepted": true,
-          "completed": true,
-          "message": "Complete",
+          "completed": {{completed.ToString().ToLowerInvariant()}},
+          "message": "Dispatched",
           "state": {
             "installed_count": 1,
             "not_installed_count": 1,
@@ -331,6 +883,95 @@ public sealed class RustyKioskIntegrationTests
         }
         """;
 
+    private static string LaunchOptionResultJson() =>
+        """
+        {
+          "schema": "rusty.kiosk.cli_result.v1",
+          "request_id": "pc-alpha7",
+          "command": "set-launch-requirement",
+          "accepted": true,
+          "completed": true,
+          "message": "Complete",
+          "state": {
+            "installed_count": 1,
+            "not_installed_count": 0,
+            "visible_count": 1,
+            "visible_entries_truncated": false,
+            "entries": [
+              {
+                "key": "package:com.example.installed",
+                "name": "Installed Example",
+                "package": "com.example.installed",
+                "installed": true,
+                "launchable": true,
+                "tags": ["calm"],
+                "launch_requirement": "wifi-on"
+              }
+            ],
+            "search": "",
+            "tag_filter": null,
+            "selected_key": "package:com.example.installed",
+            "selected_name": "Installed Example",
+            "selected_package": "com.example.installed",
+            "selected_installed": true,
+            "selected_launchable": true,
+            "wifi_adb_enabled": true,
+            "setup_helper_installed": true,
+            "setup_helper_ready": true,
+            "request_wifi_adb_after_boot": false,
+            "accessibility_enabled": true,
+            "guard_armed": false,
+            "operation_in_progress": null,
+            "status_line": "Ready",
+            "tag_file_path": "/sdcard/Android/data/io.github.mesmerprism.rustykiosk/files/tags/app-tags.v1.json",
+            "search_focus_request": 7,
+            "tag_focus_request": 9,
+            "controls_open": true,
+            "selected_launch_requirement": "wifi-on",
+            "pending_requirement_launch": false,
+            "pending_requirement_launch_id": null,
+            "passthrough_style": "contour-lut",
+            "system_passthrough_enabled": true,
+            "passthrough_lut_applied": true,
+            "selected_launch_options_status": "ready",
+            "selected_launch_options_message": "One option is available.",
+            "selected_launch_options": [
+              {
+                "schema_version": 1,
+                "option_id": "playlist.example-1",
+                "display_label": "Example playlist",
+                "description": "Loop two profiles"
+              }
+            ],
+            "selected_launch_options_package": "com.example.installed",
+            "selected_launch_options_uid": 10123,
+            "selected_launch_options_signing_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selected_launch_options_version_code": 7,
+            "selected_launch_options_last_update_time_ms": 1785700000000,
+            "selected_launch_options_provider_authority": "com.example.installed.app-launch-options",
+            "selected_launch_options_provider_class": "com.example.installed.LaunchOptionsProvider",
+            "selected_launch_options_owner_activity": "com.example.installed.MainActivity",
+            "selected_launch_options_binding_sha256": "34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf",
+            "last_dispatched_option_id": "playlist.example-1",
+            "last_dispatched_option_package": "com.example.installed"
+          }
+        }
+        """;
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "QuestIonAbleFileManager.slnx")))
+            {
+                return directory.FullName;
+            }
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("Could not locate the repository root.");
+    }
+
     private static CommandResult Success(string output) =>
         new("adb-test", [], 0, output, string.Empty, TimeSpan.Zero);
 
@@ -339,6 +980,12 @@ public sealed class RustyKioskIntegrationTests
 
     private static string Extra(IReadOnlyList<string> arguments, string prefix) =>
         arguments.First(argument => argument.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..];
+
+    private static string? ProviderMethod(IReadOnlyList<string> arguments)
+    {
+        var index = Array.IndexOf(arguments.ToArray(), "--method");
+        return index >= 0 && index + 1 < arguments.Count ? arguments[index + 1] : null;
+    }
 
     private sealed class RecordingCommandRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler) : ICommandRunner
