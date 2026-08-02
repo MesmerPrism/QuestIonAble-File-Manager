@@ -91,8 +91,9 @@ one fixed product contract rather than accepting a package or authority from
 the device. ADB operations carry that exact product contract in the immutable
 operation and reject altered cross-channel identities before dispatch. A
 completed result must match both the generated request ID and requested typed
-command; only a separately requested `status` snapshot may reconcile later
-effective state. The host can admit only the fixed Kiosk command enum, query/cancel
+command. Only an explicitly typed `status` snapshot for the pending operation's
+exact serial and canonical Stable/Labs product may reconcile later effective
+state. The host can admit only the fixed Kiosk command enum, query/cancel
 one exact request lifecycle, transfer the fixed tag document, and issue/revoke
 a bounded direct session. It cannot supply shell text, Android components,
 intent actions, setup endpoints, or headset paths.

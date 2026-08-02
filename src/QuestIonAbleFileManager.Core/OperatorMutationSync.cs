@@ -385,7 +385,7 @@ internal static class OperatorMutations
 
         var value = command.RustyKioskValue;
         var state = kiosk.State;
-        var confirmed = RustyKioskReadback.Confirms(command.RustyKioskCommand!.Value, value, kiosk);
+        var confirmed = RustyKioskReadback.Confirms(command, result.Command, kiosk);
         var observed = KioskObservedState(state);
         return confirmed
             ? OperatorMutationObservation.Confirmed(observed)
@@ -419,11 +419,34 @@ public static class RustyKioskReadback
         RustyKioskCommand command,
         string? value,
         RustyKioskOperatorResult result)
+        => Confirms(command, value, result, allowStatusSnapshot: false);
+
+    public static bool Confirms(
+        OperatorCommand originalCommand,
+        OperatorCommand readbackCommand,
+        RustyKioskOperatorResult result)
+    {
+        ArgumentNullException.ThrowIfNull(originalCommand);
+        ArgumentNullException.ThrowIfNull(readbackCommand);
+        var command = originalCommand.RustyKioskCommand ??
+            throw new InvalidOperationException("The original operation is missing its typed Rusty Kiosk command.");
+        return Confirms(
+            command,
+            originalCommand.RustyKioskValue,
+            result,
+            IsMatchingStatusSnapshot(originalCommand, readbackCommand, result));
+    }
+
+    private static bool Confirms(
+        RustyKioskCommand command,
+        string? value,
+        RustyKioskOperatorResult result,
+        bool allowStatusSnapshot)
     {
         ArgumentNullException.ThrowIfNull(result);
         if (!result.Accepted ||
             !result.Completed ||
-            (result.Command != command && result.Command != RustyKioskCommand.Status))
+            (result.Command != command && !allowStatusSnapshot))
         {
             return false;
         }
@@ -467,6 +490,33 @@ public static class RustyKioskReadback
             RustyKioskCommand.Reload or RustyKioskCommand.ExitMetaHome => true,
             _ => true
         };
+    }
+
+    private static bool IsMatchingStatusSnapshot(
+        OperatorCommand originalCommand,
+        OperatorCommand readbackCommand,
+        RustyKioskOperatorResult result)
+    {
+        if (result.Command != RustyKioskCommand.Status ||
+            readbackCommand.Kind != OperatorCommandKind.InspectRustyKiosk ||
+            readbackCommand.RustyKioskCommand != RustyKioskCommand.Status ||
+            string.IsNullOrWhiteSpace(originalCommand.Serial) ||
+            !string.Equals(originalCommand.Serial, readbackCommand.Serial, StringComparison.Ordinal) ||
+            originalCommand.RustyKioskProduct is null ||
+            readbackCommand.RustyKioskProduct is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return RustyKioskProductContract.RequireKnown(originalCommand.RustyKioskProduct) ==
+                RustyKioskProductContract.RequireKnown(readbackCommand.RustyKioskProduct);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 }
 

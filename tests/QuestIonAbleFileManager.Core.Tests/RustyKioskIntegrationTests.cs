@@ -398,6 +398,67 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
+    public void StatusReconciliationRequiresExactSerialAndCanonicalProduct()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var original = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.RequestWifiAdb,
+            operatorConfirmed: true,
+            product: labs);
+        var pending = new OperatorMutationReceipt(
+            "pc-status-bind",
+            original.Kind,
+            "QUEST123",
+            "Rusty Kiosk request-wifi-adb",
+            OperatorMutationStage.Pending,
+            "Wi-Fi ADB=off",
+            HeadsetReadback: true,
+            [new OperatorMutationTransition(
+                OperatorMutationStage.Pending,
+                DateTimeOffset.UtcNow,
+                "Waiting for matching status")]);
+        var status = RustyKioskOperatorResult.Parse(ResultJson(
+            "status-bound",
+            "status",
+            wifiAdbEnabled: true));
+        var sameTarget = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST123", labs),
+            RustyKioskOperatorResult: status);
+        var crossedSerial = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST999", labs),
+            RustyKioskOperatorResult: status);
+        var crossedChannel = new OperatorExecutionResult(
+            OperatorCommands.InspectRustyKiosk("QUEST123", stable),
+            RustyKioskOperatorResult: status);
+        var untypedStatus = new OperatorExecutionResult(
+            new OperatorCommand(
+                OperatorCommandKind.InspectRustyKiosk,
+                ["kiosk", "status"],
+                serial: "QUEST123",
+                rustyKioskProduct: labs),
+            RustyKioskOperatorResult: status);
+
+        Assert.Equal(
+            OperatorMutationStage.Confirmed,
+            OperatorMutationReconciler.Reconcile(pending, original, sameTarget).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, crossedSerial).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, crossedChannel).Stage);
+        Assert.Equal(
+            OperatorMutationStage.Pending,
+            OperatorMutationReconciler.Reconcile(pending, original, untypedStatus).Stage);
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.RequestWifiAdb,
+            value: null,
+            status));
+    }
+
+    [Fact]
     public async Task PerformanceMutationRecordsSentPendingConfirmedOnlyAfterGetPropReadback()
     {
         var runner = new RecordingCommandRunner((_, arguments) =>

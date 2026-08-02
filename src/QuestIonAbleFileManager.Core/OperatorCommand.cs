@@ -701,6 +701,7 @@ public static class OperatorCommands
             OperatorCommandKind.InspectRustyKiosk,
             ["kiosk", "status", "--serial", serial, "--product-channel", product.WireName],
             serial: serial,
+            rustyKioskCommand: RustyKioskCommand.Status,
             rustyKioskProduct: product);
     }
 
