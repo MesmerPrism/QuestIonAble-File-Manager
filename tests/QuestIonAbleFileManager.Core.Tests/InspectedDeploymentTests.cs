@@ -116,10 +116,11 @@ public sealed class InspectedDeploymentTests
             var command = stream.Arguments[5];
             Assert.Contains("exec 3<\"$candidate\"", command, StringComparison.Ordinal);
             Assert.Contains(
-                "opened=$(realpath /proc/self/fd/3)",
+                "opened=$(readlink /proc/$$/fd/3)",
                 command,
                 StringComparison.Ordinal);
-            Assert.Single(Regex.Matches(command, "/proc/self/fd/3").Cast<Match>());
+            Assert.Single(Regex.Matches(command, "/proc/\\$\\$/fd/3").Cast<Match>());
+            Assert.DoesNotContain("/proc/self/fd/3", command, StringComparison.Ordinal);
             Assert.DoesNotContain("stat ", command, StringComparison.Ordinal);
             Assert.DoesNotContain("-f /proc/self/fd/3", command, StringComparison.Ordinal);
             Assert.EndsWith("exec cat <&3", command, StringComparison.Ordinal);

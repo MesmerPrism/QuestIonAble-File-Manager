@@ -2165,7 +2165,7 @@ public sealed partial class AdbClient
     private static string BuildOpenedRemoteHandleProof() =>
         "exec 3<\"$candidate\" || { " +
         "printf 'qfm-integration:path-open-failed\\n' >&2; exit 48; }; " +
-        "opened=$(realpath /proc/self/fd/3) || { " +
+        "opened=$(readlink /proc/$$/fd/3) || { " +
         "printf 'qfm-integration:path-open-proof-failed\\n' >&2; exit 49; }; " +
         "if [ \"$opened\" != \"$expected\" ]; then " +
         "printf 'qfm-integration:path-indirection\\n' >&2; exit 42; fi; ";
