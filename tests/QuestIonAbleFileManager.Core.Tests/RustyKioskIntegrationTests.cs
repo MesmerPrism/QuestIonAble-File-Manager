@@ -96,11 +96,18 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Theory]
-    [InlineData(RustyKioskProductChannel.Stable, "stable")]
-    [InlineData(RustyKioskProductChannel.Labs, "labs")]
+    [InlineData(
+        RustyKioskProductChannel.Stable,
+        "stable",
+        "io.github.mesmerprism.rustykiosk/io.github.mesmerprism.rustykiosk.RustyKioskActivity")]
+    [InlineData(
+        RustyKioskProductChannel.Labs,
+        "labs",
+        "io.github.mesmerprism.rustykiosk.labs/io.github.mesmerprism.rustykiosk.RustyKioskActivity")]
     public void AdbOperatorFactoriesPreserveExactProductChannel(
         RustyKioskProductChannel channel,
-        string wireName)
+        string wireName,
+        string expectedMainActivity)
     {
         var product = RustyKioskProductContract.For(channel);
         var commands = new[]
@@ -119,6 +126,7 @@ public sealed class RustyKioskIntegrationTests
             var channelIndex = command.CliArguments.ToList().IndexOf("--product-channel");
             Assert.True(channelIndex >= 0);
             Assert.Equal(wireName, command.CliArguments[channelIndex + 1]);
+            Assert.Equal(expectedMainActivity, product.MainActivity);
         });
     }
 

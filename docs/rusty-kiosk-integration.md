@@ -90,6 +90,13 @@ protected by caller-held `android.permission.DUMP`. Stable uses
 one fixed product contract rather than accepting a package or authority from
 the device. ADB operations carry that exact product contract in the immutable
 operation and reject altered cross-channel identities before dispatch. A
+coinstallable Labs application keeps the stable Kotlin class namespace, so the
+fixed activity components are
+`io.github.mesmerprism.rustykiosk/io.github.mesmerprism.rustykiosk.RustyKioskActivity`
+and
+`io.github.mesmerprism.rustykiosk.labs/io.github.mesmerprism.rustykiosk.RustyKioskActivity`.
+The product contract binds application ID and activity class separately rather
+than deriving the class namespace from the Labs application ID. A
 completed result must match both the generated request ID and requested typed
 command. Only an explicitly typed `status` snapshot for the pending operation's
 exact serial and canonical Stable/Labs product may reconcile later effective

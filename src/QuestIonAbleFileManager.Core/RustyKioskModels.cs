@@ -439,6 +439,7 @@ public sealed record RustyKioskProductContract(
     RustyKioskProductChannel Channel,
     string WireName,
     string MainPackage,
+    string MainActivityClass,
     string SetupHelperPackage,
     string OperatorAuthority,
     string SetupControlPermission,
@@ -446,7 +447,7 @@ public sealed record RustyKioskProductContract(
 {
     public string OperatorUri => "content://" + OperatorAuthority;
 
-    public string MainActivity => MainPackage + "/.RustyKioskActivity";
+    public string MainActivity => MainPackage + "/" + MainActivityClass;
 
     public static RustyKioskProductContract For(RustyKioskProductChannel channel) => channel switch
     {
@@ -454,6 +455,7 @@ public sealed record RustyKioskProductContract(
             channel,
             "stable",
             "io.github.mesmerprism.rustykiosk",
+            "io.github.mesmerprism.rustykiosk.RustyKioskActivity",
             "io.github.mesmerprism.rustykiosk.setuphelper",
             "io.github.mesmerprism.rustykiosk.operator",
             "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL",
@@ -462,6 +464,7 @@ public sealed record RustyKioskProductContract(
             channel,
             "labs",
             "io.github.mesmerprism.rustykiosk.labs",
+            "io.github.mesmerprism.rustykiosk.RustyKioskActivity",
             "io.github.mesmerprism.rustykiosk.setuphelper.labs",
             "io.github.mesmerprism.rustykiosk.labs.operator",
             "io.github.mesmerprism.rustykiosk.labs.permission.SETUP_CONTROL",
