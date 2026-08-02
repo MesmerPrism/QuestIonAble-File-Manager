@@ -43,7 +43,10 @@ to `/sdcard/Android/data`: each chunk is bounded, the complete file is capped at
 
 Direct mode also exposes one app-owned staging area. Windows can list, upload,
 download, and delete its bounded filenames. An APK install names one to 32
-staged `.apk` parts and creates one Android PackageInstaller session. Android's
+staged `.apk` parts and binds each name to the upload-confirmed positive byte
+count and lowercase SHA-256. Kiosk copies and verifies the same opened file
+handle before committing one Android PackageInstaller session; replacement or
+digest drift fails closed and abandons that session. Android's
 visible per-app installer permission and confirm/cancel surface remain wearer
 owned; a request is pending until its matching receipt becomes installed or
 failed. Trusting Kiosk as an install source is a one-time grant, but arbitrary
@@ -55,7 +58,7 @@ settings, and diagnostics remain optional ADB functions.
 
 ## Authority Boundary
 
-The successor release host surface is schema `rusty.kiosk.host_operator.v3`,
+The successor release host surface is schema `rusty.kiosk.host_operator.v4`,
 protected by caller-held `android.permission.DUMP`. Stable uses
 `content://io.github.mesmerprism.rustykiosk.operator`; Labs uses
 `content://io.github.mesmerprism.rustykiosk.labs.operator`. File Manager chooses
@@ -70,7 +73,7 @@ the small secure-settings operations. The Windows app owns ADB transport and
 operator confirmation.
 
 Authorized-USB bootstrap uses provider schema
-`rusty.kiosk.direct_usb_bootstrap.v1`. The sensitive provider response is read
+`rusty.kiosk.direct_usb_bootstrap.v2`. The sensitive provider response is read
 through a bounded byte-only runner and is never projected into ordinary command
 results, arguments, environment, help, telemetry, or progress. The session
 secret remains in process memory and is zeroed when the client closes. The
@@ -80,8 +83,13 @@ polls no-argument provider status until both `direct_enabled` and
 `direct_running` are false on the exact post-disable generation. A generation
 change or non-convergence produces `cleanup_unknown`; it is never reported as
 confirmed. A listener that was already enabled is never disabled by the PC.
+If the enable response is lost, File Manager sends only the original operation
+ID to `direct-recover-disable`; it never requests the credential again. Kiosk's
+bounded non-secret ownership tombstone permits an atomic disable or idempotent
+STOP redispatch, and no-argument current-generation stopped readback is still
+required before cleanup is confirmed.
 
-The optional direct surface is `rusty.kiosk.direct_operator.v1` on port 39873.
+The optional direct surface is `rusty.kiosk.direct_operator.v2` on port 39873.
 It accepts expiring HMAC-SHA-256 envelopes, retains replay IDs, verifies request
 bodies, and signs every authenticated response. The Windows client additionally
 requires the completed result's logical request ID and typed command to match

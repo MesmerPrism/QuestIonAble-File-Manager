@@ -78,6 +78,25 @@ public sealed class RustyKioskDirectClientTests
     }
 
     [Fact]
+    public async Task Install_RejectsMissingMalformedAndDuplicateUploadCommitmentsBeforeRequest()
+    {
+        const string code = "0123-4567-89AB-CDEF-0123-4567-89";
+        using var client = new RustyKioskDirectClient(
+            RustyKioskDirectEndpoint.Parse("http://192.0.2.1:39873", code),
+            new HttpClient(new SignedResponseHandler(code, tamperBodyAfterSigning: false)));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.RequestInstallAsync(
+            [new RustyKioskStagedFile("app.apk", 10, 0)]));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.RequestInstallAsync(
+            [new RustyKioskStagedFile("app.apk", 10, 0, new string('A', 64))]));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.RequestInstallAsync(
+            [
+                new RustyKioskStagedFile("app.apk", 10, 0, new string('a', 64)),
+                new RustyKioskStagedFile("app.apk", 10, 0, new string('b', 64))
+            ]));
+    }
+
+    [Fact]
     public async Task DownloadFromStaging_ClosesTemporaryFileBeforeAtomicMove()
     {
         const string code = "0123-4567-89AB-CDEF-0123-4567-89";
@@ -369,7 +388,7 @@ public sealed class RustyKioskDirectClientTests
             LastRequest = request;
             var requestId = request.Headers.GetValues("X-Rusty-Request-Id").Single();
             var signedBytes = Encoding.UTF8.GetBytes(
-                "{\"accepted\":true,\"schema\":\"rusty.kiosk.direct_operator.v1\",\"endpoint\":\"http://192.0.2.1:39873\",\"installer_allowed\":true,\"staging_directory_kind\":\"app-owned\",\"message\":\"ready\"}");
+                "{\"accepted\":true,\"schema\":\"rusty.kiosk.direct_operator.v2\",\"endpoint\":\"http://192.0.2.1:39873\",\"installer_allowed\":true,\"staging_directory_kind\":\"app-owned\",\"message\":\"ready\"}");
             var returnedBytes = tamperBodyAfterSigning
                 ? Encoding.UTF8.GetBytes("{\"accepted\":false,\"message\":\"tampered\"}")
                 : signedBytes;
@@ -546,7 +565,7 @@ public sealed class RustyKioskDirectClientTests
             CancellationToken cancellationToken)
         {
             var body = Encoding.UTF8.GetBytes(
-                "{\"accepted\":true,\"schema\":\"rusty.kiosk.direct_operator.v1\",\"installer_allowed\":true,\"staging_directory_kind\":\"app-owned\",\"message\":\"ready\",\"bridge_generation\":41,\"session_id\":\"session_test_0001\"}");
+                "{\"accepted\":true,\"schema\":\"rusty.kiosk.direct_operator.v2\",\"installer_allowed\":true,\"staging_directory_kind\":\"app-owned\",\"message\":\"ready\",\"bridge_generation\":41,\"session_id\":\"session_test_0001\"}");
             return Task.FromResult(SignedResponse(request, body, secret));
         }
     }

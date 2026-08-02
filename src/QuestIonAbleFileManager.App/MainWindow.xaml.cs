@@ -41,7 +41,7 @@ public partial class MainWindow : Window
         {
             Interval = TimeSpan.FromSeconds(15)
         };
-        _pairingCodeRevealTimer.Tick += (_, _) => RemaskPairingCode();
+        _pairingCodeRevealTimer.Tick += (_, _) => ClearManualPairingInput();
         WifiInstallTargetsList.ItemsSource = _wifiInstallTargets;
         CpuLevelBox.ItemsSource = Enumerable.Range(0, 6);
         GpuLevelBox.ItemsSource = Enumerable.Range(0, 6);
@@ -332,7 +332,7 @@ public partial class MainWindow : Window
             if (privateDocument is not null)
                 CryptographicOperations.ZeroMemory(privateDocument);
             KioskDirectEndpointBox.Clear();
-            KioskDirectPairingCodeBox.Clear();
+            ClearManualPairingInput();
         }
     }
 
@@ -1046,6 +1046,7 @@ public partial class MainWindow : Window
 
     private async void OnConnectKioskDirectUsb(object sender, RoutedEventArgs eventArgs)
     {
+        ClearManualPairingInput();
         if (_client is null)
         {
             ShowInputMessage("ADB is unavailable. Use the manual Direct Link fields or configure Platform Tools.");
@@ -1109,14 +1110,43 @@ public partial class MainWindow : Window
         var statusResult = await directOperator.ExecuteAsync(KioskDirectOperatorCommand.Status());
         var status = statusResult.Status ??
             throw new InvalidOperationException("Direct Link returned no signed status.");
-        _rustyKioskDirectClient = client;
-        _rustyKioskDirectOperator = directOperator;
-        _rustyKioskUsbDirectSession = usbSession;
-        KioskDirectStatusText.Text =
-            $"Direct link: connected · {(usbSession is null ? "manual" : "authorized USB session")} · " +
-            $"installer {(status.InstallerAllowed ? "allowed" : "needs wearer permission")}";
-        await RefreshKioskAsync();
-        await RefreshKioskDirectStagingAsync();
+        var kioskResult = await directOperator.ExecuteAsync(
+            KioskDirectOperatorCommand.Invoke(
+                RustyKioskCommand.Status,
+                value: null,
+                operatorConfirmed: true));
+        var kiosk = kioskResult.KioskResult ??
+            throw new InvalidOperationException("Direct Link returned no Kiosk readback.");
+        var stagingResult = await directOperator.ExecuteAsync(
+            KioskDirectOperatorCommand.ListStaging());
+        var stagedFiles = stagingResult.StagedFiles ??
+            throw new InvalidOperationException("Direct Link returned no staging readback.");
+
+        // Publish the process-memory session only after every required signed readback has
+        // succeeded. Callers still own and dispose an unadopted client/session on failure.
+        try
+        {
+            _rustyKioskDirectClient = client;
+            _rustyKioskDirectOperator = directOperator;
+            _rustyKioskUsbDirectSession = usbSession;
+            KioskDirectStatusText.Text =
+                $"Direct link: connected · {(usbSession is null ? "manual" : "authorized USB session")} · " +
+                $"installer {(status.InstallerAllowed ? "allowed" : "needs wearer permission")}";
+            ApplyKioskResult(kiosk);
+            KioskDirectStagingList.ItemsSource = stagedFiles;
+            StatusText.Text =
+                $"Direct staging readback: {stagedFiles.Count} file{(stagedFiles.Count == 1 ? string.Empty : "s")}.";
+        }
+        catch
+        {
+            _rustyKioskDirectClient = null;
+            _rustyKioskDirectOperator = null;
+            _rustyKioskUsbDirectSession = null;
+            _rustyKioskDirectInstallRequestId = null;
+            KioskDirectStagingList.ItemsSource = null;
+            KioskDirectStatusText.Text = "Direct link: not connected";
+            throw;
+        }
     }
 
     private async Task DisconnectKioskDirectAsync(bool updateUi)
@@ -1137,11 +1167,11 @@ public partial class MainWindow : Window
         {
             client?.Dispose();
         }
+        KioskDirectStagingList.ItemsSource = null;
+        KioskDirectStatusText.Text = "Direct link: not connected";
+        KioskDirectInstallStatusText.Text = "Local install: no request sent";
         if (updateUi)
         {
-            KioskDirectStagingList.ItemsSource = null;
-            KioskDirectStatusText.Text = "Direct link: not connected";
-            KioskDirectInstallStatusText.Text = "Local install: no request sent";
             StatusText.Text = cleanup is null
                 ? "Cleared the PC Direct Link credential."
                 : $"Cleared the PC Direct Link credential. Cleanup {cleanup.Stage.ToString().ToLowerInvariant()}: {cleanup.Message}";
@@ -1165,10 +1195,10 @@ public partial class MainWindow : Window
     }
 
     private void OnKioskDirectRevealLostFocus(object sender, RoutedEventArgs eventArgs) =>
-        RemaskPairingCode();
+        ClearManualPairingInput();
 
     private void OnDeactivated(object? sender, EventArgs eventArgs) =>
-        RemaskPairingCode();
+        ClearManualPairingInput();
 
     private void RemaskPairingCode()
     {

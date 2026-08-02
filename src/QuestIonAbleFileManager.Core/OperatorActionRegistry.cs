@@ -8,14 +8,19 @@ public enum OperatorActionProjection
     InteractiveOnly
 }
 
+public sealed record OperatorActionRouteDescriptor(
+    string Id,
+    string CliRoute,
+    string CoreOperation,
+    bool RequiresConfirmation,
+    string ReadbackContract);
+
 public sealed record OperatorActionDescriptor(
     string Id,
     string WpfHandler,
     OperatorActionProjection Projection,
-    string? CliRoute,
-    string? CoreOperation,
+    IReadOnlyList<OperatorActionRouteDescriptor> Routes,
     bool MutatesHeadset,
-    bool RequiresConfirmation,
     string? InteractiveReason = null);
 
 /// <summary>
@@ -49,7 +54,17 @@ public static class OperatorActionRegistry
             Interactive("kiosk.bundle.choose", "OnBrowseKioskBundle", "The native folder picker only selects the typed Kiosk install input."),
             Shared("kiosk.install", "OnInstallKiosk", "kiosk install", "OperatorCommands.InstallRustyKiosk", true, true),
             Shared("kiosk.provision", "OnProvisionKiosk", "kiosk provision", "OperatorCommands.ProvisionRustyKiosk", true, true),
-            Shared("kiosk.refresh", "OnRefreshKiosk", "kiosk status", "OperatorCommands.InspectRustyKiosk", false, false),
+            DualKiosk(
+                "kiosk.refresh",
+                "OnRefreshKiosk",
+                "kiosk-direct status + kiosk-direct command --command status",
+                "KioskDirectOperatorCommand.Status + KioskDirectOperatorCommand.Invoke(status)",
+                "kiosk status",
+                "OperatorCommands.InspectRustyKiosk",
+                false,
+                false,
+                "signed Direct Link status plus matching typed Kiosk state readback",
+                "DUMP-protected host-provider installation and typed Kiosk state readback"),
             Shared("kiosk.direct.connect.manual", "OnConnectKioskDirect", "kiosk-direct status --credential-stdin", "KioskDirectOperatorCommand.Status", false, false),
             Shared("kiosk.direct.connect.usb", "OnConnectKioskDirectUsb", "kiosk-direct status --serial --product-channel --confirm-kiosk-direct-bootstrap", "RustyKioskUsbDirectLinkBootstrapper.ConnectAsync", true, true),
             Interactive("kiosk.direct.disconnect", "OnDisconnectKioskDirect", "This clears the current process-memory WPF session; every CLI Direct Link command already performs the same cleanup atomically on exit."),
@@ -60,18 +75,38 @@ public static class OperatorActionRegistry
             Interactive("kiosk.direct.apks.choose", "OnChooseKioskDirectApks", "The native file picker only selects the typed Direct Link install input."),
             Shared("kiosk.direct.install", "OnInstallKioskDirectApks", "kiosk-direct install", "KioskDirectOperatorCommand.Install", true, true),
             Shared("kiosk.direct.install.status", "OnRefreshKioskDirectInstall", "kiosk-direct install-status", "KioskDirectOperatorCommand.InstallStatus", false, false),
-            Shared("kiosk.launch.normal", "OnKioskLaunchNormal", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.launch.guarded", "OnKioskLaunchGuarded", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.tag.add", "OnAddKioskTag", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.tag.remove", "OnRemoveKioskTag", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.tags.export", "OnExportKioskTags", "kiosk-direct tags export", "KioskDirectOperatorCommand.ExportTags", false, false),
-            Shared("kiosk.tags.import", "OnImportKioskTags", "kiosk-direct tags import", "KioskDirectOperatorCommand.ImportTags", true, true),
-            Shared("kiosk.wifi.request", "OnKioskRequestWifiAdb", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.wifi.disable", "OnKioskDisableWifiAdb", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.wifi.boot.enable", "OnKioskEnableAutoWifi", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.wifi.boot.disable", "OnKioskDisableAutoWifi", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.accessibility.enable", "OnKioskEnableAccessibility", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
-            Shared("kiosk.accessibility.disable", "OnKioskDisableAccessibility", "kiosk-direct command", "KioskDirectOperatorCommand.Invoke", true, true),
+            DualKioskCommand("kiosk.launch.normal", "OnKioskLaunchNormal"),
+            DualKioskCommand("kiosk.launch.guarded", "OnKioskLaunchGuarded"),
+            DualKioskCommand("kiosk.tag.add", "OnAddKioskTag"),
+            DualKioskCommand("kiosk.tag.remove", "OnRemoveKioskTag"),
+            DualKiosk(
+                "kiosk.tags.export",
+                "OnExportKioskTags",
+                "kiosk-direct tags export",
+                "KioskDirectOperatorCommand.ExportTags",
+                "kiosk tags export",
+                "OperatorCommands.PullRustyKioskTags",
+                false,
+                false,
+                "signed bounded rusty.kiosk.app_tags.v1 document readback",
+                "bounded provider-chunk readback with exact size, SHA-256, and schema validation"),
+            DualKiosk(
+                "kiosk.tags.import",
+                "OnImportKioskTags",
+                "kiosk-direct tags import",
+                "KioskDirectOperatorCommand.ImportTags",
+                "kiosk tags import",
+                "OperatorCommands.PushRustyKioskTags",
+                true,
+                true,
+                "signed replacement size/SHA readback plus typed reload result",
+                "provider chunk commit size/SHA readback plus typed reload result"),
+            DualKioskCommand("kiosk.wifi.request", "OnKioskRequestWifiAdb"),
+            DualKioskCommand("kiosk.wifi.disable", "OnKioskDisableWifiAdb"),
+            DualKioskCommand("kiosk.wifi.boot.enable", "OnKioskEnableAutoWifi"),
+            DualKioskCommand("kiosk.wifi.boot.disable", "OnKioskDisableAutoWifi"),
+            DualKioskCommand("kiosk.accessibility.enable", "OnKioskEnableAccessibility"),
+            DualKioskCommand("kiosk.accessibility.disable", "OnKioskDisableAccessibility"),
             Interactive("kiosk.open-adb-installer", "OnOpenAdbApkInstaller", "This only switches the visible WPF tab."),
             Shared("device.refresh", "OnRefreshQuestControls", "device status", "OperatorCommands.ReadQuestControls", false, false),
             Shared("device.awake.enable", "OnEnableKeepAwake", "device keep-awake --on", "OperatorCommands.SetQuestKeepAwake", true, true),
@@ -94,9 +129,73 @@ public static class OperatorActionRegistry
         string cli,
         string core,
         bool mutates,
-        bool confirmation) =>
-        new(id, handler, OperatorActionProjection.SharedCoreCli, cli, core, mutates, confirmation);
+        bool confirmation,
+        string readbackContract = "typed Core result and operation-specific effective-state readback") =>
+        new(
+            id,
+            handler,
+            OperatorActionProjection.SharedCoreCli,
+            [new OperatorActionRouteDescriptor(
+                RouteId(core),
+                cli,
+                core,
+                confirmation,
+                readbackContract)],
+            mutates);
+
+    private static string RouteId(string coreOperation) =>
+        coreOperation.StartsWith("KioskDirectOperatorCommand.", StringComparison.Ordinal)
+            ? "direct_link"
+            : coreOperation.StartsWith("RustyKioskUsbDirectLinkBootstrapper.", StringComparison.Ordinal)
+                ? "authorized_usb_bootstrap"
+                : coreOperation.Contains("RustyKiosk", StringComparison.Ordinal)
+                    ? "adb_host_provider"
+                    : "shared_core";
+
+    private static OperatorActionDescriptor DualKioskCommand(string id, string handler) =>
+        DualKiosk(
+            id,
+            handler,
+            "kiosk-direct command",
+            "KioskDirectOperatorCommand.Invoke",
+            "kiosk command",
+            "OperatorCommands.InvokeRustyKiosk",
+            true,
+            true,
+            "signed typed Kiosk result accepted only when RustyKioskReadback.Confirms matches",
+            "DUMP-protected typed Kiosk result accepted only when RustyKioskReadback.Confirms matches");
+
+    private static OperatorActionDescriptor DualKiosk(
+        string id,
+        string handler,
+        string directCli,
+        string directCore,
+        string adbCli,
+        string adbCore,
+        bool mutates,
+        bool confirmation,
+        string directReadback,
+        string adbReadback) =>
+        new(
+            id,
+            handler,
+            OperatorActionProjection.SharedCoreCli,
+            [
+                new OperatorActionRouteDescriptor(
+                    "direct_link",
+                    directCli,
+                    directCore,
+                    confirmation,
+                    directReadback),
+                new OperatorActionRouteDescriptor(
+                    "adb_host_provider",
+                    adbCli,
+                    adbCore,
+                    confirmation,
+                    adbReadback)
+            ],
+            mutates);
 
     private static OperatorActionDescriptor Interactive(string id, string handler, string reason) =>
-        new(id, handler, OperatorActionProjection.InteractiveOnly, null, null, false, false, reason);
+        new(id, handler, OperatorActionProjection.InteractiveOnly, [], false, reason);
 }

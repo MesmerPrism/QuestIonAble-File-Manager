@@ -184,156 +184,158 @@ public sealed class KioskDirectOperatorExecutor(RustyKioskDirectClient client)
                     Status: await _client.GetStatusAsync(cancellationToken).ConfigureAwait(false));
 
             case KioskDirectOperatorAction.Invoke:
-            {
-                var kioskCommand = command.KioskCommand ??
-                    throw new InvalidOperationException("The typed Kiosk action is missing.");
-                var admitted = await _client.AdmitKioskRequestAsync(
-                        kioskCommand,
-                        command.Value,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                try
                 {
-                    var kiosk = await _client.WaitForKioskResultAsync(
-                            admitted.RequestId,
+                    var kioskCommand = command.KioskCommand ??
+                        throw new InvalidOperationException("The typed Kiosk action is missing.");
+                    var admitted = await _client.AdmitKioskRequestAsync(
                             kioskCommand,
+                            command.Value,
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
-                    var stage = RustyKioskReadback.Confirms(kioskCommand, command.Value, kiosk)
-                        ? OperatorMutationStage.Confirmed
-                        : OperatorMutationStage.PendingWearerAction;
-                    return Result(command, stage, kiosk.Message, admitted.RequestId, KioskResult: kiosk);
-                }
-                catch (TimeoutException)
-                {
-                    var lifecycle = await _client.ReadKioskRequestStatusAsync(
+                    try
+                    {
+                        var kiosk = await _client.WaitForKioskResultAsync(
+                                admitted.RequestId,
+                                kioskCommand,
+                                cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+                        var stage = RustyKioskReadback.Confirms(kioskCommand, command.Value, kiosk)
+                            ? OperatorMutationStage.Confirmed
+                            : OperatorMutationStage.PendingWearerAction;
+                        return Result(command, stage, kiosk.Message, admitted.RequestId, KioskResult: kiosk);
+                    }
+                    catch (TimeoutException)
+                    {
+                        var lifecycle = await _client.ReadKioskRequestStatusAsync(
+                                admitted.RequestId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        return Result(
+                            command,
+                            lifecycle.MutationStage,
+                            lifecycle.Message,
                             admitted.RequestId,
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                    return Result(
-                        command,
-                        lifecycle.MutationStage,
-                        lifecycle.Message,
-                        admitted.RequestId,
-                        RequestReceipt: lifecycle);
+                            RequestReceipt: lifecycle);
+                    }
                 }
-            }
 
             case KioskDirectOperatorAction.RequestStatus:
-            {
-                var request = await _client.ReadKioskRequestStatusAsync(
-                        Require(command.RequestId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, request.MutationStage, request.Message, request.RequestId, RequestReceipt: request);
-            }
+                {
+                    var request = await _client.ReadKioskRequestStatusAsync(
+                            Require(command.RequestId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, request.MutationStage, request.Message, request.RequestId, RequestReceipt: request);
+                }
 
             case KioskDirectOperatorAction.CancelRequest:
-            {
-                var request = await _client.CancelKioskRequestAsync(
-                        Require(command.RequestId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, request.MutationStage, request.Message, request.RequestId, RequestReceipt: request);
-            }
+                {
+                    var request = await _client.CancelKioskRequestAsync(
+                            Require(command.RequestId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, request.MutationStage, request.Message, request.RequestId, RequestReceipt: request);
+                }
 
             case KioskDirectOperatorAction.ExportTags:
-            {
-                var output = Require(command.LocalPath);
-                await File.WriteAllBytesAsync(
-                        output,
-                        await _client.ReadTagsAsync(cancellationToken).ConfigureAwait(false),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, OperatorMutationStage.Confirmed, "The signed tag document was exported.",
-                    LocalFileName: Path.GetFileName(output));
-            }
+                {
+                    var output = Require(command.LocalPath);
+                    await File.WriteAllBytesAsync(
+                            output,
+                            await _client.ReadTagsAsync(cancellationToken).ConfigureAwait(false),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, OperatorMutationStage.Confirmed, "The signed tag document was exported.",
+                        LocalFileName: Path.GetFileName(output));
+                }
 
             case KioskDirectOperatorAction.ImportTags:
-            {
-                var input = Require(command.LocalPath);
-                var validatedJson = RustyKioskTagFile.ValidateAndRead(input);
-                await _client.WriteTagsAsync(
-                        System.Text.Encoding.UTF8.GetBytes(validatedJson),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                var kiosk = await _client.InvokeKioskAsync(
-                        RustyKioskCommand.Reload,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, OperatorMutationStage.Confirmed, kiosk.Message, KioskResult: kiosk);
-            }
+                {
+                    var input = Require(command.LocalPath);
+                    var validatedJson = RustyKioskTagFile.ValidateAndRead(input);
+                    await _client.WriteTagsAsync(
+                            System.Text.Encoding.UTF8.GetBytes(validatedJson),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    var kiosk = await _client.InvokeKioskAsync(
+                            RustyKioskCommand.Reload,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, OperatorMutationStage.Confirmed, kiosk.Message, KioskResult: kiosk);
+                }
 
             case KioskDirectOperatorAction.ListStaging:
                 return Result(command, OperatorMutationStage.Confirmed, "Signed staging inventory was read back.",
                     StagedFiles: await _client.ListStagingAsync(cancellationToken).ConfigureAwait(false));
 
             case KioskDirectOperatorAction.UploadStaging:
-            {
-                var staged = await _client.UploadToStagingAsync(
-                        Require(command.LocalPath),
-                        command.StagedName,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, OperatorMutationStage.Confirmed, "Remote size and digest were confirmed.",
-                    StagedFile: staged);
-            }
+                {
+                    var staged = await _client.UploadToStagingAsync(
+                            Require(command.LocalPath),
+                            command.StagedName,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, OperatorMutationStage.Confirmed, "Remote size and digest were confirmed.",
+                        StagedFile: staged);
+                }
 
             case KioskDirectOperatorAction.DownloadStaging:
-            {
-                var output = await _client.DownloadFromStagingAsync(
-                        Require(command.StagedName),
-                        Require(command.LocalPath),
-                        command.Overwrite,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, OperatorMutationStage.Confirmed, "The bounded signed download was atomically committed.",
-                    LocalFileName: Path.GetFileName(output));
-            }
+                {
+                    var output = await _client.DownloadFromStagingAsync(
+                            Require(command.StagedName),
+                            Require(command.LocalPath),
+                            command.Overwrite,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, OperatorMutationStage.Confirmed, "The bounded signed download was atomically committed.",
+                        LocalFileName: Path.GetFileName(output));
+                }
 
             case KioskDirectOperatorAction.DeleteStaging:
-            {
-                var name = Require(command.StagedName);
-                await _client.DeleteStagedAsync(name, cancellationToken).ConfigureAwait(false);
-                var refreshed = await _client.ListStagingAsync(cancellationToken).ConfigureAwait(false);
-                if (refreshed.Any(file => string.Equals(file.Name, name, StringComparison.Ordinal)))
                 {
-                    return Result(command, OperatorMutationStage.Pending, "The exact staged filename remains present after refresh.");
+                    var name = Require(command.StagedName);
+                    await _client.DeleteStagedAsync(name, cancellationToken).ConfigureAwait(false);
+                    var refreshed = await _client.ListStagingAsync(cancellationToken).ConfigureAwait(false);
+                    if (refreshed.Any(file => string.Equals(file.Name, name, StringComparison.Ordinal)))
+                    {
+                        return Result(command, OperatorMutationStage.Pending, "The exact staged filename remains present after refresh.");
+                    }
+                    return Result(command, OperatorMutationStage.Confirmed, "The exact staged filename is absent after refresh.");
                 }
-                return Result(command, OperatorMutationStage.Confirmed, "The exact staged filename is absent after refresh.");
-            }
 
             case KioskDirectOperatorAction.Install:
-            {
-                var paths = command.LocalApkPaths ??
-                    throw new InvalidOperationException("The APK part set is missing.");
-                var names = paths.Select(Path.GetFileName).Select(Require).ToArray();
-                if (names.Distinct(StringComparer.Ordinal).Count() != names.Length)
                 {
-                    throw new InvalidOperationException(
-                        "APK parts for one Direct Link install must have distinct staging filenames.");
-                }
-                foreach (var path in paths)
-                {
-                    await _client.UploadToStagingAsync(path, cancellationToken: cancellationToken)
+                    var paths = command.LocalApkPaths ??
+                        throw new InvalidOperationException("The APK part set is missing.");
+                    var names = paths.Select(Path.GetFileName).Select(Require).ToArray();
+                    if (names.Distinct(StringComparer.Ordinal).Count() != names.Length)
+                    {
+                        throw new InvalidOperationException(
+                            "APK parts for one Direct Link install must have distinct staging filenames.");
+                    }
+                    var commitments = new List<RustyKioskStagedFile>(paths.Count);
+                    foreach (var path in paths)
+                    {
+                        commitments.Add(
+                            await _client.UploadToStagingAsync(path, cancellationToken: cancellationToken)
+                                .ConfigureAwait(false));
+                    }
+                    var receipt = await _client.RequestInstallAsync(
+                            commitments,
+                            command.RequestId,
+                            cancellationToken)
                         .ConfigureAwait(false);
+                    return Result(command, InstallStage(receipt), receipt.Message, receipt.RequestId, InstallReceipt: receipt);
                 }
-                var receipt = await _client.RequestInstallAsync(
-                        names,
-                        command.RequestId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, InstallStage(receipt), receipt.Message, receipt.RequestId, InstallReceipt: receipt);
-            }
 
             case KioskDirectOperatorAction.InstallStatus:
-            {
-                var receipt = await _client.ReadInstallReceiptAsync(
-                        Require(command.RequestId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                return Result(command, InstallStage(receipt), receipt.Message, receipt.RequestId, InstallReceipt: receipt);
-            }
+                {
+                    var receipt = await _client.ReadInstallReceiptAsync(
+                            Require(command.RequestId),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    return Result(command, InstallStage(receipt), receipt.Message, receipt.RequestId, InstallReceipt: receipt);
+                }
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(command), command.Action, "Unknown Direct Link action.");

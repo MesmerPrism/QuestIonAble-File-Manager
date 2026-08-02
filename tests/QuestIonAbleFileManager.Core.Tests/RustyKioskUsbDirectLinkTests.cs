@@ -154,6 +154,92 @@ public sealed class RustyKioskUsbDirectLinkTests
         Assert.Equal(0, runner.SensitiveCalls);
     }
 
+    [Theory]
+    [InlineData("TRUE")]
+    [InlineData("1")]
+    [InlineData("yes")]
+    [InlineData("")]
+    [InlineData("false, enabled_by_request=true")]
+    public async Task Connect_RejectsMalformedOrDuplicatedEnabledByRequest(string wireValue)
+    {
+        var runner = new BootstrapRunner(
+            RustyKioskProductChannel.Labs,
+            enabledByRequest: false,
+            Now,
+            enabledByRequestWire: wireValue);
+
+        var error = await Assert.ThrowsAsync<RustyKioskUsbDirectBootstrapException>(() =>
+            new RustyKioskUsbDirectLinkBootstrapper(
+                    new AdbClient("adb", runner),
+                    () => Now)
+                .ConnectAsync(
+                    "USB_TARGET",
+                    RustyKioskProductChannel.Labs,
+                    operatorConfirmed: true));
+
+        Assert.IsType<InvalidDataException>(error.InnerException);
+        Assert.Contains(runner.AllArgumentSets, arguments => arguments.Contains("direct-recover-disable"));
+        Assert.Equal(OperatorMutationStage.Confirmed, error.CleanupReceipt.Stage);
+        Assert.Contains("Cleanup confirmed", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Connect_LostEnableResponseUsesOperationIdOnlyRecoveryAndStoppedReadback()
+    {
+        var runner = new BootstrapRunner(
+            RustyKioskProductChannel.Labs,
+            enabledByRequest: true,
+            Now,
+            loseEnableResponse: true,
+            loseFirstRecoveryResponse: true);
+
+        var error = await Assert.ThrowsAsync<RustyKioskUsbDirectBootstrapException>(() =>
+            new RustyKioskUsbDirectLinkBootstrapper(
+                    new AdbClient("adb", runner),
+                    () => Now)
+                .ConnectAsync(
+                    "USB_TARGET",
+                    RustyKioskProductChannel.Labs,
+                    operatorConfirmed: true));
+
+        Assert.Equal(OperatorMutationStage.Confirmed, error.CleanupReceipt.Stage);
+        var recovery = Assert.Single(
+            runner.AllArgumentSets,
+            arguments => arguments.Contains("direct-recover-disable"));
+        var operationIndex = recovery.ToList().IndexOf("--arg");
+        Assert.True(operationIndex >= 0);
+        Assert.Equal(error.CleanupReceipt.OperationId, recovery[operationIndex + 1]);
+        Assert.DoesNotContain("--extra", recovery);
+        Assert.DoesNotContain(runner.SecretBase64, error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(runner.SecretBase64, string.Join(" ", runner.AllArguments), StringComparison.Ordinal);
+        Assert.All(
+            runner.AllArgumentSets.Where(arguments => arguments.Contains("direct-status")),
+            arguments => Assert.DoesNotContain("--arg", arguments));
+    }
+
+    [Fact]
+    public async Task Connect_LostEnableResponsePollsPendingStopToCurrentGeneration()
+    {
+        var runner = new BootstrapRunner(
+            RustyKioskProductChannel.Stable,
+            enabledByRequest: true,
+            Now,
+            pendingCleanupStatusReads: 2,
+            loseEnableResponse: true);
+
+        var error = await Assert.ThrowsAsync<RustyKioskUsbDirectBootstrapException>(() =>
+            new RustyKioskUsbDirectLinkBootstrapper(
+                    new AdbClient("adb", runner),
+                    () => Now)
+                .ConnectAsync(
+                    "USB_TARGET",
+                    RustyKioskProductChannel.Stable,
+                    operatorConfirmed: true));
+
+        Assert.Equal(OperatorMutationStage.Confirmed, error.CleanupReceipt.Stage);
+        Assert.Equal(3, runner.AllArgumentSets.Count(arguments => arguments.Contains("direct-status")));
+    }
+
     [Fact]
     public async Task Connect_RejectsStaleAuthenticatedRunningGenerationAndCleansOwnedListener()
     {
@@ -222,7 +308,13 @@ public sealed class RustyKioskUsbDirectLinkTests
         private readonly bool _enabledByRequest;
         private readonly DateTimeOffset _now;
         private readonly string _devices;
+        private readonly string? _enabledByRequestWire;
         private readonly bool _crossedCleanupGeneration;
+        private readonly bool _loseEnableResponse;
+        private readonly bool _loseFirstRecoveryResponse;
+        private bool _enableResponseLost;
+        private bool _recoveryResponseLost;
+        private bool _recoveryDispatched;
         private int _pendingCleanupStatusReads;
 
         public BootstrapRunner(
@@ -231,15 +323,21 @@ public sealed class RustyKioskUsbDirectLinkTests
             DateTimeOffset now,
             string? devices = null,
             int pendingCleanupStatusReads = 0,
-            bool crossedCleanupGeneration = false)
+            bool crossedCleanupGeneration = false,
+            string? enabledByRequestWire = null,
+            bool loseEnableResponse = false,
+            bool loseFirstRecoveryResponse = false)
         {
             _product = RustyKioskProductContract.For(channel);
             _enabledByRequest = enabledByRequest;
             _now = now;
             _devices = devices ??
                 "List of devices attached\nUSB_TARGET\tdevice product:quest model:Quest_3\nUSB_OTHER\tdevice product:quest model:Quest_Pro\n";
+            _enabledByRequestWire = enabledByRequestWire;
             _pendingCleanupStatusReads = pendingCleanupStatusReads;
             _crossedCleanupGeneration = crossedCleanupGeneration;
+            _loseEnableResponse = loseEnableResponse;
+            _loseFirstRecoveryResponse = loseFirstRecoveryResponse;
             Secret = Enumerable.Range(1, 32).Select(index => (byte)index).ToArray();
             SecretBase64 = Convert.ToBase64String(Secret);
         }
@@ -281,18 +379,38 @@ public sealed class RustyKioskUsbDirectLinkTests
             AllArguments.AddRange(arguments);
             AllArgumentSets.Add(arguments.ToArray());
             var disabling = arguments.Contains("direct-disable");
+            var recovering = arguments.Contains("direct-recover-disable");
+            var enabling = arguments.Contains("direct-enable");
             var readingStatus = arguments.Contains("direct-status");
             var argumentList = arguments.ToList();
             var operationId = argumentList.Contains("--arg")
                 ? argumentList[argumentList.IndexOf("--arg") + 1]
                 : null;
+            if (enabling && _loseEnableResponse && !_enableResponseLost)
+            {
+                _enableResponseLost = true;
+                throw new SensitiveCommandException("The sensitive provider response was unavailable.");
+            }
+            if (recovering)
+            {
+                _recoveryDispatched = true;
+                if (_loseFirstRecoveryResponse && !_recoveryResponseLost)
+                {
+                    _recoveryResponseLost = true;
+                    throw new SensitiveCommandException("The sensitive recovery response was unavailable.");
+                }
+            }
             var disableRunning = _pendingCleanupStatusReads > 0;
             var cleanupRunning = readingStatus && _pendingCleanupStatusReads-- > 0;
             var output = disabling
                 ? $"Result: Bundle[{{accepted=true, completed={!disableRunning}, schema={RustyKioskContract.DirectUsbBootstrapSchema}, operation_id={operationId}, product_channel={_product.WireName}, package={_product.MainPackage}, direct_enabled=false, direct_running={disableRunning.ToString().ToLowerInvariant()}, bridge_generation={Generation + 1}, operation_state={(disableRunning ? "pending" : "confirmed")}}}]"
+                : recovering
+                    ? $"Result: Bundle[{{accepted=true, completed={!disableRunning}, schema={RustyKioskContract.DirectUsbBootstrapSchema}, operation_id={operationId}, product_channel={_product.WireName}, package={_product.MainPackage}, direct_enabled=false, direct_running={disableRunning.ToString().ToLowerInvariant()}, bridge_generation={Generation + 1}, operation_state={(disableRunning ? "pending" : "confirmed")}}}]"
+                : readingStatus && _recoveryDispatched
+                    ? $"Result: Bundle[{{accepted=true, completed={!cleanupRunning}, schema={RustyKioskContract.DirectUsbBootstrapSchema}, product_channel={_product.WireName}, package={_product.MainPackage}, direct_enabled=false, direct_running={cleanupRunning.ToString().ToLowerInvariant()}, bridge_generation={Generation + (_crossedCleanupGeneration ? 2 : 1)}, operation_state={(cleanupRunning ? "pending" : "confirmed")}}}]"
                 : readingStatus
                     ? $"Result: Bundle[{{accepted=true, completed={!cleanupRunning}, schema={RustyKioskContract.DirectUsbBootstrapSchema}, product_channel={_product.WireName}, package={_product.MainPackage}, direct_enabled=false, direct_running={cleanupRunning.ToString().ToLowerInvariant()}, bridge_generation={Generation + (_crossedCleanupGeneration ? 2 : 1)}, operation_state={(cleanupRunning ? "pending" : "confirmed")}}}]"
-                : $"Result: Bundle[{{accepted=true, completed=false, schema={RustyKioskContract.DirectUsbBootstrapSchema}, operation_id={operationId}, product_channel={_product.WireName}, package={_product.MainPackage}, endpoint=http://192.0.2.44:39873, bridge_generation={Generation}, session_id={SessionId}, session_secret_base64={SecretBase64}, session_capability={RustyKioskDirectClient.ContractSchema}, expires_at_ms={_now.AddMinutes(5).ToUnixTimeMilliseconds()}, enabled_by_request={_enabledByRequest.ToString().ToLowerInvariant()}}}]";
+                : $"Result: Bundle[{{accepted=true, completed=false, schema={RustyKioskContract.DirectUsbBootstrapSchema}, operation_id={operationId}, product_channel={_product.WireName}, package={_product.MainPackage}, endpoint=http://192.0.2.44:39873, bridge_generation={Generation}, session_id={SessionId}, session_secret_base64={SecretBase64}, session_capability={RustyKioskDirectClient.ContractSchema}, expires_at_ms={_now.AddMinutes(5).ToUnixTimeMilliseconds()}, enabled_by_request={_enabledByRequestWire ?? _enabledByRequest.ToString().ToLowerInvariant()}}}]";
             var bytes = Encoding.ASCII.GetBytes(output);
             try
             {

@@ -35,8 +35,10 @@ The GUI and CLI must invoke the same typed `OperatorCommand` or
 CLI-equivalent route built from the same immutable arguments it executes.
 Local-only UI actions such as file selection, list selection, reveal/remask, and
 clearing a WPF session must be explicitly classified rather than advertised as
-nonexistent CLI routes. `OperatorActionRegistry` and its XAML parity test are
-the code-owned inventory. The CLI is an agent and automation surface and is not
+nonexistent CLI routes. Dynamic Kiosk actions must enumerate both their Direct
+Link and ADB host-provider route, confirmation, and readback contracts.
+`OperatorActionRegistry` and its XAML parity test are the code-owned inventory.
+The CLI is an agent and automation surface and is not
 displayed in the WPF app. UI handlers collect inputs, invoke shared routes, and
 display structured results; they must not hide ADB or filesystem business logic.
 Transient WPF progress must come from the optional shared `OperatorProgress`
@@ -103,7 +105,12 @@ documented.
   listener that the exact operation/session/generation owns, then poll provider
   status until both enabled and running are false on the post-disable
   generation. Preserve pre-existing listeners and report non-convergence as
-  `cleanup_unknown`.
+  `cleanup_unknown`. If the sensitive enable response is lost or malformed,
+  recover only through `direct-recover-disable` with the original operation ID,
+  then accept only no-argument stopped-state readback; never reconstruct or
+  request a credential. A Direct Link install must submit the exact name,
+  positive byte count, and lowercase SHA-256 returned by each upload so Kiosk
+  can verify the same opened handle while copying into PackageInstaller.
 - Rusty Fleet integration v1 is disabled by default. Its environment-created
   CLI adapter is restricted to strict JSON capability discovery, exact-serial
   observation, bounded `adb-shared` list/pull, and read-only durable status.

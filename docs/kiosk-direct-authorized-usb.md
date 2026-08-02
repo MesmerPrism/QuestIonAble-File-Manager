@@ -17,10 +17,10 @@ uses only these code-owned contracts:
 
 Before requesting a session, Core requires exactly one ready non-network ADB
 transport for that serial, reads the exact installed package UID, and verifies
-host schema `rusty.kiosk.host_operator.v3` plus matching package/channel. The
-provider issues schema `rusty.kiosk.direct_usb_bootstrap.v1`. The shared wire
+host schema `rusty.kiosk.host_operator.v4` plus matching package/channel. The
+provider issues schema `rusty.kiosk.direct_usb_bootstrap.v2`. The shared wire
 fixture is
-`references/rusty-kiosk-direct-usb-bootstrap-contract.v1.json`.
+`references/rusty-kiosk-direct-usb-bootstrap-contract.v2.json`.
 
 ## Credential Lifetime And Cleanup
 
@@ -39,10 +39,25 @@ Generation drift, transport failure, or bounded non-convergence produces a
 sanitized `cleanup_unknown` receipt. A listener that was enabled before this
 request is preserved.
 
+If the sensitive `direct-enable` response is lost or malformed, File Manager
+does not retry enable and cannot rely on a session ID or secret. It invokes
+`direct-recover-disable` with only the original operation ID, then reconciles
+no-argument status to disabled and stopped. Kiosk's bounded non-secret ownership
+tombstone makes a lost STOP response idempotently recoverable; failure to prove
+the stopped result remains `cleanup_unknown`.
+
+Each uploaded APK returns an exact `{name,bytes,sha256}` commitment. Install
+submits those commitments, not filenames alone. Kiosk rechecks the staged
+identity and counts and hashes bytes from the same opened handle used for the
+PackageInstaller copy, failing and abandoning the session if replacement is
+detected.
+
 Each CLI invocation is one atomic session: cleanup completes before its single
-final JSON document is written. The WPF keeps a session only while its window is
-connected and reports cleanup separately on explicit disconnect. Window close
-also clears it.
+final JSON document is written. Success and failure both use
+`questionable.file_manager.kiosk_direct_cli_result.v1`; a JSON failure uses a
+fixed reason/message and never falls through to plaintext standard error. The
+WPF keeps a session only while its window is connected and reports cleanup
+separately on explicit disconnect. Window close also clears it.
 
 ## CLI
 
@@ -68,9 +83,10 @@ The manual fallback reads one bounded line from standard input:
 
 Type the credential and press Enter. Do not place it in an argument,
 environment variable, transcript, or clipboard. WPF uses a masked `PasswordBox`;
-its optional reveal is local, lasts at most 15 seconds, and remasks on focus loss
-or window deactivation. Connect outcome, disconnect, and window close clear the
-input.
+its optional reveal is local and lasts at most 15 seconds. Turning reveal off
+remasks the retained input; the reveal timeout, focus loss, window deactivation,
+connect outcome, explicit disconnect, profile-enrollment outcome, and window
+close clear both the masked input and reveal projection.
 
 `request-status --request-id <id>` reads one admitted lifecycle without
 enqueuing another action. `request-cancel --request-id <id>

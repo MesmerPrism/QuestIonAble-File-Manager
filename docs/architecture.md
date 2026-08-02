@@ -93,7 +93,7 @@ Accessibility watchdog, user-facing opt-ins, app-owned staging, and Android
 PackageInstaller sessions. The file manager owns ADB fallback/bootstrap and the
 desktop/CLI projection. ADB host control crosses only Kiosk's exported
 `android.permission.DUMP` provider. Direct control crosses schema
-`rusty.kiosk.direct_operator.v1`: expiring HMAC requests, persisted replay IDs,
+`rusty.kiosk.direct_operator.v2`: expiring HMAC requests, persisted replay IDs,
 signed readbacks, fixed endpoints, bounded filenames, and no shell, component,
 intent, or arbitrary path input.
 

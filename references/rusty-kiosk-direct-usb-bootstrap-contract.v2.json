@@ -1,0 +1,105 @@
+{
+  "schema": "rusty.kiosk.direct_usb_bootstrap_contract.v2",
+  "host_provider_schema": "rusty.kiosk.host_operator.v4",
+  "bootstrap_result_schema": "rusty.kiosk.direct_usb_bootstrap.v2",
+  "direct_operator_schema": "rusty.kiosk.direct_operator.v2",
+  "provider_methods": {
+    "status": "direct-status",
+    "enable": "direct-enable",
+    "disable": "direct-disable",
+    "recover_disable": "direct-recover-disable"
+  },
+  "enable": {
+    "operation_id_transport": "content-provider-arg",
+    "result_fields": {
+      "operation_id": "string",
+      "product_channel": "stable-or-labs",
+      "package": "fixed-channel-package",
+      "endpoint": "string-or-null",
+      "bridge_generation": "long",
+      "session_id": "string",
+      "session_secret_base64": "sensitive-memory-only-string",
+      "session_capability": "rusty.kiosk.direct_operator.v2",
+      "expires_at_ms": "long",
+      "enabled_by_request": "boolean"
+    }
+  },
+  "cleanup_ownership": {
+    "secret_retained": false,
+    "fields": [
+      "operation_id",
+      "session_id",
+      "bridge_generation",
+      "enabled_by_request",
+      "issued_at_ms",
+      "expires_at_ms",
+      "state"
+    ],
+    "lifetime_ms": 86400000,
+    "max_tombstones": 512,
+    "enable_generation_transition_clears_active_ownership": true,
+    "disable_dispatched_maps_to_post_disable_generation": true,
+    "successful_cleanup_consumes_after_stopped_readback": true
+  },
+  "disable": {
+    "operation_id_transport": "content-provider-arg",
+    "extras": {
+      "expected_bridge_generation": "long",
+      "session_id": "string"
+    },
+    "ownership": "operation-id-plus-session-id-plus-bridge-generation-plus-enabled-by-request",
+    "atomic_current_generation_recheck": true
+  },
+  "recover_disable": {
+    "purpose": "lost-enable-response-cleanup-only",
+    "operation_id_transport": "content-provider-arg",
+    "extras": "none",
+    "requires": [
+      "known-original-operation-id",
+      "unexpired-enable-owned-or-disable-dispatched-cleanup-ownership",
+      "enabled-by-request-true",
+      "exact-current-bridge-generation"
+    ],
+    "returns_session_id": false,
+    "returns_session_secret": false,
+    "returns_pairing_code": false,
+    "pending_stop_retry": "idempotent-operation-id-only-redispatch-without-credentials",
+    "stopped_readback_consumes_ownership": true,
+    "replay_after_stopped_readback_rejected": true
+  },
+  "authenticated_status_confirmation": {
+    "path": "/v1/status",
+    "required_fields": {
+      "bridge_generation": "exact-bootstrap-long",
+      "session_id": "exact-bootstrap-session-id"
+    }
+  },
+  "direct_install": {
+    "path": "/v1/install",
+    "request_fields": [
+      "request_id",
+      "files"
+    ],
+    "file_entry_fields": [
+      "name",
+      "bytes",
+      "sha256"
+    ],
+    "sha256": "lowercase-hex-64",
+    "copy_rule": "same-opened-handle-count-and-digest-verified-before-packageinstaller-commit",
+    "replacement_policy": "fail-closed-and-abandon-session"
+  },
+  "status_returns_secret": false,
+  "status": {
+    "operation_id_transport": "none",
+    "result_schema": "rusty.kiosk.direct_usb_bootstrap.v2",
+    "convergence_fields": {
+      "direct_enabled": "boolean",
+      "direct_running": "service-observed-boolean",
+      "bridge_generation": "long",
+      "operation_state": "pending-or-confirmed"
+    },
+    "disable_confirmed_when": "direct_enabled=false-and-direct_running=false-and-current-generation-stop-applied"
+  },
+  "persistent_pairing_code_exported": false
+}

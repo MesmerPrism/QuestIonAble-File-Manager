@@ -349,9 +349,13 @@ channel-bound Kiosk provider issues one memory-only session. Manual fallback
 uses `--endpoint <url> --credential-stdin`; type the on-headset credential and
 press Enter. Credentials are never accepted through arguments or environment
 variables. Each CLI command closes its session before emitting its one final
-result. A listener started by that command is disabled only through its exact
+`questionable.file_manager.kiosk_direct_cli_result.v1` JSON result on success
+or failure; JSON failures use fixed sanitized reasons and no plaintext standard
+error. A listener started by that command is disabled only through its exact
 operation/session/generation binding and stopped-state readback; a pre-existing
-wearer-owned listener is preserved.
+wearer-owned listener is preserved. A lost bootstrap response is reconciled
+through an operation-ID-only recovery call and no-argument stopped-state
+readback, without requesting or exposing another credential.
 
 The **APKs (ADB default)** tab is the normal installation route. Once the PC's
 ADB key is authorized, it can install multiple packages without repeated
@@ -359,6 +363,9 @@ in-headset confirmation. Kiosk's direct local installer is an attended fallback:
 the one-time “install unknown apps” grant allows Kiosk to request installs, but
 Android can still require one confirmation for every app installation session.
 A base APK and its split APKs are submitted together as one session.
+Every part is bound to the name, positive byte count, and lowercase SHA-256
+confirmed by its upload so Kiosk can reject a same-name staging replacement
+while copying the same opened handle into PackageInstaller.
 
 ## Design And Safety
 

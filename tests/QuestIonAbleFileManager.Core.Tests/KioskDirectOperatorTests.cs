@@ -84,6 +84,13 @@ public sealed class KioskDirectOperatorTests
             Assert.Equal("install_test_0001", result.Mutation.RequestId);
             Assert.True(result.InstallReceipt?.NeedsWearerAction);
             Assert.Equal(1, handler.InstallCount);
+            using var installRequest = JsonDocument.Parse(Assert.IsType<string>(handler.LastInstallJson));
+            var rootElement = installRequest.RootElement;
+            Assert.Equal("install_test_0001", rootElement.GetProperty("request_id").GetString());
+            var file = Assert.Single(rootElement.GetProperty("files").EnumerateArray());
+            Assert.Equal("app.apk", file.GetProperty("name").GetString());
+            Assert.Equal(14, file.GetProperty("bytes").GetInt64());
+            Assert.Matches("^[a-f0-9]{64}$", file.GetProperty("sha256").GetString());
         }
         finally
         {
@@ -97,6 +104,7 @@ public sealed class KioskDirectOperatorTests
         public int DeleteCount { get; private set; }
         public int ListCount { get; private set; }
         public int InstallCount { get; private set; }
+        public string? LastInstallJson { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -131,6 +139,7 @@ public sealed class KioskDirectOperatorTests
             else if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/install")
             {
                 InstallCount++;
+                LastInstallJson = request.Content!.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
                 body = new
                 {
                     accepted = true,

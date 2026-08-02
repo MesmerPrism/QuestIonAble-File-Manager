@@ -353,8 +353,8 @@ public static class RustyKioskContract
     public const string SetupControlPermission = "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL";
     public const string ResultSchema = "rusty.kiosk.cli_result.v1";
     public const string HostOperatorSchema = "rusty.kiosk.host_operator.v2";
-    public const string HostOperatorSuccessorSchema = "rusty.kiosk.host_operator.v3";
-    public const string DirectUsbBootstrapSchema = "rusty.kiosk.direct_usb_bootstrap.v1";
+    public const string HostOperatorSuccessorSchema = "rusty.kiosk.host_operator.v4";
+    public const string DirectUsbBootstrapSchema = "rusty.kiosk.direct_usb_bootstrap.v2";
     public const string TagFileSchema = "rusty.kiosk.app_tags.v1";
     public const string TagFilePath = "/sdcard/Android/data/io.github.mesmerprism.rustykiosk/files/tags/app-tags.v1.json";
     public const string MainApkFileName = "rusty-kiosk.apk";

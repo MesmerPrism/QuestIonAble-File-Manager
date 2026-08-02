@@ -46,7 +46,11 @@ public sealed record RustyKioskDirectStatus(
     long? BridgeGeneration = null,
     string? SessionId = null);
 
-public sealed record RustyKioskStagedFile(string Name, long Bytes, long ModifiedAtMs)
+public sealed record RustyKioskStagedFile(
+    string Name,
+    long Bytes,
+    long ModifiedAtMs,
+    string? Sha256 = null)
 {
     public string DisplayLabel => $"{Name} · {Bytes:N0} bytes";
 }
@@ -93,7 +97,7 @@ public sealed record RustyKioskDirectRequestReceipt(
 /// </summary>
 public sealed class RustyKioskDirectClient : IDisposable
 {
-    public const string ContractSchema = "rusty.kiosk.direct_operator.v1";
+    public const string ContractSchema = "rusty.kiosk.direct_operator.v2";
     private const int MaxTagBytes = 256 * 1024;
     private const int MaxJsonResponseBytes = 1024 * 1024;
     private const long MaxStagedFileBytes = 2L * 1024L * 1024L * 1024L;
@@ -466,12 +470,13 @@ public sealed class RustyKioskDirectClient : IDisposable
         var staged = new RustyKioskStagedFile(
             RequiredString(root, "name"),
             root.GetProperty("bytes").GetInt64(),
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        var returnedSha = RequiredString(root, "sha256").ToLowerInvariant();
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            RequiredString(root, "sha256").ToLowerInvariant());
         if (!string.Equals(staged.Name, name, StringComparison.Ordinal) ||
             staged.Bytes != info.Length ||
+            staged.Sha256 is null ||
             !CryptographicOperations.FixedTimeEquals(
-                Encoding.ASCII.GetBytes(returnedSha),
+                Encoding.ASCII.GetBytes(staged.Sha256),
                 Encoding.ASCII.GetBytes(contentSha)))
         {
             throw new InvalidDataException(
@@ -605,19 +610,34 @@ public sealed class RustyKioskDirectClient : IDisposable
     }
 
     public async Task<RustyKioskDirectInstallReceipt> RequestInstallAsync(
-        IReadOnlyList<string> stagedApkNames,
+        IReadOnlyList<RustyKioskStagedFile> stagedApks,
         string? requestId = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(stagedApkNames);
-        if (stagedApkNames.Count is < 1 or > 32)
+        ArgumentNullException.ThrowIfNull(stagedApks);
+        if (stagedApks.Count is < 1 or > 32)
         {
-            throw new ArgumentException("Choose between one and 32 staged APK parts.", nameof(stagedApkNames));
+            throw new ArgumentException("Choose between one and 32 staged APK parts.", nameof(stagedApks));
         }
-        var names = stagedApkNames.Select(ValidateStagedName).ToArray();
-        if (names.Any(static name => !name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase)))
+        var commitments = stagedApks.Select(file => new
         {
-            throw new ArgumentException("Every local install part must be an APK.", nameof(stagedApkNames));
+            name = ValidateStagedName(file.Name),
+            bytes = file.Bytes,
+            sha256 = file.Sha256
+        }).ToArray();
+        if (commitments.Any(static file =>
+                !file.name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase) ||
+                file.bytes <= 0 ||
+                file.sha256 is null ||
+                !System.Text.RegularExpressions.Regex.IsMatch(file.sha256, "^[a-f0-9]{64}$")))
+        {
+            throw new ArgumentException(
+                "Every install part requires an APK name, positive byte count, and lowercase SHA-256 commitment.",
+                nameof(stagedApks));
+        }
+        if (commitments.Select(static file => file.name).Distinct(StringComparer.Ordinal).Count() != commitments.Length)
+        {
+            throw new ArgumentException("Every staged APK part name must be distinct.", nameof(stagedApks));
         }
         requestId ??= NewRequestId("install");
         using var response = await SendJsonAsync(
@@ -626,7 +646,7 @@ public sealed class RustyKioskDirectClient : IDisposable
                 new Dictionary<string, object?>
                 {
                     ["request_id"] = requestId,
-                    ["files"] = names
+                    ["files"] = commitments
                 },
                 cancellationToken,
                 timeout: TimeSpan.FromMinutes(20))

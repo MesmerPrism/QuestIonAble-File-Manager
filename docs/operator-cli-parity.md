@@ -5,8 +5,11 @@ Every ADB device operation in the WPF app is represented by one immutable
 immutable `KioskDirectOperatorCommand` and shared executor. In both cases the
 WPF button and CLI use the same core method, confirmation semantics, lifecycle
 receipt, and readback model. `operator-actions --json` projects the code-owned
-registry; tests require every WPF click action to map to one shared CLI/Core
-route or one explicit local-interaction reason.
+registry. Each executable route records its CLI vector, Core factory,
+confirmation requirement, and effective-state readback contract. A WPF action
+that can use Direct Link or the ADB host provider declares both routes rather
+than hiding the fallback. Tests require every WPF click action to map to those
+actual routes or one explicit local-interaction reason.
 The CLI is intended for agents and automation, so command text is deliberately
 not projected into the non-technical WPF interface.
 
@@ -137,8 +140,18 @@ results even when the process exit status is nonzero.
 
 The WPF footer's progress bar is a transient projection of the same executor,
 not a separate operation. CLI arguments therefore remain identical. Machine-
-readable CLI output stays one final JSON document; agents use its per-target
-results rather than scraping GUI animation or mixed progress lines.
+readable Direct Link output stays one final
+`questionable.file_manager.kiosk_direct_cli_result.v1` JSON document after
+cleanup on success or failure; JSON failures use fixed sanitized reason codes
+and write no plaintext standard error. Agents use typed results rather than
+scraping GUI animation or mixed progress lines.
+
+Authorized-USB bootstrap failures retain that same one-document rule. A lost
+or malformed enable response is reconciled only with the original operation ID
+and no-argument provider status; its typed cleanup receipt is emitted even
+though no HTTP client lease was established. Direct installs pass the exact
+name, byte count, and lowercase SHA-256 returned by each completed upload, so a
+same-name staging replacement cannot silently change PackageInstaller input.
 
 Manual direct authentication is the explicit fallback:
 
@@ -148,9 +161,10 @@ Manual direct authentication is the explicit fallback:
 
 Type the on-headset credential into standard input and press Enter. Do not put
 it in a command, environment variable, transcript, or clipboard. The WPF uses
-a `PasswordBox`, offers only a local 15-second reveal, remasks on focus loss or
-window deactivation, and clears the value on connect outcome, disconnect, and
-window close.
+a `PasswordBox` and offers only a local 15-second reveal. Turning reveal off
+remasks the value; reveal timeout, focus loss, deactivation, connection outcome,
+disconnect, profile-enrollment outcome, and window close clear both the masked
+and revealed projections.
 
 State-changing JSON results wrap the operation payload with a
 `mutation` receipt. Its ordered transitions are `sent`, `pending`, and only

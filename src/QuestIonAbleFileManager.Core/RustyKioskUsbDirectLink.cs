@@ -25,6 +25,21 @@ public sealed record RustyKioskUsbDirectCleanupReceipt(
     OperatorMutationStage Stage,
     string Message);
 
+public sealed class RustyKioskUsbDirectBootstrapException : InvalidOperationException
+{
+    internal RustyKioskUsbDirectBootstrapException(
+        RustyKioskUsbDirectCleanupReceipt cleanupReceipt,
+        Exception innerException)
+        : base(
+            $"Authorized-USB Direct Link bootstrap failed. Cleanup {cleanupReceipt.Stage.ToString().ToLowerInvariant()}: {cleanupReceipt.Message}",
+            innerException)
+    {
+        CleanupReceipt = cleanupReceipt;
+    }
+
+    public RustyKioskUsbDirectCleanupReceipt CleanupReceipt { get; }
+}
+
 /// <summary>
 /// One memory-only Direct Link session minted by the exact serial's DUMP-protected
 /// Kiosk provider. No endpoint or credential is exposed by this object.
@@ -169,15 +184,28 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
             "direct-enable",
             operationId,
             []);
-        var sensitive = await _sensitiveRunner.RunSensitiveAsync(
-                _client.AdbPath,
-                arguments,
-                MaximumSensitiveOutputBytes,
-                MaximumSensitiveOutputBytes,
-                CommandTimeout,
-                bytes => ParseBootstrap(bytes, operationId, product, _utcNow()),
-                cancellationToken)
-            .ConfigureAwait(false);
+        SensitiveCommandResult<UsbBootstrapPayload> sensitive;
+        try
+        {
+            sensitive = await _sensitiveRunner.RunSensitiveAsync(
+                    _client.AdbPath,
+                    arguments,
+                    MaximumSensitiveOutputBytes,
+                    MaximumSensitiveOutputBytes,
+                    CommandTimeout,
+                    bytes => ParseBootstrap(bytes, operationId, product, _utcNow()),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            var cleanup = await RecoverLostEnableResponseAsync(
+                    serial,
+                    product,
+                    operationId)
+                .ConfigureAwait(false);
+            throw new RustyKioskUsbDirectBootstrapException(cleanup, exception);
+        }
         var bootstrap = sensitive.Value;
         RustyKioskDirectClient? directClient = null;
         try
@@ -360,6 +388,178 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
             "The owned Direct Link disable was admitted, but stopped-state readback did not converge within the bounded window.");
     }
 
+    private async Task<RustyKioskUsbDirectCleanupReceipt> RecoverLostEnableResponseAsync(
+        string serial,
+        RustyKioskProductContract product,
+        string operationId)
+    {
+        using var cleanupWindow = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var cleanupToken = cleanupWindow.Token;
+        try
+        {
+            await RequireExactReadyUsbTargetAsync(serial, cleanupToken).ConfigureAwait(false);
+            for (var attempt = 0; attempt < 48; attempt++)
+            {
+                cleanupToken.ThrowIfCancellationRequested();
+                DirectProviderStatus? recovery = null;
+                try
+                {
+                    recovery = (await _sensitiveRunner.RunSensitiveAsync(
+                            _client.AdbPath,
+                            DeviceArguments(serial, product, "direct-recover-disable", operationId, []),
+                            MaximumSensitiveOutputBytes,
+                            MaximumSensitiveOutputBytes,
+                            CommandTimeout,
+                            bytes => ParseDirectProviderStatus(
+                                bytes,
+                                product,
+                                operationId,
+                                requireOperationId: true),
+                            cleanupToken)
+                        .ConfigureAwait(false)).Value;
+                }
+                catch (Exception) when (!cleanupToken.IsCancellationRequested)
+                {
+                    // A response can be lost after the idempotent STOP dispatch. The no-arg
+                    // status read below is the only authority for confirming the safe result.
+                }
+
+                if (recovery is { Enabled: false })
+                {
+                    return await ReconcileStoppedGenerationAsync(
+                            serial,
+                            product,
+                            recovery.BridgeGeneration,
+                            operationId,
+                            cleanupToken,
+                            "The lost-response bootstrap-owned listener was confirmed disabled and stopped.")
+                        .ConfigureAwait(false);
+                }
+
+                DirectProviderStatus? status = null;
+                try
+                {
+                    status = (await _sensitiveRunner.RunSensitiveAsync(
+                            _client.AdbPath,
+                            DeviceArguments(serial, product, "direct-status", arg: null, []),
+                            MaximumSensitiveOutputBytes,
+                            MaximumSensitiveOutputBytes,
+                            CommandTimeout,
+                            bytes => ParseDirectProviderStatus(
+                                bytes,
+                                product,
+                                operationId: null,
+                                requireOperationId: false),
+                            cleanupToken)
+                        .ConfigureAwait(false)).Value;
+                }
+                catch (Exception) when (!cleanupToken.IsCancellationRequested)
+                {
+                    // Retry only within this bounded, operation-id-only recovery window.
+                }
+
+                if (status is { Enabled: false })
+                {
+                    return await ReconcileStoppedGenerationAsync(
+                            serial,
+                            product,
+                            status.BridgeGeneration,
+                            operationId,
+                            cleanupToken,
+                            "No Direct Link listener remained after the lost bootstrap response.")
+                        .ConfigureAwait(false);
+                }
+                if (attempt < 47)
+                {
+                    await Task.Delay(250, cleanupToken).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cleanupWindow.IsCancellationRequested)
+        {
+            // The typed cleanup_unknown receipt below owns bounded non-convergence.
+        }
+        catch
+        {
+            // The typed cleanup_unknown receipt below is deliberately sanitized.
+        }
+
+        return new RustyKioskUsbDirectCleanupReceipt(
+            CleanupReceiptSchema,
+            operationId,
+            OperatorMutationStage.CleanupUnknown,
+            "The lost bootstrap response could not be reconciled to a confirmed stopped listener on the exact USB target.");
+    }
+
+    private async Task<RustyKioskUsbDirectCleanupReceipt> ReconcileStoppedGenerationAsync(
+        string serial,
+        RustyKioskProductContract product,
+        long expectedGeneration,
+        string operationId,
+        CancellationToken cancellationToken,
+        string confirmedMessage)
+    {
+        for (var attempt = 0; attempt < 48; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DirectProviderStatus? status = null;
+            try
+            {
+                status = (await _sensitiveRunner.RunSensitiveAsync(
+                        _client.AdbPath,
+                        DeviceArguments(serial, product, "direct-status", arg: null, []),
+                        MaximumSensitiveOutputBytes,
+                        MaximumSensitiveOutputBytes,
+                        CommandTimeout,
+                        bytes => ParseDirectProviderStatus(
+                            bytes,
+                            product,
+                            operationId: null,
+                            requireOperationId: false),
+                        cancellationToken)
+                    .ConfigureAwait(false)).Value;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A transient status failure is retried only inside the bounded window.
+            }
+            if (status is null)
+            {
+                if (attempt < 47)
+                {
+                    await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                }
+                continue;
+            }
+            if (status.BridgeGeneration != expectedGeneration)
+            {
+                return new RustyKioskUsbDirectCleanupReceipt(
+                    CleanupReceiptSchema,
+                    operationId,
+                    OperatorMutationStage.CleanupUnknown,
+                    "The Direct Link generation changed while lost-response cleanup was being reconciled.");
+            }
+            if (!status.Enabled && !status.Running)
+            {
+                return new RustyKioskUsbDirectCleanupReceipt(
+                    CleanupReceiptSchema,
+                    operationId,
+                    OperatorMutationStage.Confirmed,
+                    confirmedMessage);
+            }
+            if (attempt < 47)
+            {
+                await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return new RustyKioskUsbDirectCleanupReceipt(
+            CleanupReceiptSchema,
+            operationId,
+            OperatorMutationStage.CleanupUnknown,
+            "Lost-response cleanup was admitted, but stopped-state readback did not converge within the bounded window.");
+    }
+
     private async Task RequireExactReadyUsbTargetAsync(
         string serial,
         CancellationToken cancellationToken)
@@ -456,7 +656,7 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "The selected package did not expose the exact channel-bound Rusty Kiosk host operator v3 contract.");
+                "The selected package did not expose the exact channel-bound Rusty Kiosk host operator v4 contract.");
         }
         return uid;
     }
@@ -536,6 +736,7 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
             throw new InvalidDataException("The USB bootstrap session was expired or too long-lived.");
         }
 
+        var enabledByRequest = ReadRequiredAsciiBoolean(output.Span, "enabled_by_request");
         var secretBase64 = ReadAsciiBytes(output.Span, "session_secret_base64");
         var secret = new byte[32];
         var decode = Base64.DecodeFromUtf8(secretBase64, secret, out var consumed, out var written);
@@ -551,7 +752,7 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
             sessionId,
             secret,
             expiry,
-            string.Equals(ReadAsciiValue(output.Span, "enabled_by_request"), "true", StringComparison.Ordinal));
+            enabledByRequest);
     }
 
     private static DirectProviderStatus ParseDirectProviderStatus(
@@ -610,10 +811,41 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
     private static string ReadAsciiValue(ReadOnlySpan<byte> output, string key) =>
         Encoding.ASCII.GetString(ReadAsciiBytes(output, key));
 
+    private static bool ReadRequiredAsciiBoolean(ReadOnlySpan<byte> output, string key) =>
+        ReadAsciiValue(output, key) switch
+        {
+            "true" => true,
+            "false" => false,
+            _ => throw new InvalidDataException(
+                "The sensitive provider response contained a malformed required boolean field.")
+        };
+
     private static ReadOnlySpan<byte> ReadAsciiBytes(ReadOnlySpan<byte> output, string key)
     {
         var marker = Encoding.ASCII.GetBytes(key + "=");
-        var index = output.IndexOf(marker);
+        var index = -1;
+        var searchOffset = 0;
+        while (searchOffset <= output.Length - marker.Length)
+        {
+            var relative = output[searchOffset..].IndexOf(marker);
+            if (relative < 0)
+            {
+                break;
+            }
+            var candidate = searchOffset + relative;
+            var hasFieldBoundary = candidate == 0 || output[candidate - 1] is
+                (byte)'{' or (byte)'[' or (byte)',' or (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n';
+            if (hasFieldBoundary)
+            {
+                if (index >= 0)
+                {
+                    throw new InvalidDataException(
+                        "The sensitive provider response duplicated a required field.");
+                }
+                index = candidate;
+            }
+            searchOffset = candidate + marker.Length;
+        }
         if (index < 0)
         {
             throw new InvalidDataException("The sensitive provider response omitted a required field.");
