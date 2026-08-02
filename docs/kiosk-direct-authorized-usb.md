@@ -24,6 +24,9 @@ fixture is
 Bootstrap operation IDs live in a fixed, non-evicting 4,096-entry ledger scoped
 to Kiosk's app-private bootstrap-issuance epoch. Saturation, malformed state, or
 epoch mismatch fails closed; bridge-generation changes never clear replay IDs.
+Stored replay arrays initialize only with a wholly fresh
+`rusty.kiosk.operator_session_state.v1` document; a present missing, null, or
+wrong-type array is damaged state and fails closed.
 
 ## Credential Lifetime And Cleanup
 
@@ -62,6 +65,10 @@ File Manager retries the identical install body once with a fresh authenticated
 transport request ID; Kiosk may retry cleanup only and cannot start a second
 install for that logical install request ID. Only returned abandonment or
 confirmed session absence becomes terminal `failed`.
+Cleanup retry is bound to exact ordered `{name,bytes,sha256}` commitments and
+their canonical digest. Kiosk's private `rusty.kiosk.local_install_state.v2`
+distinguishes absent, valid, and damaged receipts; damaged state cannot admit a
+new session, and the private binding is not exported in public receipts.
 
 Each CLI invocation is one atomic session: cleanup completes before its single
 final JSON document is written. Success and failure both use

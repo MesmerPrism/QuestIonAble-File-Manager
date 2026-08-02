@@ -114,7 +114,9 @@ documented.
   incomplete `cleanup-required` receipt may replay only the identical install
   body with a fresh authenticated transport ID; it must never create a second
   logical install or be projected as terminal failure before abandonment or
-  session-absence readback.
+  session-absence readback. Preserve exact ordered commitment/digest binding;
+  damaged private receipt or replay-ledger state fails closed and must never be
+  interpreted as absent or freshly initialized.
 - Rusty Fleet integration v1 is disabled by default. Its environment-created
   CLI adapter is restricted to strict JSON capability discovery, exact-serial
   observation, bounded `adb-shared` list/pull, and read-only durable status.

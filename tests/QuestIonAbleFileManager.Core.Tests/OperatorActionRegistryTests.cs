@@ -417,12 +417,28 @@ public sealed class OperatorActionRegistryTests
             rootElement.GetProperty("operation_replay").GetProperty("eviction").GetString());
         Assert.False(
             rootElement.GetProperty("operation_replay").GetProperty("bridge_generation_change_clears_ids").GetBoolean());
+        Assert.Equal("rusty.kiosk.operator_session_state.v1",
+            rootElement.GetProperty("operation_replay").GetProperty("stored_state_schema").GetString());
+        Assert.Equal("fresh-state-only",
+            rootElement.GetProperty("operation_replay").GetProperty("array_initialization").GetString());
+        Assert.Equal("fail-closed",
+            rootElement.GetProperty("operation_replay").GetProperty("present_missing_null_or_wrong_type_array").GetString());
         Assert.Equal("cleanup-required-incomplete",
             rootElement.GetProperty("direct_install").GetProperty("abandon_failure_present_or_unknown").GetString());
         Assert.Equal("repeat-same-install-body-with-fresh-authenticated-transport-request-id",
             rootElement.GetProperty("direct_install").GetProperty("cleanup_retry").GetString());
         Assert.False(
             rootElement.GetProperty("direct_install").GetProperty("cleanup_retry_starts_second_install").GetBoolean());
+        Assert.Equal("exact-ordered-name-bytes-sha256-and-canonical-sha256",
+            rootElement.GetProperty("direct_install").GetProperty("cleanup_retry_binding").GetString());
+        Assert.Equal("rusty.kiosk.local_install_state.v2",
+            rootElement.GetProperty("direct_install").GetProperty("stored_receipt_schema").GetString());
+        Assert.Equal("absent-valid-damaged",
+            rootElement.GetProperty("direct_install").GetProperty("stored_receipt_states").GetString());
+        Assert.Equal("fail-closed-without-new-session",
+            rootElement.GetProperty("direct_install").GetProperty("damaged_existing_receipt").GetString());
+        Assert.False(
+            rootElement.GetProperty("direct_install").GetProperty("stored_binding_exported_in_public_receipt").GetBoolean());
         Assert.False(rootElement.GetProperty("persistent_pairing_code_exported").GetBoolean());
     }
 

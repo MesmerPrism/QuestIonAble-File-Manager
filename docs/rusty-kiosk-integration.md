@@ -60,6 +60,10 @@ replays the exact install body once under a fresh authenticated transport
 request solely to retry cleanup. The same logical install request ID cannot
 start a second PackageInstaller session, and only abandonment return or
 confirmed session absence is terminal failed cleanup.
+The retry is additionally bound to the exact ordered name/byte/SHA commitments
+and their canonical digest. Private `rusty.kiosk.local_install_state.v2` state
+distinguishes absent, valid, and damaged receipts; damaged state cannot admit a
+new installer session and the private binding is never exported publicly.
 
 ## Authority Boundary
 
@@ -75,6 +79,9 @@ intent actions, setup endpoints, or headset paths.
 Bootstrap operation replay is retained in a non-evicting 4,096-entry ledger for
 the app-private issuance epoch. Saturation, corruption, and epoch mismatch fail
 closed, and a bridge-generation transition does not make an old ID reusable.
+Only a wholly fresh stored-state document may initialize its replay arrays;
+present missing, null, or wrong-type arrays fail closed under
+`rusty.kiosk.operator_session_state.v1`.
 
 Kiosk retains ownership of launch and watchdog behavior. The setup helper owns
 the small secure-settings operations. The Windows app owns ADB transport and

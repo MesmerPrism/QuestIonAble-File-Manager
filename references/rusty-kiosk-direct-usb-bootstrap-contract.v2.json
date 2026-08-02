@@ -30,7 +30,10 @@
     "eviction": "none",
     "saturation": "fail-closed-until-new-bootstrap-issuance-epoch",
     "bridge_generation_change_clears_ids": false,
-    "malformed_ledger": "fail-closed"
+    "malformed_ledger": "fail-closed",
+    "stored_state_schema": "rusty.kiosk.operator_session_state.v1",
+    "array_initialization": "fresh-state-only",
+    "present_missing_null_or_wrong_type_array": "fail-closed"
   },
   "cleanup_ownership": {
     "secret_retained": false,
@@ -99,7 +102,12 @@
     "abandon_return_or_absent_readback": "failed-completed",
     "abandon_failure_present_or_unknown": "cleanup-required-incomplete",
     "cleanup_retry": "repeat-same-install-body-with-fresh-authenticated-transport-request-id",
-    "cleanup_retry_starts_second_install": false
+    "cleanup_retry_starts_second_install": false,
+    "cleanup_retry_binding": "exact-ordered-name-bytes-sha256-and-canonical-sha256",
+    "stored_receipt_schema": "rusty.kiosk.local_install_state.v2",
+    "stored_receipt_states": "absent-valid-damaged",
+    "damaged_existing_receipt": "fail-closed-without-new-session",
+    "stored_binding_exported_in_public_receipt": false
   },
   "status_returns_secret": false,
   "status": {
