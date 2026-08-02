@@ -2,8 +2,11 @@
 
 Every ADB device operation in the WPF app is represented by one immutable
 `OperatorCommand` in the core library. Direct Rusty Kiosk operations use the
-typed `RustyKioskDirectClient` instead. In both cases the WPF button and CLI use
-the same core method and readback model.
+immutable `KioskDirectOperatorCommand` and shared executor. In both cases the
+WPF button and CLI use the same core method, confirmation semantics, lifecycle
+receipt, and readback model. `operator-actions --json` projects the code-owned
+registry; tests require every WPF click action to map to one shared CLI/Core
+route or one explicit local-interaction reason.
 The CLI is intended for agents and automation, so command text is deliberately
 not projected into the non-technical WPF interface.
 
@@ -66,6 +69,7 @@ exact tool selection is part of the test.
 | Kiosk select/tag/launch/setup action | `kiosk command` |
 | Export/import Kiosk tag file | `kiosk tags export` / `kiosk tags import` |
 | Connect/refresh Kiosk directly | `kiosk-direct status` |
+| Read/cancel one admitted direct request | `kiosk-direct request-status` / `kiosk-direct request-cancel` |
 | Direct Kiosk typed action | `kiosk-direct command` |
 | Direct tag export/import | `kiosk-direct tags export` / `kiosk-direct tags import` |
 | Direct staging list/upload/download/delete | `kiosk-direct files ...` |
@@ -81,6 +85,11 @@ exact tool selection is part of the test.
 | Revoke selected connectivity profile | `connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json` |
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
+
+The WPF **Disconnect** button clears its long-lived process-memory UI session.
+It is intentionally marked interactive-only: every CLI direct command is one
+atomic session and performs the equivalent cleanup before printing its single
+final result, so there is no separate `kiosk-direct disconnect` process route.
 
 Example shapes use placeholders rather than live device or local identities:
 
@@ -101,10 +110,10 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk-direct status --endpoint http://<quest-ip>:39873 --pairing-code <code> --json
-& '.\questionable-file-manager.exe' kiosk-direct command --endpoint http://<quest-ip>:39873 --pairing-code <code> --command launch-kiosk --confirm-kiosk-control --json
-& '.\questionable-file-manager.exe' kiosk-direct files upload --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <local-file> --json
-& '.\questionable-file-manager.exe' kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file <base-apk> --confirm-local-install --json
+& '.\questionable-file-manager.exe' kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <local-file> --confirm-staging-upload --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <base-apk> --confirm-local-install --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' device keep-awake --serial <quest-serial> --on --duration-ms 28800000 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' fleet status --json
@@ -130,6 +139,18 @@ The WPF footer's progress bar is a transient projection of the same executor,
 not a separate operation. CLI arguments therefore remain identical. Machine-
 readable CLI output stays one final JSON document; agents use its per-target
 results rather than scraping GUI animation or mixed progress lines.
+
+Manual direct authentication is the explicit fallback:
+
+```powershell
+& '.\questionable-file-manager.exe' kiosk-direct status --endpoint http://<quest-ip>:39873 --credential-stdin --json
+```
+
+Type the on-headset credential into standard input and press Enter. Do not put
+it in a command, environment variable, transcript, or clipboard. The WPF uses
+a `PasswordBox`, offers only a local 15-second reveal, remasks on focus loss or
+window deactivation, and clears the value on connect outcome, disconnect, and
+window close.
 
 State-changing JSON results wrap the operation payload with a
 `mutation` receipt. Its ordered transitions are `sent`, `pending`, and only

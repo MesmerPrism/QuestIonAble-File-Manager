@@ -287,6 +287,60 @@ public sealed record RustyKioskInstallationStatus(
     bool SameSignerControlGranted,
     bool HostOperatorAvailable);
 
+public enum RustyKioskProductChannel
+{
+    Stable,
+    Labs
+}
+
+public sealed record RustyKioskProductContract(
+    RustyKioskProductChannel Channel,
+    string WireName,
+    string MainPackage,
+    string SetupHelperPackage,
+    string OperatorAuthority,
+    string SetupControlPermission,
+    string SetupHelperControlAction)
+{
+    public string OperatorUri => "content://" + OperatorAuthority;
+
+    public string MainActivity => MainPackage + "/.RustyKioskActivity";
+
+    public static RustyKioskProductContract For(RustyKioskProductChannel channel) => channel switch
+    {
+        RustyKioskProductChannel.Stable => new(
+            channel,
+            "stable",
+            "io.github.mesmerprism.rustykiosk",
+            "io.github.mesmerprism.rustykiosk.setuphelper",
+            "io.github.mesmerprism.rustykiosk.operator",
+            "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL",
+            "io.github.mesmerprism.rustykiosk.setuphelper.action.CONTROL"),
+        RustyKioskProductChannel.Labs => new(
+            channel,
+            "labs",
+            "io.github.mesmerprism.rustykiosk.labs",
+            "io.github.mesmerprism.rustykiosk.setuphelper.labs",
+            "io.github.mesmerprism.rustykiosk.labs.operator",
+            "io.github.mesmerprism.rustykiosk.labs.permission.SETUP_CONTROL",
+            "io.github.mesmerprism.rustykiosk.setuphelper.labs.action.CONTROL"),
+        _ => throw new ArgumentOutOfRangeException(nameof(channel))
+    };
+
+    public static RustyKioskProductContract Parse(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return value.Trim() switch
+        {
+            "stable" => For(RustyKioskProductChannel.Stable),
+            "labs" => For(RustyKioskProductChannel.Labs),
+            _ => throw new ArgumentException(
+                "Rusty Kiosk product channel must be exactly stable or labs.",
+                nameof(value))
+        };
+    }
+}
+
 public static class RustyKioskContract
 {
     public const string MainPackage = "io.github.mesmerprism.rustykiosk";
@@ -299,6 +353,8 @@ public static class RustyKioskContract
     public const string SetupControlPermission = "io.github.mesmerprism.rustykiosk.permission.SETUP_CONTROL";
     public const string ResultSchema = "rusty.kiosk.cli_result.v1";
     public const string HostOperatorSchema = "rusty.kiosk.host_operator.v2";
+    public const string HostOperatorSuccessorSchema = "rusty.kiosk.host_operator.v3";
+    public const string DirectUsbBootstrapSchema = "rusty.kiosk.direct_usb_bootstrap.v1";
     public const string TagFileSchema = "rusty.kiosk.app_tags.v1";
     public const string TagFilePath = "/sdcard/Android/data/io.github.mesmerprism.rustykiosk/files/tags/app-tags.v1.json";
     public const string MainApkFileName = "rusty-kiosk.apk";

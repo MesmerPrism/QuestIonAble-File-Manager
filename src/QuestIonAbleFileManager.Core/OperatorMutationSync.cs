@@ -8,7 +8,12 @@ public enum OperatorMutationStage
     Pending,
     Confirmed,
     Failed,
-    TimedOut
+    TimedOut,
+    PendingWearerAction,
+    Rejected,
+    Expired,
+    Cancelled,
+    CleanupUnknown
 }
 
 public sealed record OperatorMutationTransition(
@@ -28,7 +33,11 @@ public sealed record OperatorMutationReceipt(
 {
     public bool IsTerminal => Stage is
         OperatorMutationStage.Confirmed or
-        OperatorMutationStage.Failed;
+        OperatorMutationStage.Failed or
+        OperatorMutationStage.Rejected or
+        OperatorMutationStage.Expired or
+        OperatorMutationStage.Cancelled or
+        OperatorMutationStage.CleanupUnknown;
 }
 
 public static class OperatorMutationReconciler

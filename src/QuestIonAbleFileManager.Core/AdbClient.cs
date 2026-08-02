@@ -22,6 +22,8 @@ public sealed partial class AdbClient
 
     public string AdbPath { get; }
 
+    internal ICommandRunner CommandRunner => _runner;
+
     internal ApkArtifactInspector CreateApkInspector() =>
         new(_runner, _buildTools ?? AndroidBuildToolPaths.FindFromAdb(AdbPath));
 

@@ -151,10 +151,10 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk status --serial <q
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk install --serial <usb-serial> --confirm-kiosk-setup --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags export --serial <quest-serial> --output ./app-tags.v1.json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags import --serial <quest-serial> --file ./app-tags.v1.json --confirm-kiosk-control --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --endpoint http://<quest-ip>:39873 --pairing-code <on-headset-code> --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct command --endpoint http://<quest-ip>:39873 --pairing-code <code> --command launch-kiosk --confirm-kiosk-control --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct files upload --endpoint http://<quest-ip>:39873 --pairing-code <code> --file ./example.apk
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --endpoint http://<quest-ip>:39873 --pairing-code <code> --file ./example.apk --confirm-local-install --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-staging-upload --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-local-install --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device status --serial <quest-serial> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
@@ -343,8 +343,15 @@ link. Receipts contain only the Fleet device ID, sanitized state, and stable
 reason code; no profile route contacts a headset or claims Wi-Fi usability.
 Direct mode uses expiring HMAC-signed requests, replay IDs, body hashes, and
 signed responses. Its v1 HTTP bodies are not encrypted, so use a trusted local
-network or a private Windows hotspot. The pairing code can be supplied through
-`RUSTY_KIOSK_PAIRING_CODE` instead of a command-line argument.
+network or a private Windows hotspot. Prefer authorized-USB bootstrap: choose
+the exact USB serial and fixed `stable` or `labs` product channel, and the
+channel-bound Kiosk provider issues one memory-only session. Manual fallback
+uses `--endpoint <url> --credential-stdin`; type the on-headset credential and
+press Enter. Credentials are never accepted through arguments or environment
+variables. Each CLI command closes its session before emitting its one final
+result. A listener started by that command is disabled only through its exact
+operation/session/generation binding and stopped-state readback; a pre-existing
+wearer-owned listener is preserved.
 
 The **APKs (ADB default)** tab is the normal installation route. Once the PC's
 ADB key is authorized, it can install multiple packages without repeated
@@ -364,6 +371,7 @@ A base APK and its split APKs are submitted together as one session.
 - [Two-headset Wi-Fi validation receipt](docs/wifi-adb-parallel-live-validation-2026-07-17.md)
 - [Progress reporting contract](docs/progress-reporting.md)
 - [Rusty Kiosk integration and synchronization](docs/rusty-kiosk-integration.md)
+- [Authorized-USB Kiosk Direct Link](docs/kiosk-direct-authorized-usb.md)
 - [Optional Rusty Fleet integration](docs/fleet-integration.md)
 - [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)

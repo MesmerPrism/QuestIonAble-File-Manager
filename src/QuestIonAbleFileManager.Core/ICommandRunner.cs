@@ -29,3 +29,27 @@ public interface IStreamingCommandRunner : ICommandRunner
         throw new NotSupportedException(
             "The configured command runner does not support input streaming.");
 }
+
+/// <summary>
+/// Runs a process whose standard streams may contain a short-lived credential.
+/// The raw streams are bounded, passed only to the in-memory parser, and cleared
+/// before this method returns. Neither stream is projected into CommandResult.
+/// </summary>
+public interface ISensitiveCommandRunner : ICommandRunner
+{
+    Task<SensitiveCommandResult<T>> RunSensitiveAsync<T>(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        int maximumStandardOutputBytes,
+        int maximumStandardErrorBytes,
+        TimeSpan timeout,
+        Func<ReadOnlyMemory<byte>, T> parseStandardOutput,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record SensitiveCommandResult<T>(
+    T Value,
+    int ExitCode,
+    TimeSpan Duration);
+
+public sealed class SensitiveCommandException(string message) : InvalidOperationException(message);

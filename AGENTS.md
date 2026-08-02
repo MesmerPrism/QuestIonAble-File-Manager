@@ -30,9 +30,13 @@ Android application and normal file-manager features must work when its APKs
 are absent or never installed. This repo does not bypass Android permissions or
 promise access to protected app data.
 
-The GUI and CLI must invoke the same typed `OperatorCommand` routes. Every GUI
-operation must have an exact CLI-equivalent route built from the same immutable
-arguments it executes. The CLI is an agent and automation surface and is not
+The GUI and CLI must invoke the same typed `OperatorCommand` or
+`KioskDirectOperatorCommand` routes. Every headset operation must have an exact
+CLI-equivalent route built from the same immutable arguments it executes.
+Local-only UI actions such as file selection, list selection, reveal/remask, and
+clearing a WPF session must be explicitly classified rather than advertised as
+nonexistent CLI routes. `OperatorActionRegistry` and its XAML parity test are
+the code-owned inventory. The CLI is an agent and automation surface and is not
 displayed in the WPF app. UI handlers collect inputs, invoke shared routes, and
 display structured results; they must not hide ADB or filesystem business logic.
 Transient WPF progress must come from the optional shared `OperatorProgress`
@@ -87,6 +91,19 @@ documented.
   versioned provider. It admits fixed typed commands and bounded SHA-256 tag
   chunks. Never add arbitrary intents, components, shell commands, or host-
   supplied headset paths to that contract.
+- Authorized-USB Direct Link bootstrap is restricted to one exact ready
+  classic-USB serial and one fixed Stable/Labs product contract. Provider
+  credentials must use the bounded sensitive byte runner and remain absent
+  from arguments, environment, command results, progress, help, errors, and
+  telemetry. Manual direct credentials are accepted only through masked WPF
+  memory or bounded CLI standard input. Clear them on every connection outcome,
+  explicit disconnect, focus/deactivation timeout, window close, and process
+  exit; never add a clipboard route. A CLI direct command is one atomic session
+  and must reconcile cleanup before its one final JSON result. Disable only a
+  listener that the exact operation/session/generation owns, then poll provider
+  status until both enabled and running are false on the post-disable
+  generation. Preserve pre-existing listeners and report non-convergence as
+  `cleanup_unknown`.
 - Rusty Fleet integration v1 is disabled by default. Its environment-created
   CLI adapter is restricted to strict JSON capability discovery, exact-serial
   observation, bounded `adb-shared` list/pull, and read-only durable status.
@@ -300,6 +317,10 @@ questionable-file-manager.exe kiosk status --serial <quest-serial> --json
 questionable-file-manager.exe kiosk install --serial <usb-serial> --confirm-kiosk-setup
 questionable-file-manager.exe kiosk command --serial <quest-serial> --command request-wifi-adb --confirm-kiosk-control --json
 questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk-direct status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --json
+questionable-file-manager.exe kiosk-direct command --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk-direct request-status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --request-id <request-id> --json
+questionable-file-manager.exe operator-actions --json
 questionable-file-manager.exe device status --serial <quest-serial> --json
 questionable-file-manager.exe device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
 questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json

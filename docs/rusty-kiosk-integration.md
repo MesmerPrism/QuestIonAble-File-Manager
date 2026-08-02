@@ -13,10 +13,14 @@ when the bundle is absent or Kiosk is never installed.
 4. The file manager installs the same-signer setup helper, grants only that
    helper `WRITE_SECURE_SETTINGS`, installs Kiosk, and reads back both package
    and permission states.
-5. In the headset panel, enable **Direct PC link**, then enter the displayed
-   address and pairing code in the Windows Kiosk tab. Routine Kiosk commands,
-   tags, app-owned staging, and optional attended APK installs no longer
-   require ADB. The PC's ADB installer remains the default APK route.
+5. In the Windows Kiosk tab, select the installed `stable` or `labs` Kiosk
+   channel and choose **Connect using authorized USB**. File Manager verifies
+   the exact classic-USB serial, installed package/UID, and channel-bound host
+   v3 provider before accepting one ephemeral session. Manual fallback uses the
+   address and masked credential shown in the headset panel. Routine Kiosk
+   commands, tags, app-owned staging, and optional attended APK installs then
+   use the authenticated local link. The PC's ADB installer remains the default
+   APK route.
 6. Wi-Fi ADB remains optional. If requested, Meta shows its own permission
    prompt and the PC receipt remains pending until wearer acceptance/readback.
 7. Optionally enable **Ask after restart**. After a reboot, Kiosk can request
@@ -51,17 +55,31 @@ settings, and diagnostics remain optional ADB functions.
 
 ## Authority Boundary
 
-The release host surface is
-`content://io.github.mesmerprism.rustykiosk.operator`, schema
-`rusty.kiosk.host_operator.v2`, protected by caller-held
-`android.permission.DUMP`. The host can admit only the fixed Kiosk command enum,
-poll a matching request result, and transfer the fixed tag document. It cannot
-supply shell text, Android components, intent actions, setup endpoints, or
-headset paths.
+The successor release host surface is schema `rusty.kiosk.host_operator.v3`,
+protected by caller-held `android.permission.DUMP`. Stable uses
+`content://io.github.mesmerprism.rustykiosk.operator`; Labs uses
+`content://io.github.mesmerprism.rustykiosk.labs.operator`. File Manager chooses
+one fixed product contract rather than accepting a package or authority from
+the device. The host can admit only the fixed Kiosk command enum, query/cancel
+one exact request lifecycle, transfer the fixed tag document, and issue/revoke
+a bounded direct session. It cannot supply shell text, Android components,
+intent actions, setup endpoints, or headset paths.
 
 Kiosk retains ownership of launch and watchdog behavior. The setup helper owns
 the small secure-settings operations. The Windows app owns ADB transport and
 operator confirmation.
+
+Authorized-USB bootstrap uses provider schema
+`rusty.kiosk.direct_usb_bootstrap.v1`. The sensitive provider response is read
+through a bounded byte-only runner and is never projected into ordinary command
+results, arguments, environment, help, telemetry, or progress. The session
+secret remains in process memory and is zeroed when the client closes. The
+provider's immediate enable/disable result is only admission: File Manager
+retries authenticated HTTP status during startup, and for an owned listener it
+polls no-argument provider status until both `direct_enabled` and
+`direct_running` are false on the exact post-disable generation. A generation
+change or non-convergence produces `cleanup_unknown`; it is never reported as
+confirmed. A listener that was already enabled is never disabled by the PC.
 
 The optional direct surface is `rusty.kiosk.direct_operator.v1` on port 39873.
 It accepts expiring HMAC-SHA-256 envelopes, retains replay IDs, verifies request
@@ -73,6 +91,13 @@ protected-data path, or device-settings endpoint. HTTP v1 is authenticated and
 integrity-protected but not encrypted; use a trusted network or private Windows
 hotspot. This is a single-headset local link, not fleet management.
 
+Direct mutations are admitted separately from completion. The PC can query
+`/v1/kiosk/request-status` or cancel exactly one still-pending request through
+`/v1/kiosk/cancel`; crossed request IDs and unknown lifecycle states fail
+closed. Attended installer receipts retain the distinct
+`pending_wearer_action` state. CLI authorized-USB sessions finish cleanup before
+the one final JSON document is emitted, including a sanitized cleanup receipt.
+
 ## Sent, Pending, Confirmed
 
 Every PC-originated mutation has an operation ID and transition history:
@@ -83,6 +108,9 @@ Every PC-originated mutation has an operation ID and transition history:
 - `failed` records an explicit error;
 - `timed_out` means no match was seen within five minutes, but later refreshes
   may still reconcile a wearer prompt.
+- `pending_wearer_action`, `rejected`, `expired`, and `cancelled` preserve the
+  provider's typed request lifecycle without collapsing it into success;
+- `cleanup_unknown` means an owned session could not prove listener shutdown.
 
 Examples of confirmation evidence include Kiosk's guard/accessibility/Wi-Fi/tag
 state, same-signer permission readback, remote file size, refreshed package
