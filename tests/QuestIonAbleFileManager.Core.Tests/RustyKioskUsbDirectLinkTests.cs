@@ -39,6 +39,13 @@ public sealed class RustyKioskUsbDirectLinkTests
         Assert.Equal(OperatorMutationStage.Confirmed, session.CleanupReceipt?.Stage);
         Assert.Contains(runner.AllArguments, value =>
             value.Contains("expected_bridge_generation", StringComparison.Ordinal));
+        var disableArguments = Assert.Single(
+            runner.AllArgumentSets,
+            arguments => arguments.Contains("direct-disable"));
+        Assert.Contains("expected_bridge_generation:l:41", disableArguments);
+        Assert.Contains("session_id:s:session_test_0001", disableArguments);
+        Assert.DoesNotContain("l:expected_bridge_generation:41", disableArguments);
+        Assert.DoesNotContain("s:session_id:session_test_0001", disableArguments);
     }
 
     [Fact]

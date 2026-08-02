@@ -360,8 +360,8 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
             "direct-disable",
             originOperationId,
             [
-                "l", "expected_bridge_generation", expectedBridgeGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                "s", "session_id", sessionId
+                "expected_bridge_generation", "l", expectedBridgeGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                "session_id", "s", sessionId
             ]);
         var admission = await _sensitiveRunner.RunSensitiveAsync(
                 _client.AdbPath,

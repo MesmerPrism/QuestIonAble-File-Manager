@@ -749,6 +749,10 @@ public sealed class RustyKioskDirectClient : IDisposable
         {
             Content = content
         };
+        // NanoHTTPD can retain the preceding request's query string when a keep-alive
+        // connection is reused. One signed request per connection keeps the server's
+        // effective request target identical to the target authenticated below.
+        request.Headers.ConnectionClose = true;
         var authRequestId = NewRequestId("http");
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var requestTarget = Uri.UnescapeDataString(request.RequestUri!.PathAndQuery);

@@ -64,6 +64,7 @@ public sealed class RustyKioskDirectClientTests
         Assert.True(status.InstallerAllowed);
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest!.Headers.Contains("X-Rusty-Signature"));
+        Assert.True(handler.LastRequest.Headers.ConnectionClose);
     }
 
     [Fact]
