@@ -232,6 +232,22 @@ public sealed class RustyKioskDirectClientTests
     }
 
     [Fact]
+    public async Task LaunchOptionAdmissionCarriesOnlyTheBoundedOpaqueId()
+    {
+        var handler = new KioskInvokeHandler();
+        using var client = CreateInvokeClient(handler);
+
+        await client.AdmitKioskRequestAsync(
+            RustyKioskCommand.LaunchOption,
+            " playlist.example-1 ",
+            requestId: "kiosk_launch_option_0001");
+
+        Assert.Equal("launch-option", handler.LogicalCommand);
+        Assert.Equal(" playlist.example-1 ", handler.LogicalValue);
+        Assert.Equal(["command", "request_id", "value"], handler.InvokePropertyNames);
+    }
+
+    [Fact]
     public async Task InvokeKiosk_RejectsCrossedLogicalRequestResult()
     {
         var client = CreateInvokeClient(new KioskInvokeHandler(
@@ -420,6 +436,9 @@ public sealed class RustyKioskDirectClientTests
 
         public int ResultPollCount =>
             Volatile.Read(ref _resultPollCount);
+        public string? LogicalCommand => _logicalCommand;
+        public string? LogicalValue { get; private set; }
+        public string[] InvokePropertyNames { get; private set; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -441,6 +460,14 @@ public sealed class RustyKioskDirectClientTests
                 _logicalCommand = document.RootElement
                     .GetProperty("command")
                     .GetString();
+                LogicalValue = document.RootElement
+                    .GetProperty("value")
+                    .GetString();
+                InvokePropertyNames = document.RootElement
+                    .EnumerateObject()
+                    .Select(static property => property.Name)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
                 body = JsonSerializer.SerializeToUtf8Bytes(new
                 {
                     accepted = true,

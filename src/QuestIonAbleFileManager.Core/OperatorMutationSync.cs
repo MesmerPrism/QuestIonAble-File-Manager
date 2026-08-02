@@ -407,6 +407,7 @@ internal static class OperatorMutations
         $"requirement={state.SelectedLaunchRequirement?.ToWireName() ?? "unknown"}; " +
         $"pending-launch={state.PendingRequirementLaunch?.ToString().ToLowerInvariant() ?? "unknown"}; " +
         $"passthrough={state.PassthroughStyle?.ToWireName() ?? "unknown"}; " +
+        $"last-dispatch={state.LastDispatchedOptionId ?? "none"}@{state.LastDispatchedOptionPackage ?? "none"}; " +
         $"selected={state.SelectedKey ?? "none"}.";
 
     private static string DisplayOverride(string value) =>
@@ -465,6 +466,14 @@ public static class RustyKioskReadback
             RustyKioskCommand.DisableAccessibility => !state.AccessibilityEnabled,
             RustyKioskCommand.LaunchKiosk => state.GuardArmed,
             RustyKioskCommand.LaunchNormal => !state.GuardArmed,
+            RustyKioskCommand.LaunchOption =>
+                !string.IsNullOrWhiteSpace(value) &&
+                string.Equals(state.LastDispatchedOptionId, value, StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(state.SelectedPackage) &&
+                string.Equals(
+                    state.LastDispatchedOptionPackage,
+                    state.SelectedPackage,
+                    StringComparison.Ordinal),
             RustyKioskCommand.SetSearch => string.Equals(state.Search, value ?? string.Empty, StringComparison.Ordinal),
             RustyKioskCommand.FilterTag => string.Equals(state.TagFilter ?? string.Empty, value ?? string.Empty, StringComparison.OrdinalIgnoreCase),
             RustyKioskCommand.Select => string.Equals(state.SelectedKey, value, StringComparison.Ordinal),

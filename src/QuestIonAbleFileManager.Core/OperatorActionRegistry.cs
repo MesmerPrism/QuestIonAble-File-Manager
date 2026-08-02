@@ -95,6 +95,8 @@ public static class OperatorActionRegistry
             DualKioskCommand("kiosk.focus.tag-editor", "OnKioskFocusTagEditor"),
             DualKioskCommand("kiosk.launch.normal", "OnKioskLaunchNormal"),
             DualKioskCommand("kiosk.launch.guarded", "OnKioskLaunchGuarded"),
+            DualKioskCommand("kiosk.launch.options.read", "OnReadKioskLaunchOptions"),
+            DualKioskCommand("kiosk.launch.option", "OnKioskLaunchOption"),
             DualKioskCommand("kiosk.launch.requirement.set", "OnSetKioskLaunchRequirement"),
             DualKioskCommand("kiosk.launch.pending.cancel", "OnCancelKioskPendingLaunch"),
             DualKioskCommand("kiosk.tag.add", "OnAddKioskTag"),

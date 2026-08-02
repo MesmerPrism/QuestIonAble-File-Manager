@@ -1885,11 +1885,12 @@ internal static class CliApplication
               status, show-controls, show-apps, reload, focus-search,
               focus-tag-editor, set-search, select, filter-tag, add-tag,
               remove-tag, set-launch-requirement, cancel-pending-launch,
-              launch-normal, launch-kiosk, check-setup-helper, request-wifi-adb,
+              launch-normal, launch-kiosk, launch-option, check-setup-helper, request-wifi-adb,
               enable-wifi-adb-after-boot, disable-wifi-adb-after-boot,
               disable-wifi-adb, enable-accessibility, disable-accessibility,
               passthrough-natural, passthrough-contour, exit-meta-home.
               set-launch-requirement accepts exactly any, wifi-on, or wifi-off.
+              launch-option accepts only one discovered opaque option id (maximum 160 characters).
               ADB Kiosk routes default to stable; --product-channel labs binds
               status, command, and tag traffic to the separate Labs identity.
               Accepted focus commands exit 3 until wearer-visible focus is confirmed.

@@ -153,6 +153,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags export --seri
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags import --serial <quest-serial> --file ./app-tags.v1.json --confirm-kiosk-control --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk command --serial <quest-serial> --product-channel labs --command launch-option --value <opaque-option-id> --confirm-kiosk-control --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-staging-upload --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file ./example.apk --confirm-local-install --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- device status --serial <quest-serial> --json
@@ -171,6 +172,20 @@ dotnet run --project src/QuestIonAbleFileManager.FleetKioskV2Provider -- --descr
 dotnet run --project src/QuestIonAbleFileManager.FleetAwakeProvider -- --describe-json
 dotnet run --project src/QuestIonAbleFileManager.FleetConnectivityProvider -- --describe-json
 ```
+
+The optional `launch-option` route carries only one app-discovered opaque id,
+bounded to 160 characters. Kiosk owns provider, package, signer, UID, activity,
+and option revalidation; File Manager never accepts a component, intent action,
+URI, flag, path, or free-form extra for this route. Confirmation requires exact
+readback of both the dispatched option id and the currently selected package.
+Opaque ids are nonblank but otherwise preserved exactly, including any leading
+or trailing whitespace declared by the app.
+The parsed status also preserves Kiosk's exact package/UID/signer/version,
+provider/activity, and installation-time binding evidence; Core independently
+recomputes its v1 binding SHA-256 before projecting it to CLI or WPF.
+This receipt proves Kiosk dispatched the exact owner-defined option. The
+destination app's own markers remain authoritative for foreground, locked-mode,
+timing, looping, and other app semantics.
 
 The optional `questionable-file-manager-api` executable is inert unless
 explicitly started. It requires a private bearer value in

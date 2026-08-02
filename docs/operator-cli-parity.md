@@ -49,6 +49,18 @@ The CLI can be invoked directly in PowerShell without translating GUI labels
 into a different automation model. Agents can include `--adb <path>` when an
 exact tool selection is part of the test.
 
+For app-provided launch options, WPF presents only the bounded read-only rows
+returned for Kiosk's current selected app. The CLI equivalent accepts the same
+opaque option id, with a 160-character limit. Neither surface can supply an
+activity, component, action, URI, flag, path, or arbitrary extra. A completed
+request remains pending until Kiosk reads back the exact dispatched option id
+together with the exact currently selected package. This confirms dispatch,
+not the destination app's foreground state or option semantics. Core also requires the optional
+package/UID/signer/version/provider/activity binding fields to be all-or-none
+and independently recomputes Kiosk's v1 binding SHA-256 before projection.
+Nonblank opaque ids are preserved ordinally, including leading or trailing
+whitespace; File Manager does not normalize an app-defined identifier.
+
 ## Operation Map
 
 | WPF operation | Equivalent CLI route |
@@ -70,6 +82,7 @@ exact tool selection is part of the test.
 | Install bundled Kiosk pair | `kiosk install --confirm-kiosk-setup` |
 | Provision installed Kiosk helper | `kiosk provision --confirm-kiosk-setup` |
 | Kiosk panel/focus/select/tag/launch/requirement/passthrough/setup action | `kiosk command` |
+| Launch one read-only app-provided option | `kiosk command --command launch-option --value <opaque-option-id> --confirm-kiosk-control` |
 | Export/import Kiosk tag file | `kiosk tags export` / `kiosk tags import` |
 | Connect/refresh Kiosk directly | `kiosk-direct status` |
 | Read/cancel one admitted direct request | `kiosk-direct request-status` / `kiosk-direct request-cancel` |
@@ -113,10 +126,12 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-option --value <opaque-option-id> --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command passthrough-contour --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk tags import --serial <quest-serial> --product-channel labs --file <tag-file> --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --adb <path-to-adb> --json
+& '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command launch-option --value <opaque-option-id> --confirm-kiosk-control --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct command --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --command cancel-pending-launch --confirm-kiosk-control --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct files upload --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <local-file> --confirm-staging-upload --adb <path-to-adb> --json
 & '.\questionable-file-manager.exe' kiosk-direct install --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --file <base-apk> --confirm-local-install --adb <path-to-adb> --json

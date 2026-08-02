@@ -1408,6 +1408,19 @@ public partial class MainWindow : Window
         KioskLaunchRequirementBox.SelectedItem = KioskLaunchRequirementBox.Items
             .OfType<ComboBoxItem>()
             .FirstOrDefault(item => string.Equals(item.Tag as string, requirement, StringComparison.Ordinal));
+        var stateMatchesEntry = entry is not null &&
+            string.Equals(entry.Key, _rustyKioskState?.SelectedKey, StringComparison.Ordinal);
+        var options = stateMatchesEntry
+                ? _rustyKioskState?.SelectedLaunchOptions ?? []
+                : [];
+        KioskLaunchOptionsBox.ItemsSource = options;
+        KioskLaunchOptionsBox.SelectedIndex = options.Count > 0 ? 0 : -1;
+        KioskLaunchOptionsStatusText.Text = stateMatchesEntry &&
+            _rustyKioskState is { } state
+                ? KioskLaunchOptionsStatusLabel(state)
+                : entry is null
+                    ? "App launch options: select an app"
+                    : "App launch options: use Read options for this app";
     }
 
     private async void OnKioskShowControls(object sender, RoutedEventArgs eventArgs) =>
@@ -1446,6 +1459,55 @@ public partial class MainWindow : Window
 
     private async void OnKioskLaunchGuarded(object sender, RoutedEventArgs eventArgs) =>
         await LaunchSelectedKioskAppAsync(guarded: true);
+
+    private async void OnReadKioskLaunchOptions(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry)
+        {
+            ShowInputMessage("Select an app first.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Select {entry.Name} on the headset and read its validated launch options?",
+                "Confirm launch-option discovery",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+        await RunBusyAsync(
+            SelectCurrentKioskEntryAsync,
+            $"Reading {entry.Name}'s launch options…");
+    }
+
+    private async void OnKioskLaunchOption(object sender, RoutedEventArgs eventArgs)
+    {
+        if (KioskAppsList.SelectedItem is not RustyKioskAppEntry entry ||
+            !string.Equals(entry.Key, _rustyKioskState?.SelectedKey, StringComparison.Ordinal))
+        {
+            ShowInputMessage("Use Read options for the selected app before choosing one of its launch options.");
+            return;
+        }
+        if (KioskLaunchOptionsBox.SelectedItem is not RustyKioskLaunchOption option)
+        {
+            ShowInputMessage("The selected app has no validated launch option to run.");
+            return;
+        }
+        if (MessageBox.Show(
+                this,
+                $"Launch {entry.Name} with option '{option.DisplayLabel}'?",
+                "Confirm app launch option",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        await RunBusyAsync(
+            async () => await RunKioskCommandAsync(RustyKioskCommand.LaunchOption, option.OptionId),
+            $"Launching {entry.Name} with {option.DisplayLabel}…");
+    }
 
     private async void OnSetKioskLaunchRequirement(object sender, RoutedEventArgs eventArgs)
     {
@@ -1987,6 +2049,7 @@ public partial class MainWindow : Window
         _rustyKioskState = null;
         KioskAppsList.ItemsSource = null;
         KioskSelectedTagsBox.ItemsSource = null;
+        KioskLaunchOptionsBox.ItemsSource = null;
         KioskTagFilterBox.ItemsSource = new[] { "All tags" };
         KioskTagFilterBox.SelectedIndex = 0;
         KioskInstallStatusText.Text = "Rusty Kiosk: not checked";
@@ -1997,6 +2060,7 @@ public partial class MainWindow : Window
         KioskPanelStatusText.Text = "Headset panel: not checked";
         KioskPendingLaunchStatusText.Text = "Pending requirement launch: not checked";
         KioskPassthroughStatusText.Text = "Passthrough: not checked";
+        KioskLaunchOptionsStatusText.Text = "App launch options: not checked";
         HeadsetBatteryText.Text = "Headset battery: not checked";
         ControllerBatteryText.Text = "Controllers: not checked";
         KeepAwakeStatusText.Text = "Keep awake: not checked";
@@ -2053,6 +2117,7 @@ public partial class MainWindow : Window
               $"{(kiosk.State.SystemPassthroughEnabled == true ? "enabled" : "disabled")}; " +
               $"LUT {(kiosk.State.PassthroughLutApplied == true ? "applied" : "not applied")}"
             : "Passthrough: unavailable in this Kiosk version";
+        KioskLaunchOptionsStatusText.Text = KioskLaunchOptionsStatusLabel(kiosk.State);
         var previousTag = KioskTagFilterBox.SelectedItem as string;
         var tagChoices = new[] { "All tags" }.Concat(kiosk.State.Tags).ToArray();
         KioskTagFilterBox.ItemsSource = tagChoices;
@@ -2061,6 +2126,21 @@ public partial class MainWindow : Window
             : "All tags";
         UpdateKioskAppProjection();
         StatusText.Text = kiosk.Message;
+    }
+
+    private static string KioskLaunchOptionsStatusLabel(RustyKioskState state)
+    {
+        if (state.SelectedLaunchOptionsStatus is not { } status)
+        {
+            return "App launch options: unavailable in this Kiosk version";
+        }
+        var message = string.IsNullOrWhiteSpace(state.SelectedLaunchOptionsMessage)
+            ? string.Empty
+            : $" · {state.SelectedLaunchOptionsMessage}";
+        var binding = state.SelectedLaunchOptionsBinding is { } exact
+            ? $" · owner {exact.PackageName} · UID {exact.Uid} · binding {exact.BindingSha256[..12]}"
+            : string.Empty;
+        return $"App launch options: {status.ToWireName()}{message}{binding}";
     }
 
     private void UpdateKioskAppProjection()

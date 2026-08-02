@@ -964,6 +964,7 @@ public static class OperatorCommands
         RustyKioskCommand.EnableAccessibility or
         RustyKioskCommand.DisableAccessibility or
         RustyKioskCommand.SetLaunchRequirement or
+        RustyKioskCommand.LaunchOption or
         RustyKioskCommand.CancelPendingLaunch or
         RustyKioskCommand.PassthroughNatural or
         RustyKioskCommand.PassthroughContour or

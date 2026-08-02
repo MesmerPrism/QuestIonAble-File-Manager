@@ -2,8 +2,8 @@
   "schema": "questionable.file_manager.rusty_kiosk_cli_parity.v1",
   "source": {
     "repository": "Rusty Kiosk",
-    "commit": "8b6066ba1abef90c8b55fa5f116304a1a191e75f",
-    "tree": "25eb1df14b53b1de2a21e27a6e184cb09b7ceb15",
+    "commit": "ba06fc8ce5a09997ec9531a8cec380f95849995d",
+    "tree": "694bfdb1f46d17869c9389ec084ef1c29d680848",
     "path": "app/src/main/java/io/github/mesmerprism/rustykiosk/RustyKioskCliContract.kt"
   },
   "max_value_length": 160,
@@ -23,6 +23,7 @@
     { "wire_name": "cancel-pending-launch", "value_rule": "none" },
     { "wire_name": "launch-normal", "value_rule": "none" },
     { "wire_name": "launch-kiosk", "value_rule": "none" },
+    { "wire_name": "launch-option", "value_rule": "required" },
     { "wire_name": "check-setup-helper", "value_rule": "none" },
     { "wire_name": "request-wifi-adb", "value_rule": "none" },
     { "wire_name": "enable-wifi-adb-after-boot", "value_rule": "none" },

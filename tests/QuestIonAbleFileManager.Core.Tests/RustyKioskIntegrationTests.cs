@@ -2,13 +2,14 @@ using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
 public sealed class RustyKioskIntegrationTests
 {
     [Fact]
-    public void CommandVocabularyExactlyMatchesPinnedKioskAlpha7Contract()
+    public void CommandVocabularyExactlyMatchesPinnedKioskContract()
     {
         var root = FindRepositoryRoot();
         using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
@@ -70,11 +71,53 @@ public sealed class RustyKioskIntegrationTests
             RustyKioskCommand.ShowApps.ValidateValue("unexpected"));
         Assert.Throws<ArgumentException>(() =>
             RustyKioskCommand.SetLaunchRequirement.ValidateValue(null));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.LaunchOption.ValidateValue(null));
+        Assert.Throws<ArgumentException>(() =>
+            RustyKioskCommand.LaunchOption.ValidateValue(new string('x', 161)));
         Assert.Null(RustyKioskCommand.SetSearch.ValidateValue("   "));
     }
 
     [Fact]
-    public void Alpha7RequirementUsesTheTypedAdbAndDirectCommandFactories()
+    public void LaunchOptionUsesOnlyTheBoundedOpaqueValueOnAdbAndDirectRoutes()
+    {
+        const string optionId = " playlist.example-1 ";
+        var adb = OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: true,
+            product: RustyKioskProductContract.For(RustyKioskProductChannel.Labs));
+        var direct = KioskDirectOperatorCommand.Invoke(
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: true);
+
+        Assert.Equal(optionId, adb.RustyKioskValue);
+        Assert.Equal(optionId, direct.Value);
+        Assert.Equal(
+            [
+                "kiosk", "command", "--serial", "QUEST123",
+                "--product-channel", "labs",
+                "--command", "launch-option",
+                "--value", optionId,
+                "--confirm-kiosk-control"
+            ],
+            adb.CliArguments);
+        Assert.DoesNotContain(adb.CliArguments, argument =>
+            argument.Contains("component", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("activity", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("uri", StringComparison.OrdinalIgnoreCase) ||
+            argument.Contains("intent", StringComparison.OrdinalIgnoreCase));
+        Assert.Throws<InvalidOperationException>(() => OperatorCommands.InvokeRustyKiosk(
+            "QUEST123",
+            RustyKioskCommand.LaunchOption,
+            optionId,
+            operatorConfirmed: false));
+    }
+
+    [Fact]
+    public void ActiveRequirementUsesTheTypedAdbAndDirectCommandFactories()
     {
         var adb = OperatorCommands.InvokeRustyKiosk(
             "QUEST123",
@@ -286,9 +329,9 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
-    public void OperatorResultParsesAlpha7StateAndConfirmsTypedReadback()
+    public void OperatorResultParsesLaunchOptionStateAndConfirmsTypedReadback()
     {
-        var result = RustyKioskOperatorResult.Parse(Alpha7ResultJson());
+        var result = RustyKioskOperatorResult.Parse(LaunchOptionResultJson());
 
         Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.Entries.Single().LaunchRequirement);
         Assert.Equal(RustyKioskLaunchRequirement.WifiOn, result.State.SelectedLaunchRequirement);
@@ -297,6 +340,19 @@ public sealed class RustyKioskIntegrationTests
         Assert.False(result.State.PendingRequirementLaunch);
         Assert.True(result.State.SystemPassthroughEnabled);
         Assert.True(result.State.PassthroughLutApplied);
+        var option = Assert.Single(result.State.SelectedLaunchOptions!);
+        Assert.Equal(1, option.SchemaVersion);
+        Assert.Equal("playlist.example-1", option.OptionId);
+        Assert.Equal("Example playlist", option.DisplayLabel);
+        Assert.Equal("Loop two profiles", option.Description);
+        Assert.Equal(RustyKioskLaunchOptionsStatus.Ready, result.State.SelectedLaunchOptionsStatus);
+        Assert.NotNull(result.State.SelectedLaunchOptionsBinding);
+        Assert.Equal("com.example.installed", result.State.SelectedLaunchOptionsBinding.PackageName);
+        Assert.Equal(10123, result.State.SelectedLaunchOptionsBinding.Uid);
+        Assert.Equal(new string('a', 64), result.State.SelectedLaunchOptionsBinding.SigningIdentity);
+        Assert.Equal("34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf", result.State.SelectedLaunchOptionsBinding.BindingSha256);
+        Assert.Equal("playlist.example-1", result.State.LastDispatchedOptionId);
+        Assert.Equal("com.example.installed", result.State.LastDispatchedOptionPackage);
         Assert.True(RustyKioskReadback.Confirms(
             RustyKioskCommand.SetLaunchRequirement,
             "wifi-on",
@@ -321,17 +377,74 @@ public sealed class RustyKioskIntegrationTests
             RustyKioskCommand.ShowApps,
             null,
             result with { Command = RustyKioskCommand.ShowControls }));
+        Assert.True(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.example-1",
+            result with { Command = RustyKioskCommand.LaunchOption }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.other",
+            result with { Command = RustyKioskCommand.LaunchOption }));
+        Assert.False(RustyKioskReadback.Confirms(
+            RustyKioskCommand.LaunchOption,
+            "playlist.example-1",
+            result with
+            {
+                Command = RustyKioskCommand.LaunchOption,
+                State = result.State with { LastDispatchedOptionPackage = "com.example.other" }
+            }));
     }
 
     [Fact]
-    public void OperatorResultRejectsUnknownAlpha7LaunchRequirement()
+    public void OperatorResultRejectsUnknownLaunchRequirement()
     {
-        var json = Alpha7ResultJson().Replace(
+        var json = LaunchOptionResultJson().Replace(
             "\"launch_requirement\": \"wifi-on\"",
             "\"launch_requirement\": \"bluetooth-on\"",
             StringComparison.Ordinal);
 
         Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(json));
+    }
+
+    [Fact]
+    public void OperatorResultRejectsMalformedOrDuplicateLaunchOptions()
+    {
+        var wrongSchema = LaunchOptionResultJson().Replace(
+            "\"schema_version\": 1",
+            "\"schema_version\": 2",
+            StringComparison.Ordinal);
+        var oversizedId = LaunchOptionResultJson().Replace(
+            "playlist.example-1",
+            new string('x', RustyKioskContract.MaxCommandValueLength + 1),
+            StringComparison.Ordinal);
+        var unknownStatus = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_status\": \"ready\"",
+            "\"selected_launch_options_status\": \"maybe\"",
+            StringComparison.Ordinal);
+        var mismatchedBinding = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_package\": \"com.example.installed\"",
+            "\"selected_launch_options_package\": \"com.example.other\"",
+            StringComparison.Ordinal);
+        var invalidBindingDigest = LaunchOptionResultJson().Replace(
+            "34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf",
+            new string('B', 64),
+            StringComparison.Ordinal);
+        var incompleteBinding = LaunchOptionResultJson().Replace(
+            "\"selected_launch_options_uid\": 10123",
+            "\"selected_launch_options_uid\": null",
+            StringComparison.Ordinal);
+        var duplicateNode = JsonNode.Parse(LaunchOptionResultJson())!;
+        var duplicateOptions = duplicateNode["state"]!["selected_launch_options"]!.AsArray();
+        duplicateOptions.Add(JsonNode.Parse(duplicateOptions[0]!.ToJsonString()));
+        var duplicate = duplicateNode.ToJsonString();
+
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(wrongSchema));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(oversizedId));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(unknownStatus));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(mismatchedBinding));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(invalidBindingDigest));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(incompleteBinding));
+        Assert.Throws<InvalidDataException>(() => RustyKioskOperatorResult.Parse(duplicate));
     }
     [Fact]
     public void OperatorResultPreservesCompleteCatalogIncludingNamedMissingApps()
@@ -724,7 +837,7 @@ public sealed class RustyKioskIntegrationTests
           "command": "{{command}}",
           "accepted": true,
           "completed": {{completed.ToString().ToLowerInvariant()}},
-          "message": "Complete",
+          "message": "Dispatched",
           "state": {
             "installed_count": 1,
             "not_installed_count": 1,
@@ -770,7 +883,7 @@ public sealed class RustyKioskIntegrationTests
         }
         """;
 
-    private static string Alpha7ResultJson() =>
+    private static string LaunchOptionResultJson() =>
         """
         {
           "schema": "rusty.kiosk.cli_result.v1",
@@ -819,7 +932,28 @@ public sealed class RustyKioskIntegrationTests
             "pending_requirement_launch_id": null,
             "passthrough_style": "contour-lut",
             "system_passthrough_enabled": true,
-            "passthrough_lut_applied": true
+            "passthrough_lut_applied": true,
+            "selected_launch_options_status": "ready",
+            "selected_launch_options_message": "One option is available.",
+            "selected_launch_options": [
+              {
+                "schema_version": 1,
+                "option_id": "playlist.example-1",
+                "display_label": "Example playlist",
+                "description": "Loop two profiles"
+              }
+            ],
+            "selected_launch_options_package": "com.example.installed",
+            "selected_launch_options_uid": 10123,
+            "selected_launch_options_signing_identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selected_launch_options_version_code": 7,
+            "selected_launch_options_last_update_time_ms": 1785700000000,
+            "selected_launch_options_provider_authority": "com.example.installed.app-launch-options",
+            "selected_launch_options_provider_class": "com.example.installed.LaunchOptionsProvider",
+            "selected_launch_options_owner_activity": "com.example.installed.MainActivity",
+            "selected_launch_options_binding_sha256": "34150cba691aeaa0865603729e672ed4e7cce2a94656c4eea38e18edbde1cbdf",
+            "last_dispatched_option_id": "playlist.example-1",
+            "last_dispatched_option_package": "com.example.installed"
           }
         }
         """;
