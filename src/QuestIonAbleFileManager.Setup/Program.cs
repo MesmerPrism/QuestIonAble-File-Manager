@@ -259,6 +259,9 @@ internal sealed class SetupStagingDirectory : IDisposable
 {
     private readonly string _expectedParent;
 
+    internal static Environment.SpecialFolder ProtectedRootFolder =>
+        Environment.SpecialFolder.ProgramFiles;
+
     private SetupStagingDirectory(
         string path,
         string expectedParent)
@@ -293,10 +296,7 @@ internal sealed class SetupStagingDirectory : IDisposable
         }
 
         var root = System.IO.Path.GetFullPath(
-            Environment.GetFolderPath(
-                DistributionIdentity.IsLabs
-                    ? Environment.SpecialFolder.LocalApplicationData
-                    : Environment.SpecialFolder.ProgramFiles));
+            Environment.GetFolderPath(ProtectedRootFolder));
         var vendorDirectory = System.IO.Path.Combine(
             root,
             "MesmerPrism");
@@ -308,26 +308,23 @@ internal sealed class SetupStagingDirectory : IDisposable
         var parentDirectory = System.IO.Path.Combine(
             productDirectory,
             "SetupStaging");
-        Directory.CreateDirectory(parentDirectory);
+        Directory.CreateDirectory(productDirectory);
         ValidatePathChain(
             root,
             vendorDirectory,
-            productDirectory,
-            parentDirectory);
+            productDirectory);
         var security = CreateProtectedSecurity();
-        new DirectoryInfo(parentDirectory).SetAccessControl(security);
-        ValidateProtectedSecurity(
-            new DirectoryInfo(parentDirectory).GetAccessControl(
-                AccessControlSections.Access | AccessControlSections.Owner));
+        CreateOrSecureProtectedDirectory(
+            parentDirectory,
+            security,
+            allowExisting: true);
         var path = System.IO.Path.Combine(
             parentDirectory,
             purpose + "-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        new DirectoryInfo(path).SetAccessControl(security);
-        RejectReparse(path);
-        ValidateProtectedSecurity(
-            new DirectoryInfo(path).GetAccessControl(
-                AccessControlSections.Access | AccessControlSections.Owner));
+        CreateOrSecureProtectedDirectory(
+            path,
+            security,
+            allowExisting: false);
         return new SetupStagingDirectory(path, parentDirectory);
     }
 
@@ -386,13 +383,15 @@ internal sealed class SetupStagingDirectory : IDisposable
         var system = new SecurityIdentifier(
             WellKnownSidType.LocalSystemSid,
             null);
-        if (!security.AreAccessRulesProtected ||
-            security.GetOwner(typeof(SecurityIdentifier))
+        if (!security.AreAccessRulesProtected)
+        {
+            throw InvalidProtectedSecurity("inheritance_enabled");
+        }
+        if (security.GetOwner(typeof(SecurityIdentifier))
                 is not SecurityIdentifier owner ||
             owner != administrators)
         {
-            throw new InvalidOperationException(
-                "The protected Setup staging ACL is invalid.");
+            throw InvalidProtectedSecurity("owner");
         }
         var expected = new HashSet<string>(
             [system.Value, administrators.Value],
@@ -403,20 +402,74 @@ internal sealed class SetupStagingDirectory : IDisposable
                 typeof(SecurityIdentifier))
             .Cast<FileSystemAccessRule>()
             .ToArray();
-        if (rules.Length != expected.Count ||
-            rules.Any(rule =>
-                rule.AccessControlType != AccessControlType.Allow ||
-                rule.FileSystemRights != FileSystemRights.FullControl ||
-                rule.InheritanceFlags !=
+        var rightsByPrincipal = expected.ToDictionary(
+            static sid => sid,
+            static _ => (FileSystemRights)0,
+            StringComparer.Ordinal);
+        foreach (var rule in rules)
+        {
+            var sid = rule.IdentityReference as SecurityIdentifier ??
+                throw InvalidProtectedSecurity("unexpected_principal");
+            if (!expected.Contains(sid.Value))
+            {
+                throw InvalidProtectedSecurity("unexpected_principal");
+            }
+            if (rule.AccessControlType != AccessControlType.Allow)
+            {
+                throw InvalidProtectedSecurity("non_allow_rule");
+            }
+            if (rule.InheritanceFlags !=
                     (InheritanceFlags.ContainerInherit |
                      InheritanceFlags.ObjectInherit) ||
-                rule.IdentityReference is not SecurityIdentifier sid ||
-                !expected.Contains(sid.Value)))
+                rule.PropagationFlags != PropagationFlags.None)
+            {
+                throw InvalidProtectedSecurity("inheritance_shape");
+            }
+            if ((rule.FileSystemRights & ~FileSystemRights.FullControl) != 0)
+            {
+                throw InvalidProtectedSecurity("rights_shape");
+            }
+
+            rightsByPrincipal[sid.Value] |= rule.FileSystemRights;
+        }
+        if (rightsByPrincipal.Any(static entry =>
+                entry.Value != FileSystemRights.FullControl))
         {
-            throw new InvalidOperationException(
-                "The protected Setup staging ACL is invalid.");
+            throw InvalidProtectedSecurity("required_full_control");
         }
     }
+
+    private static void CreateOrSecureProtectedDirectory(
+        string path,
+        DirectorySecurity security,
+        bool allowExisting)
+    {
+        var directory = new DirectoryInfo(path);
+        if (directory.Exists)
+        {
+            RejectReparse(path);
+            if (!allowExisting)
+            {
+                throw new InvalidOperationException(
+                    "The unpredictable Setup staging directory already exists.");
+            }
+            directory.SetAccessControl(security);
+        }
+        else
+        {
+            directory.Create(security);
+        }
+
+        directory.Refresh();
+        RejectReparse(path);
+        ValidateProtectedSecurity(directory.GetAccessControl(
+            AccessControlSections.Access | AccessControlSections.Owner));
+    }
+
+    private static InvalidOperationException InvalidProtectedSecurity(
+        string reason) =>
+        new(
+            $"The protected Setup staging ACL is invalid ({reason}).");
 
     private static void ValidatePathChain(
         string root,
