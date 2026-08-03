@@ -839,21 +839,61 @@ public sealed class FleetInstallerHandoffTests
             "WindowsPowerShell",
             "v1.0",
             "powershell.exe");
-        var stopwatch = Stopwatch.StartNew();
-        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
-            () => FleetInstallerProcessRunner.RunProcessAsync(
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "qfm-output-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var started = Path.Combine(root, "started.txt");
+        static string QuotePs(string value) =>
+            "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+        using var runCancellation = new CancellationTokenSource(
+            TimeSpan.FromSeconds(35));
+        var runTask = FleetInstallerProcessRunner.RunProcessAsync(
                 shell,
                 [
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "[Console]::Out.Write(('x' * 70000)); Start-Sleep -Seconds 30"
+                    $"[IO.File]::WriteAllText({QuotePs(started)}, 'started'); " +
+                    "[Console]::Out.Write(('x' * 70000)); Start-Sleep -Seconds 60"
                 ],
-                TimeSpan.FromSeconds(20),
+                TimeSpan.FromSeconds(30),
                 visible: false,
-                CancellationToken.None));
-        Assert.Equal("fleet_installer_output_oversized", exception.Code);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(8));
+                runCancellation.Token);
+        try
+        {
+            using var startupTimeout = new CancellationTokenSource(
+                TimeSpan.FromSeconds(25));
+            while (!File.Exists(started) && !runTask.IsCompleted)
+            {
+                await Task.Delay(25, startupTimeout.Token);
+            }
+            Assert.True(
+                File.Exists(started),
+                "The child process did not reach its output boundary probe.");
+
+            var stopwatch = Stopwatch.StartNew();
+            var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+                () => runTask);
+            Assert.Equal("fleet_installer_output_oversized", exception.Code);
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(8),
+                $"Oversized output took {stopwatch.Elapsed} to terminate after " +
+                "the child started writing.");
+        }
+        finally
+        {
+            runCancellation.Cancel();
+            try
+            {
+                await runTask;
+            }
+            catch
+            {
+                // The asserted output failure, timeout, or cancellation is expected here.
+            }
+            Directory.Delete(root, recursive: true);
+        }
 
         var cmd = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System),
