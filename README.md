@@ -120,6 +120,11 @@ helper requests administrator approval to trust the public package certificate
 and register the App Installer update feed. See the [release workflow](docs/release-workflow.md)
 for signature and Smart App Control limitations.
 
+Friends testing Rusty Kiosk Labs should use the exact
+[File Manager Labs `v0.5.0-alpha.7` onboarding](docs/labs-tester-onboarding.md).
+That prerelease embeds and validates Kiosk `v0.6.6-alpha.8`; the stable
+`releases/latest` installer remains on the stable product channel.
+
 Version `0.4.0` is the first release under the QuestIonAble File Manager name.
 It retains the signed Windows package identity and former release-asset aliases
 so existing `0.3.x` installations and pinned automation can update without
