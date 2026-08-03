@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj" />
+    <InternalsVisibleTo Include="QuestIonAbleFileManager.Setup.Tests" />
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>QuestIonAbleFileManager.ProductChannel</_Parameter1>
       <_Parameter2>$(QfmProductChannel)</_Parameter2>

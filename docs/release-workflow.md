@@ -14,10 +14,16 @@ prerelease with `--latest=false`.
 Labs uses identity `MesmerPrism.QuestIonAbleFileManager.Labs`, display name
 `QuestIonAble File Manager Labs`, and `QuestIonAbleFileManager-Labs-*` assets.
 Setup stages below
-`%LOCALAPPDATA%\MesmerPrism\QuestIonAbleFileManagerLabs\SetupStaging` and
+`%ProgramFiles%\MesmerPrism\QuestIonAbleFileManagerLabs\SetupStaging` and
 rejects Stable feed identity. Labs URLs use only exact-tag release paths;
 `latest/download` is rejected. Stable retains its existing identity, filenames,
 aliases, workflow, default behavior, and feed.
+
+Elevated Stable and Labs Setup create their per-run staging directory with its
+final protected descriptor instead of first exposing an inherited directory.
+ACL readback admits equivalent rule partitioning only when the effective set
+remains exactly SYSTEM and Administrators with inheritable full control; an
+additional principal, deny rule, or weaker effective right still fails closed.
 
 The protected `labs` environment supplies the exact Rusty Kiosk Labs tag,
 bundle-v2 manifest SHA-256, APK signer SHA-256, separate-coinstallable
