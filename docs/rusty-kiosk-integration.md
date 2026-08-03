@@ -179,7 +179,7 @@ manifest. QFM validates exact `product_channel`, `maturity`, and bounded
 `github-prerelease` for Labs). Labs requires pinned, mutually distinct,
 separate-coinstallable core and setup-helper identities plus exact Kiosk owner
 metadata. The separate Meta Store launcher package
-`io.github.mesmerprism.rustykiosk.launcher.labs` is not a GitHub bundle asset
+`io.github.mesmerprism.rustykiosk.launcher.labstore` is not a GitHub bundle asset
 and QFM does not hash or signer-bind it. Stable validation remains on the
 Stable axes. The release build rejects debug bundles and any
 axis, identity, version, source, byte-count, hash, source-pointer, or signer
