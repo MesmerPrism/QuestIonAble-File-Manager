@@ -767,7 +767,9 @@ public sealed partial class AdbClient
                 "Package must resolve to exactly one same-package launcher activity.");
         }
         var fullActivity = canonical[(canonical.IndexOf('/') + 1)..];
-        var shorthand = packageName + "/" + fullActivity[packageName.Length..];
+        var shorthand = fullActivity.StartsWith(packageName + ".", StringComparison.Ordinal)
+            ? packageName + "/" + fullActivity[packageName.Length..]
+            : canonical;
         return new ResolvedLauncherComponent(lines[0], canonical, shorthand);
     }
 
@@ -788,8 +790,7 @@ public sealed partial class AdbClient
         var fullActivity = activity.StartsWith(".", StringComparison.Ordinal)
             ? packageName + activity
             : activity;
-        if (!fullActivity.StartsWith(packageName + ".", StringComparison.Ordinal) ||
-            !Regex.IsMatch(
+        if (!Regex.IsMatch(
                 fullActivity,
                 @"^[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+$",
                 RegexOptions.CultureInvariant))

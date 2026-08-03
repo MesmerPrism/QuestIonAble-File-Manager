@@ -517,6 +517,34 @@ public sealed class InspectedDeploymentTests
         }
     }
 
+    [Fact]
+    public async Task Launch_AcceptsBoundLauncherClassOutsideApplicationIdNamespace()
+    {
+        var apk = await CreateApkAsync();
+        const string packageName = "com.example.app.debug";
+        const string activityName = "com.example.app.SpatialActivity";
+        var component = $"{packageName}/{activityName}";
+        var runner = CreateDeploymentRunner(
+            apk,
+            packageName: packageName,
+            activityName: activityName,
+            activities: $"topResumedActivity=ActivityRecord{{abc u0 {component} t1}}\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal(component, result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", component]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
     [Theory]
     [InlineData(
         "Activity Resolver Table:\n" +
