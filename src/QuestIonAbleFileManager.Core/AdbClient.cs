@@ -646,6 +646,7 @@ public sealed partial class AdbClient
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         var packageToken = artifact.Identity.PackageName + "/";
         var lines = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n');
+        var runtimeFacts = ParseActivityRuntimeFacts(lines);
         var pids = processes.Succeeded
             ? processes.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
                 .Select(value => int.TryParse(value, out var pid) ? pid : -1)
@@ -654,12 +655,77 @@ public sealed partial class AdbClient
         return new AppRuntimeObservation(
             artifact with { Path = reportedPath },
             installed,
-            lines.Any(line => line.Contains("mResumedActivity", StringComparison.Ordinal) &&
-                              line.Contains(packageToken, StringComparison.Ordinal)),
-            lines.Any(line => line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase) &&
-                              line.Contains(packageToken, StringComparison.Ordinal)),
-            pids);
+            runtimeFacts.ForegroundComponents.Any(component =>
+                component.StartsWith(packageToken, StringComparison.Ordinal)),
+            runtimeFacts.TopResumedComponents.Any(component =>
+                component.StartsWith(packageToken, StringComparison.Ordinal)),
+            pids)
+        {
+            ForegroundComponents = runtimeFacts.ForegroundComponents,
+            TopResumedComponents = runtimeFacts.TopResumedComponents,
+            BlockingSystemComponents = runtimeFacts.BlockingSystemComponents
+        };
     }
+
+    private static ActivityRuntimeFacts ParseActivityRuntimeFacts(IReadOnlyList<string> lines)
+    {
+        var foreground = new SortedSet<string>(StringComparer.Ordinal);
+        var topResumed = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var line in lines)
+        {
+            var isForeground = line.Contains("mResumedActivity", StringComparison.Ordinal);
+            var isTopResumed = line.Contains(
+                "topResumedActivity",
+                StringComparison.OrdinalIgnoreCase);
+            if ((!isForeground && !isTopResumed) ||
+                !TryReadRuntimeComponent(line, out var component))
+            {
+                continue;
+            }
+            if (isForeground)
+            {
+                foreground.Add(component);
+            }
+            if (isTopResumed)
+            {
+                topResumed.Add(component);
+            }
+        }
+
+        var blockers = foreground.Concat(topResumed)
+            .Where(IsKnownBlockingSystemComponent)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return new ActivityRuntimeFacts(
+            foreground.ToArray(),
+            topResumed.ToArray(),
+            blockers);
+    }
+
+    private static bool TryReadRuntimeComponent(string line, out string canonical)
+    {
+        canonical = string.Empty;
+        var match = Regex.Match(
+            line,
+            @"(?<package>[A-Za-z][A-Za-z0-9_.]*)/(?<activity>\.[A-Za-z0-9_.$]+|[A-Za-z][A-Za-z0-9_.$]*(?:\.[A-Za-z0-9_.$]+)*)",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+        var packageName = match.Groups["package"].Value;
+        var activity = match.Groups["activity"].Value;
+        var fullActivity = activity.StartsWith(".", StringComparison.Ordinal)
+            ? packageName + activity
+            : activity;
+        canonical = packageName + "/" + fullActivity;
+        return true;
+    }
+
+    private static bool IsKnownBlockingSystemComponent(string component) =>
+        component.EndsWith(".GuardianDialogActivity", StringComparison.Ordinal) ||
+        component.EndsWith(".SensorLockActivity", StringComparison.Ordinal);
 
     private static void RejectSplitArtifact(ApkArtifactInspection artifact)
     {
@@ -962,6 +1028,11 @@ public sealed partial class AdbClient
         string Wire,
         string Canonical,
         string Shorthand);
+
+    private sealed record ActivityRuntimeFacts(
+        IReadOnlyList<string> ForegroundComponents,
+        IReadOnlyList<string> TopResumedComponents,
+        IReadOnlyList<string> BlockingSystemComponents);
 
     private sealed record ActivityExportEvidence(bool? Exported, bool Alias, bool Malformed);
 

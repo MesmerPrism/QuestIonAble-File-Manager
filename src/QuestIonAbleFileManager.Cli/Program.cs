@@ -50,6 +50,11 @@ internal static class CliApplication
                 WriteJson(new
                 {
                     schema = "questionable.file_manager.operator_actions.v1",
+                    contracts = new
+                    {
+                        inspectedDeployment = "questionable.file_manager.inspected_deployment.v2",
+                        runtimeObservation = "questionable.file_manager.app_runtime_observation.v2"
+                    },
                     actions = OperatorActionRegistry.Actions
                 });
                 return 0;
@@ -1126,6 +1131,9 @@ internal static class CliApplication
                         Console.WriteLine($"Installed: {observation.Installed is not null}");
                         Console.WriteLine($"Foreground: {observation.IsForeground}");
                         Console.WriteLine($"Top resumed: {observation.IsTopResumed}");
+                        Console.WriteLine($"Foreground components: {string.Join(", ", observation.ForegroundComponents)}");
+                        Console.WriteLine($"Top-resumed components: {string.Join(", ", observation.TopResumedComponents)}");
+                        Console.WriteLine($"Blocking system components: {string.Join(", ", observation.BlockingSystemComponents)}");
                         Console.WriteLine($"Processes: {string.Join(", ", observation.ProcessIds)}");
                     }
                     return 0;

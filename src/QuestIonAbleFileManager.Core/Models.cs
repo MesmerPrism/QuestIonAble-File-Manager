@@ -115,7 +115,19 @@ public sealed record AppRuntimeObservation(
     InstalledApkIdentity? Installed,
     bool IsForeground,
     bool IsTopResumed,
-    IReadOnlyList<int> ProcessIds);
+    IReadOnlyList<int> ProcessIds)
+{
+    public string ObservationContract { get; init; } =
+        "questionable.file_manager.app_runtime_observation.v2";
+
+    public IReadOnlyList<string> ForegroundComponents { get; init; } = [];
+
+    public IReadOnlyList<string> TopResumedComponents { get; init; } = [];
+
+    public IReadOnlyList<string> BlockingSystemComponents { get; init; } = [];
+
+    public bool ProcessAlive => ProcessIds.Count > 0;
+}
 
 public sealed record ApkExportResult(
     string PackageName,

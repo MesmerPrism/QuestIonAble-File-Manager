@@ -43,10 +43,19 @@ whether fixed-component dispatch was attempted; they do not mirror command
 output to standard error or claim successful dispatch after `am start` fails.
 
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
-installed package and byte facts, foreground/top-resumed flags, and package
-process IDs from fixed serial-scoped probes. Identity, digest, and size must
-match before runtime probes execute. It does not claim OpenXR state or
+installed package and byte facts, foreground/top-resumed flags, exact observed
+foreground and top-resumed component sets, known blocking Quest system
+components, and package process IDs from fixed serial-scoped probes. The
+component sets are independent facts: an immersive app can be top-resumed and
+alive without appearing in the legacy foreground projection, while Guardian or
+sensor-lock UI is simultaneously visible. Consumers choose their own 2D or XR
+acceptance policy; File Manager does not infer OpenXR readiness. Identity,
+digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings.
+
+`operator-actions --json` advertises the inspected-deployment and runtime-
+observation contract revisions without selecting a device or performing a
+mutation. Provider resolvers can require those revisions before a run.
 
 This slice requires Android Platform Tools and Android SDK Build Tools. It is
 single-device and single-base-APK only. Split-set inspected deployment and
