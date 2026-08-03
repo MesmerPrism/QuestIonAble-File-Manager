@@ -725,7 +725,8 @@ public sealed partial class AdbClient
 
     private static bool IsKnownBlockingSystemComponent(string component) =>
         component.EndsWith(".GuardianDialogActivity", StringComparison.Ordinal) ||
-        component.EndsWith(".SensorLockActivity", StringComparison.Ordinal);
+        component.EndsWith(".SensorLockActivity", StringComparison.Ordinal) ||
+        component.EndsWith(".LaunchCheckControllerRequiredDialogActivity", StringComparison.Ordinal);
 
     private static void RejectSplitArtifact(ApkArtifactInspection artifact)
     {

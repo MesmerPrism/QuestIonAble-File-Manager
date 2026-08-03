@@ -822,7 +822,8 @@ public sealed class InspectedDeploymentTests
         var runner = CreateDeploymentRunner(apk, activities:
             "mResumedActivity: ActivityRecord{1 com.oculus.systemux/.guardian.GuardianDialogActivity}\n" +
             "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n" +
-            "topResumedActivity=ActivityRecord{3 com.oculus.systemux/.sensor.SensorLockActivity}\n");
+            "topResumedActivity=ActivityRecord{3 com.oculus.systemux/.sensor.SensorLockActivity}\n" +
+            "topResumedActivity=ActivityRecord{4 com.oculus.vrshell/.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity}\n");
         try
         {
             var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
@@ -836,13 +837,15 @@ public sealed class InspectedDeploymentTests
             Assert.Equal(
                 [
                     "com.example.app/com.example.app.Main",
-                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity"
+                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity",
+                    "com.oculus.vrshell/com.oculus.vrshell.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity"
                 ],
                 result.TopResumedComponents);
             Assert.Equal(
                 [
                     "com.oculus.systemux/com.oculus.systemux.guardian.GuardianDialogActivity",
-                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity"
+                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity",
+                    "com.oculus.vrshell/com.oculus.vrshell.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity"
                 ],
                 result.BlockingSystemComponents);
             Assert.True(result.ProcessAlive);
