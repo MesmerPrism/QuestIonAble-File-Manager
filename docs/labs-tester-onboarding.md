@@ -2,12 +2,12 @@
 
 QuestIonAble File Manager Labs is the guided Windows setup route for the
 co-installable Rusty Kiosk Labs preview. The current tested pair is File Manager
-`v0.5.0-alpha.9` and Kiosk `v0.6.6-alpha.9`.
+`v0.5.0-alpha.10` and Kiosk `v0.6.6-alpha.9`.
 
 ## Exact public links
 
-- [Guided File Manager Labs setup](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/v0.5.0-alpha.9/QuestIonAbleFileManager-Labs-Setup.exe)
-- [Complete File Manager Labs release](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/tag/v0.5.0-alpha.9)
+- [Guided File Manager Labs setup](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/v0.5.0-alpha.10/QuestIonAbleFileManager-Labs-Setup.exe)
+- [Complete File Manager Labs release](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/tag/v0.5.0-alpha.10)
 - [Rusty Kiosk Labs tester guide](https://mesmerprism.com/Rusty-Kiosk/#labs)
 - [Meta Alpha invite](https://www.meta.com/s/4SlXf1lVo)
 - [Exact Kiosk Labs release](https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/v0.6.6-alpha.9)
