@@ -2,12 +2,12 @@
 
 QuestIonAble File Manager Labs is the guided Windows setup route for the
 co-installable Rusty Kiosk Labs preview. The exact immutable pair documented
-here is File Manager `v0.5.0-alpha.12` and Kiosk `v0.6.6-alpha.9`.
+here is File Manager `v0.5.0-alpha.13` and Kiosk `v0.6.6-alpha.9`.
 
 ## Exact public links
 
-- [Guided File Manager Labs setup](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/v0.5.0-alpha.12/QuestIonAbleFileManager-Labs-Setup.exe)
-- [Complete File Manager Labs release](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/tag/v0.5.0-alpha.12)
+- [Guided File Manager Labs setup](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/download/v0.5.0-alpha.13/QuestIonAbleFileManager-Labs-Setup.exe)
+- [Complete File Manager Labs release](https://github.com/MesmerPrism/QuestIonAble-File-Manager/releases/tag/v0.5.0-alpha.13)
 - [Rusty Kiosk Labs tester guide](https://mesmerprism.com/Rusty-Kiosk/#labs)
 - [Meta Alpha invite](https://www.meta.com/s/4SlXf1lVo)
 - [Exact Kiosk Labs release](https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/v0.6.6-alpha.9)
@@ -20,7 +20,10 @@ the repository's `latest` stable download.
 ## First setup
 
 1. Install current
-   [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools).
+   [Android SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools)
+   plus Android SDK Build Tools (`aapt2` and `apksigner`). Alpha.13 verifies
+   both immutable staged Kiosk APKs with those Build Tools before its first
+   headset install command.
 2. Run the guided Labs setup. It explains the project certificate before
    asking Windows to trust it and register the signed Labs app.
 3. Enable Developer Mode on the Quest, connect it by USB, put on the headset,
@@ -29,7 +32,9 @@ the repository's `latest` stable download.
    **Rusty Kiosk**.
 5. Confirm the **Labs** channel and select
    **Install and provision (USB)**. The installer embeds the exact signed
-   Kiosk Alpha.9 core and same-signer setup helper.
+   Kiosk Alpha.9 core and same-signer setup helper. Alpha.13 binds install,
+   provisioning, permission readback, and the typed provider to that selected
+   Labs identity without falling back to Stable.
 6. Follow the [Kiosk Labs tester guide](https://mesmerprism.com/Rusty-Kiosk/#labs)
    for on-headset setup, the Meta Alpha launcher, and the test checklist.
 7. For the optional advanced Fleet preview, open **Get Fleet**, refresh the
@@ -42,6 +47,25 @@ the repository's `latest` stable download.
 The Kiosk core and Meta launcher are deliberately separate. The Meta launcher
 can open a trusted installed Kiosk core, but cannot install, update, provision,
 or manage it.
+
+## Alpha.12 setup issue
+
+Do not use File Manager Labs `v0.5.0-alpha.12` to install or provision Kiosk
+Labs. That build bundled the correct Labs APKs but its two USB setup buttons
+incorrectly checked and granted the Stable helper identity, producing the
+message that the helper grant, same-signer control, or typed host operator did
+not verify. Other channel-aware Kiosk status, command, tag, and playlist routes
+were unaffected. The supported workaround is to update File Manager Labs to
+Alpha.13 and repeat **Install and provision (USB)** with **Labs** selected;
+Android retains the already-installed Labs app data across the replacement
+install. Do not switch to Stable as a fallback for a Labs bundle.
+
+Alpha.13 also makes the CLI channel choice explicit: existing automation must
+add `--product-channel stable` or `--product-channel labs` to `kiosk install`
+and `kiosk provision`. Omitting, duplicating, or misspelling that option now
+rejects before any headset command instead of assuming Stable. The Core API
+keeps Stable as its backward-compatible default for callers that construct a
+typed command directly.
 
 ## Optional Connection Hub preview
 

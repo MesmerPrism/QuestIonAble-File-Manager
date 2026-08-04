@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
 
@@ -563,8 +564,96 @@ public sealed record RustyKioskOperatorResult(
 public sealed record RustyKioskBundle(
     string MainApkPath,
     string SetupHelperApkPath,
-    string Source)
+    string Source,
+    RustyKioskProductContract? DeclaredProduct = null,
+    RustyKioskBundleApkCommitment? MainCommitment = null,
+    RustyKioskBundleApkCommitment? SetupHelperCommitment = null,
+    string? DeclaredSignerSha256 = null)
 {
+    private const int MaximumManifestBytes = 512 * 1024;
+    private const int MaximumManifestFiles = 64;
+
+    public void ValidateProductSelection(RustyKioskProductContract product)
+    {
+        product = RustyKioskProductContract.RequireKnown(product);
+        if (DeclaredProduct is not null &&
+            RustyKioskProductContract.RequireKnown(DeclaredProduct) != product)
+        {
+            throw new InvalidDataException(
+                "The Rusty Kiosk bundle product channel does not match the selected setup channel.");
+        }
+        if (product.Channel == RustyKioskProductChannel.Labs &&
+            (MainCommitment is null ||
+             SetupHelperCommitment is null ||
+             !string.Equals(
+                 DeclaredSignerSha256,
+                 product.TrustedSignerSha256,
+                 StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "A Labs Kiosk bundle requires exact package, byte, SHA-256, and same-signer release commitments.");
+        }
+        if (DeclaredSignerSha256 is not null &&
+            !string.Equals(
+                DeclaredSignerSha256,
+                product.TrustedSignerSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The Rusty Kiosk bundle signer commitment does not match the fixed product trust pin.");
+        }
+        if (MainCommitment is not null &&
+            (!string.Equals(MainCommitment.PackageName, product.MainPackage, StringComparison.Ordinal) ||
+             !string.Equals(SetupHelperCommitment?.PackageName, product.SetupHelperPackage, StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "The Rusty Kiosk bundle APK package commitments do not match the selected setup channel.");
+        }
+    }
+
+    internal RustyKioskBundleAdmission AcquireAdmission(
+        RustyKioskProductContract product,
+        ApkArtifactInspection mainArtifact,
+        ApkArtifactInspection helperArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(mainArtifact);
+        ArgumentNullException.ThrowIfNull(helperArtifact);
+        product = RustyKioskProductContract.RequireKnown(product);
+        ValidateProductSelection(product);
+        if (MainCommitment is not null)
+        {
+            VerifyCommitment(mainArtifact, MainCommitment);
+        }
+        if (SetupHelperCommitment is not null)
+        {
+            VerifyCommitment(helperArtifact, SetupHelperCommitment);
+        }
+        if (!string.Equals(mainArtifact.Identity.PackageName, product.MainPackage, StringComparison.Ordinal) ||
+            !string.Equals(helperArtifact.Identity.PackageName, product.SetupHelperPackage, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The verified Kiosk APK package identities do not match the selected setup channel.");
+        }
+        if (!string.Equals(
+                mainArtifact.Identity.SignerSha256,
+                helperArtifact.Identity.SignerSha256,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                mainArtifact.Identity.SignerSha256,
+                product.TrustedSignerSha256,
+                StringComparison.Ordinal) ||
+            (DeclaredSignerSha256 is not null &&
+             !string.Equals(
+                 mainArtifact.Identity.SignerSha256,
+                 DeclaredSignerSha256,
+                 StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "The verified Kiosk APK signers do not match each other, the fixed product pin, and the release commitment.");
+        }
+        return new RustyKioskBundleAdmission(mainArtifact.Path, helperArtifact.Path);
+    }
+
     public static RustyKioskBundle FromDirectory(string directoryPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
@@ -582,9 +671,182 @@ public sealed record RustyKioskBundle(
                 $"The bundle must contain {RustyKioskContract.MainApkFileName} and {RustyKioskContract.SetupHelperApkFileName}.");
         }
 
-        return new RustyKioskBundle(main, helper, directory);
+        var manifestPath = Path.Combine(directory, "bundle-manifest.json");
+        RustyKioskProductContract? declaredProduct = null;
+        RustyKioskBundleApkCommitment? mainCommitment = null;
+        RustyKioskBundleApkCommitment? helperCommitment = null;
+        string? signerSha256 = null;
+        if (File.Exists(manifestPath))
+        {
+            try
+            {
+                byte[] manifestBytes;
+                using (var input = new FileStream(
+                           manifestPath,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.Read,
+                           64 * 1024,
+                           FileOptions.SequentialScan))
+                {
+                    if (input.Length is < 2 or > MaximumManifestBytes)
+                    {
+                        throw new InvalidDataException(
+                            $"The Rusty Kiosk bundle manifest must be 2..{MaximumManifestBytes} bytes.");
+                    }
+                    manifestBytes = new byte[checked((int)input.Length)];
+                    input.ReadExactly(manifestBytes);
+                    if (input.ReadByte() != -1)
+                    {
+                        throw new InvalidDataException(
+                            "The Rusty Kiosk bundle manifest changed while it was admitted.");
+                    }
+                }
+                using var manifest = JsonDocument.Parse(manifestBytes, new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow,
+                    MaxDepth = 32
+                });
+                if (manifest.RootElement.ValueKind != JsonValueKind.Object ||
+                    !manifest.RootElement.TryGetProperty("product_channel", out var channel) ||
+                    channel.ValueKind != JsonValueKind.String)
+                {
+                    throw new InvalidDataException(
+                        "The Rusty Kiosk bundle manifest must declare product_channel as stable or labs.");
+                }
+                declaredProduct = RustyKioskProductContract.Parse(channel.GetString()!);
+                if (!manifest.RootElement.TryGetProperty("schema", out var schema) ||
+                    schema.ValueKind != JsonValueKind.String ||
+                    !string.Equals(
+                        schema.GetString(),
+                        "meta.quest.file_manager.rusty_kiosk_bundle.v2",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "The Rusty Kiosk bundle manifest does not use the supported v2 schema.");
+                }
+                signerSha256 = manifest.RootElement.TryGetProperty("signer_sha256", out var signer) &&
+                    signer.ValueKind == JsonValueKind.String
+                        ? signer.GetString()
+                        : null;
+                if (manifest.RootElement.TryGetProperty("files", out var files) &&
+                    files.ValueKind == JsonValueKind.Array)
+                {
+                    if (files.GetArrayLength() > MaximumManifestFiles)
+                    {
+                        throw new InvalidDataException(
+                            $"The Rusty Kiosk bundle manifest may contain at most {MaximumManifestFiles} file rows.");
+                    }
+                    if (IsLowerSha256(signerSha256))
+                    {
+                        mainCommitment = ParseApkCommitment(
+                            files,
+                            RustyKioskContract.MainApkFileName,
+                            declaredProduct.MainPackage,
+                            requireDeclaredPackage: declaredProduct.Channel == RustyKioskProductChannel.Labs);
+                        helperCommitment = ParseApkCommitment(
+                            files,
+                            RustyKioskContract.SetupHelperApkFileName,
+                            declaredProduct.SetupHelperPackage,
+                            requireDeclaredPackage: declaredProduct.Channel == RustyKioskProductChannel.Labs);
+                    }
+                }
+                if (declaredProduct.Channel == RustyKioskProductChannel.Labs &&
+                    (mainCommitment is null || helperCommitment is null || !IsLowerSha256(signerSha256)))
+                {
+                    throw new InvalidDataException(
+                        "The Labs Kiosk bundle manifest is missing exact APK package, byte, SHA-256, or signer commitments.");
+                }
+            }
+            catch (Exception exception) when (exception is JsonException or ArgumentException)
+            {
+                throw new InvalidDataException(
+                    "The Rusty Kiosk bundle manifest has an invalid product_channel declaration.",
+                    exception);
+            }
+        }
+
+        return new RustyKioskBundle(
+            main,
+            helper,
+            directory,
+            declaredProduct,
+            mainCommitment,
+            helperCommitment,
+            signerSha256);
     }
+
+    private static RustyKioskBundleApkCommitment? ParseApkCommitment(
+        JsonElement files,
+        string expectedName,
+        string expectedPackage,
+        bool requireDeclaredPackage)
+    {
+        var matches = files.EnumerateArray()
+            .Where(static file => file.ValueKind == JsonValueKind.Object)
+            .Where(file => file.TryGetProperty("name", out var name) &&
+                           name.ValueKind == JsonValueKind.String &&
+                           string.Equals(name.GetString(), expectedName, StringComparison.Ordinal))
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            return null;
+        }
+        var entry = matches[0];
+        var packageName = entry.TryGetProperty("package_name", out var package) &&
+            package.ValueKind == JsonValueKind.String
+                ? package.GetString()
+                : null;
+        if ((requireDeclaredPackage &&
+             !string.Equals(packageName, expectedPackage, StringComparison.Ordinal)) ||
+            !entry.TryGetProperty("sha256", out var sha) ||
+            sha.ValueKind != JsonValueKind.String ||
+            !IsLowerSha256(sha.GetString()) ||
+            !entry.TryGetProperty("bytes", out var bytes) ||
+            bytes.ValueKind != JsonValueKind.Number ||
+            !bytes.TryGetInt64(out var length) ||
+            length <= 0)
+        {
+            return null;
+        }
+        return new RustyKioskBundleApkCommitment(
+            packageName ?? expectedPackage,
+            sha.GetString()!,
+            length);
+    }
+
+    private static void VerifyCommitment(
+        ApkArtifactInspection artifact,
+        RustyKioskBundleApkCommitment commitment)
+    {
+        if (artifact.SizeBytes != commitment.SizeBytes)
+        {
+            throw new InvalidDataException(
+                "A Rusty Kiosk APK byte count does not match its release commitment.");
+        }
+        if (!string.Equals(artifact.Sha256, commitment.Sha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "A Rusty Kiosk APK SHA-256 does not match its release commitment.");
+        }
+    }
+
+    private static bool IsLowerSha256(string? value) =>
+        value is not null && Regex.IsMatch(
+            value,
+            "^[0-9a-f]{64}$",
+            RegexOptions.CultureInvariant);
 }
+
+public sealed record RustyKioskBundleApkCommitment(
+    string PackageName,
+    string Sha256,
+    long SizeBytes);
+
+internal sealed record RustyKioskBundleAdmission(
+    string MainApkPath,
+    string SetupHelperApkPath);
 
 public static class RustyKioskBundleLocator
 {
@@ -613,9 +875,20 @@ public static class RustyKioskBundleLocator
 
         return null;
     }
+
+    public static RustyKioskBundle ResolveRequiredForSetup(string? explicitDirectory = null)
+    {
+        if (explicitDirectory is not null)
+        {
+            return RustyKioskBundle.FromDirectory(explicitDirectory);
+        }
+        return TryFind() ?? throw new FileNotFoundException(
+            "No bundled Rusty Kiosk APK set was found. Pass --bundle <folder> or stage the release kiosk folder.");
+    }
 }
 
 public sealed record RustyKioskInstallResult(
+    RustyKioskProductContract Product,
     RustyKioskBundle Bundle,
     CommandResult HelperInstall,
     CommandResult SettingsGrant,
@@ -624,6 +897,7 @@ public sealed record RustyKioskInstallResult(
     bool SameSignerControlGranted);
 
 public sealed record RustyKioskProvisionResult(
+    RustyKioskProductContract Product,
     CommandResult SettingsGrant,
     bool HelperReady,
     bool SameSignerControlGranted,
@@ -654,6 +928,8 @@ public sealed record RustyKioskProductContract(
     string SetupControlPermission,
     string SetupHelperControlAction)
 {
+    public string TrustedSignerSha256 => RustyKioskContract.TrustedSignerSha256;
+
     public string OperatorUri => "content://" + OperatorAuthority;
 
     public string MainActivity => MainPackage + "/" + MainActivityClass;
@@ -710,6 +986,8 @@ public sealed record RustyKioskProductContract(
 
 public static class RustyKioskContract
 {
+    public const string TrustedSignerSha256 =
+        "423d20004c79dd140c692e31aa80369cd3677b1ae2688dbd75011a4c83a0f1fb";
     public const string AppLaunchOptionsSchema = "rusty.quest.app_launch_options.v1";
     public const string MainPackage = "io.github.mesmerprism.rustykiosk";
     public const string SetupHelperPackage = "io.github.mesmerprism.rustykiosk.setuphelper";

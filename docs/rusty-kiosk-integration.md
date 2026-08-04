@@ -9,12 +9,23 @@ when the bundle is absent or Kiosk is never installed.
 
 1. Enable Quest Developer Mode through Meta's supported account/device flow.
 2. Connect the headset over USB-C and approve this computer's ADB key in-headset.
-3. Open the Rusty Kiosk tab and choose **Install and provision (USB)**.
+3. Open the Rusty Kiosk tab, select the exact installed `stable` or `labs`
+   product channel, and choose **Install and provision (USB)**. An official
+   bundled release preselects the channel declared by its verified bundle
+   manifest. Before the first ADB mutation, Labs setup requires exact selected
+   main/helper package commitments, one common signer commitment, and matching
+   byte counts/SHA-256 values. File Manager first copies both inputs through
+   its non-reparse, single-link immutable APK admission boundary, then uses
+   Android SDK Build Tools (`aapt2` and `apksigner`) on those staged bytes to
+   verify the selected channel's exact package pair, APK signatures, and fixed
+   signer pin. ADB receives only those same staged paths. A mismatched, mixed,
+   cross-signed, changed, or cryptographically invalid bundle fails without
+   trying the Stable identity as a fallback.
 4. The file manager installs the same-signer setup helper, grants only that
    helper `WRITE_SECURE_SETTINGS`, installs Kiosk, and reads back both package
    and permission states.
-5. In the Windows Kiosk tab, select the installed `stable` or `labs` Kiosk
-   channel and choose **Connect using authorized USB**. File Manager verifies
+5. In the Windows Kiosk tab, keep the installed `stable` or `labs` Kiosk
+   channel selected and choose **Connect using authorized USB**. File Manager verifies
    the exact classic-USB serial, installed package/UID, and channel-bound host
    v4 provider before accepting one ephemeral session. Manual fallback uses the
    address and masked credential shown in the headset panel. Routine Kiosk
@@ -168,6 +179,25 @@ state, same-signer permission readback, remote file size, refreshed package
 inventory, the exact connected ADB endpoint, Quest power state, and Oculus
 CPU/GPU properties. A displayed Meta permission prompt is never itself treated
 as enabled state.
+
+## Published-Bundle Admission Gate
+
+The focused test can run against the extracted public File Manager Labs
+Alpha.12 `kiosk` folder without contacting a headset. It copies the two public
+Kiosk Alpha.9 APKs into the immutable admission root, runs real `aapt2` and
+`apksigner` verification there, checks their published hashes, fixed packages,
+and signer pin, and proves that only the staged paths are admitted:
+
+```powershell
+$env:QFM_KIOSK_RELEASE_FIXTURE_DIR = '<extracted-file-manager-release>\kiosk'
+dotnet test tests/QuestIonAbleFileManager.Core.Tests `
+  --configuration Release `
+  --filter 'FullyQualifiedName~ReleaseKioskBundleCryptographicAdmissionMatchesPinnedIdentityWhenConfigured'
+```
+
+The protected Labs release workflow sets this fixture path to its exact
+downloaded owner bundle and treats the gate as mandatory before building or
+publishing Windows artifacts.
 
 ## Distribution
 

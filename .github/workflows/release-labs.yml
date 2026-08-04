@@ -125,6 +125,18 @@ jobs:
           "version=$($env:KIOSK_TAG.Substring(1))" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "revision=$revision" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
+      - name: Cryptographically admit exact Kiosk release bundle
+        shell: pwsh
+        env:
+          QFM_KIOSK_RELEASE_FIXTURE_DIR: ${{ github.workspace }}\artifacts\kiosk-bundle
+        run: |
+          dotnet test tests/QuestIonAbleFileManager.Core.Tests `
+            --configuration Release `
+            --filter 'FullyQualifiedName~ReleaseKioskBundleCryptographicAdmissionMatchesPinnedIdentityWhenConfigured'
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The exact Kiosk release bundle failed immutable package/signature admission.'
+          }
+
       - name: Build and validate complete Labs product
         shell: pwsh
         env:

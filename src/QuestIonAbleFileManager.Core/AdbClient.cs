@@ -1397,14 +1397,29 @@ public sealed partial class AdbClient
         string serial,
         RustyKioskBundle bundle,
         CancellationToken cancellationToken = default,
-        IProgress<OperatorProgress>? progress = null)
+        IProgress<OperatorProgress>? progress = null,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
         ArgumentNullException.ThrowIfNull(bundle);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
+        bundle.ValidateProductSelection(product);
+        using var immutable = await ImmutableApkAdmission.CreateManyAsync(
+            [bundle.MainApkPath, bundle.SetupHelperApkPath],
+            cancellationToken).ConfigureAwait(false);
+        var inspector = CreateApkInspector();
+        var mainArtifact = await inspector.InspectAsync(
+            immutable.Paths[0],
+            cancellationToken).ConfigureAwait(false);
+        var helperArtifact = await inspector.InspectAsync(
+            immutable.Paths[1],
+            cancellationToken).ConfigureAwait(false);
+        var admission = bundle.AcquireAdmission(product, mainArtifact, helperArtifact);
         progress?.Report(new OperatorProgress("kiosk-helper-install", "Installing Rusty Kiosk Setup…", 0, 4));
         var helperInstall = await InstallApkAsync(
             serial,
-            bundle.SetupHelperApkPath,
+            admission.SetupHelperApkPath,
             new ApkInstallOptions(ReplaceExisting: true, AllowDowngrade: true),
             cancellationToken).ConfigureAwait(false);
         progress?.Report(new OperatorProgress("kiosk-helper-grant", "Provisioning the fixed setup helper…", 1, 4));
@@ -1412,7 +1427,7 @@ public sealed partial class AdbClient
             serial,
             [
                 "shell", "pm", "grant",
-                RustyKioskContract.SetupHelperPackage,
+                product.SetupHelperPackage,
                 RustyKioskContract.WriteSecureSettingsPermission
             ],
             InspectionTimeout,
@@ -1421,11 +1436,12 @@ public sealed partial class AdbClient
         progress?.Report(new OperatorProgress("kiosk-main-install", "Installing Rusty Kiosk…", 2, 4));
         var mainInstall = await InstallApkAsync(
             serial,
-            bundle.MainApkPath,
+            admission.MainApkPath,
             new ApkInstallOptions(ReplaceExisting: true, AllowDowngrade: true),
             cancellationToken).ConfigureAwait(false);
         progress?.Report(new OperatorProgress("kiosk-verify", "Verifying Rusty Kiosk setup authority…", 3, 4));
-        var status = await GetRustyKioskInstallationStatusAsync(serial, cancellationToken).ConfigureAwait(false);
+        var status = await GetRustyKioskInstallationStatusAsync(serial, product, cancellationToken)
+            .ConfigureAwait(false);
         if (!status.SetupHelperReady || !status.SameSignerControlGranted || !status.HostOperatorAvailable)
         {
             throw new InvalidOperationException(
@@ -1434,6 +1450,7 @@ public sealed partial class AdbClient
 
         progress?.Report(new OperatorProgress("kiosk-ready", "Rusty Kiosk is installed and provisioned.", 4, 4));
         return new RustyKioskInstallResult(
+            product,
             bundle,
             helperInstall,
             settingsGrant,
@@ -1444,10 +1461,14 @@ public sealed partial class AdbClient
 
     public async Task<RustyKioskProvisionResult> ProvisionRustyKioskAsync(
         string serial,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        RustyKioskProductContract? product = null)
     {
         serial = AndroidInput.RequireSerial(serial);
-        var before = await GetRustyKioskInstallationStatusAsync(serial, cancellationToken).ConfigureAwait(false);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
+        var before = await GetRustyKioskInstallationStatusAsync(serial, product, cancellationToken)
+            .ConfigureAwait(false);
         if (!before.SetupHelperInstalled || !before.MainInstalled)
         {
             throw new InvalidOperationException("Install both Rusty Kiosk APKs before provisioning the setup helper.");
@@ -1457,19 +1478,24 @@ public sealed partial class AdbClient
             serial,
             [
                 "shell", "pm", "grant",
-                RustyKioskContract.SetupHelperPackage,
+                product.SetupHelperPackage,
                 RustyKioskContract.WriteSecureSettingsPermission
             ],
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         grant.EnsureSuccess("Provision Rusty Kiosk Setup");
-        var status = await GetRustyKioskInstallationStatusAsync(serial, cancellationToken).ConfigureAwait(false);
-        if (!status.SetupHelperReady || !status.SameSignerControlGranted)
+        var status = await GetRustyKioskInstallationStatusAsync(serial, product, cancellationToken)
+            .ConfigureAwait(false);
+        if (!status.SetupHelperReady ||
+            !status.SameSignerControlGranted ||
+            !status.HostOperatorAvailable)
         {
-            throw new InvalidOperationException("Rusty Kiosk Setup authority did not read back as ready.");
+            throw new InvalidOperationException(
+                "Rusty Kiosk Setup authority or typed host operator did not read back as ready.");
         }
 
         return new RustyKioskProvisionResult(
+            product,
             grant,
             status.SetupHelperReady,
             status.SameSignerControlGranted,

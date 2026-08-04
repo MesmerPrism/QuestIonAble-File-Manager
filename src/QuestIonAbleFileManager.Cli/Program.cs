@@ -1387,8 +1387,10 @@ internal static class CliApplication
     {
         var action = RequireAction(arguments, "kiosk");
         var serial = RequireOption(arguments, "--serial");
-        var product = RustyKioskProductContract.Parse(
-            GetOption(arguments, "--product-channel") ?? "stable");
+        var product = action is "install" or "provision"
+            ? OperatorCommands.ParseRequiredKioskSetupProductChannel(arguments)
+            : RustyKioskProductContract.Parse(
+                GetOption(arguments, "--product-channel") ?? "stable");
         switch (action)
         {
             case "status":
@@ -1426,11 +1428,13 @@ internal static class CliApplication
                 {
                     RequireConfirmation(arguments, "--confirm-kiosk-setup", "Rusty Kiosk installation and USB setup");
                     var bundleDirectory = GetOption(arguments, "--bundle");
-                    var bundle = RustyKioskBundleLocator.TryFind(bundleDirectory) ??
-                        throw new FileNotFoundException(
-                            "No bundled Rusty Kiosk APK set was found. Pass --bundle <folder> or stage the release kiosk folder.");
+                    var bundle = RustyKioskBundleLocator.ResolveRequiredForSetup(bundleDirectory);
                     var execution = await executor.ExecuteAsync(
-                        OperatorCommands.InstallRustyKiosk(serial, bundle, operatorConfirmed: true));
+                        OperatorCommands.InstallRustyKiosk(
+                            serial,
+                            bundle,
+                            operatorConfirmed: true,
+                            product: product));
                     if (HasFlag(arguments, "--json"))
                     {
                         WriteJson(new
@@ -1453,7 +1457,10 @@ internal static class CliApplication
                 {
                     RequireConfirmation(arguments, "--confirm-kiosk-setup", "Rusty Kiosk USB setup");
                     var execution = await executor.ExecuteAsync(
-                        OperatorCommands.ProvisionRustyKiosk(serial, operatorConfirmed: true));
+                        OperatorCommands.ProvisionRustyKiosk(
+                            serial,
+                            operatorConfirmed: true,
+                            product: product));
                     if (HasFlag(arguments, "--json"))
                     {
                         WriteJson(new
@@ -1841,8 +1848,8 @@ internal static class CliApplication
               questionable-file-manager wifi connect --host <quest-ip> [--port 5555] --confirm-wifi-adb
               questionable-file-manager wifi disconnect --host <quest-ip> [--port 5555] --confirm-wifi-adb
               questionable-file-manager kiosk status --serial <serial> [--product-channel <stable|labs>] [--json]
-              questionable-file-manager kiosk install --serial <usb-serial> [--bundle <folder>] --confirm-kiosk-setup
-              questionable-file-manager kiosk provision --serial <usb-serial> --confirm-kiosk-setup
+              questionable-file-manager kiosk install --serial <usb-serial> --product-channel <stable|labs> [--bundle <folder>] --confirm-kiosk-setup
+              questionable-file-manager kiosk provision --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-setup
               questionable-file-manager kiosk command --serial <serial> [--product-channel <stable|labs>] --command <typed-command> [--value <text>] [--confirm-kiosk-control] [--json]
               questionable-file-manager kiosk tags export --serial <serial> [--product-channel <stable|labs>] --output <app-tags.json>
               questionable-file-manager kiosk tags import --serial <serial> [--product-channel <stable|labs>] --file <app-tags.json> --confirm-kiosk-control

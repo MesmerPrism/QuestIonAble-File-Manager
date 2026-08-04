@@ -7,26 +7,46 @@ internal sealed class ImmutableApkAdmission : IDisposable
     private static readonly TimeSpan OwnerRetry = TimeSpan.FromMilliseconds(50);
 
     private readonly LocalApiArtifactStager _stager;
-    private LocalApiStagedArtifact? _artifact;
+    private IReadOnlyList<LocalApiStagedArtifact> _artifacts;
     private bool _disposed;
 
     private ImmutableApkAdmission(
         LocalApiArtifactStager stager,
-        LocalApiStagedArtifact artifact)
+        IReadOnlyList<LocalApiStagedArtifact> artifacts)
     {
         _stager = stager;
-        _artifact = artifact;
+        _artifacts = artifacts;
     }
 
-    public string Path => _artifact?.Path
-        ?? throw new ObjectDisposedException(nameof(ImmutableApkAdmission));
+    public string Path => Paths.Single();
+
+    internal IReadOnlyList<string> Paths => !_disposed
+        ? _artifacts.Select(static artifact => artifact.Path).ToArray()
+        : throw new ObjectDisposedException(nameof(ImmutableApkAdmission));
 
     public static async Task<ImmutableApkAdmission> CreateAsync(
         string sourcePath,
+        CancellationToken cancellationToken) =>
+        await CreateManyAsync([sourcePath], cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<ImmutableApkAdmission> CreateManyAsync(
+        IReadOnlyList<string> sourcePaths,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(sourcePaths);
+        if (sourcePaths.Count is < 1 or > 16 ||
+            sourcePaths.Any(static path => string.IsNullOrWhiteSpace(path)))
+        {
+            throw new ArgumentException(
+                "Immutable APK admission requires 1..16 non-empty source paths.",
+                nameof(sourcePaths));
+        }
+        var sources = sourcePaths
+            .Select(static path => System.IO.Path.GetFullPath(path))
+            .ToArray();
         await ProcessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         LocalApiArtifactStager? stager = null;
+        var artifacts = new List<LocalApiStagedArtifact>(sources.Length);
         try
         {
             var settings = LocalApiStateSettings.CreateForTests(
@@ -37,7 +57,7 @@ internal sealed class ImmutableApkAdmission : IDisposable
                     MaximumRetainedOperations: 1,
                     MaximumRunningOperations: 1,
                     MaximumStagedBytes: 512L * 1024 * 1024,
-                    MaximumStagedFiles: 1));
+                    MaximumStagedFiles: sources.Length));
             var deadline = DateTimeOffset.UtcNow + OwnerWait;
             while (stager is null)
             {
@@ -53,13 +73,20 @@ internal sealed class ImmutableApkAdmission : IDisposable
                 }
             }
             stager.CleanupOrphanedArtifacts();
-            var artifact = await stager.StageAsync(
-                sourcePath,
-                cancellationToken).ConfigureAwait(false);
-            return new ImmutableApkAdmission(stager, artifact);
+            foreach (var sourcePath in sources)
+            {
+                artifacts.Add(await stager.StageAsync(
+                    sourcePath,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            return new ImmutableApkAdmission(stager, artifacts);
         }
         catch
         {
+            foreach (var artifact in artifacts)
+            {
+                artifact.TryDelete(out _);
+            }
             stager?.Dispose();
             ProcessGate.Release();
             throw;
@@ -72,8 +99,11 @@ internal sealed class ImmutableApkAdmission : IDisposable
         _disposed = true;
         try
         {
-            _artifact?.TryDelete(out _);
-            _artifact = null;
+            foreach (var artifact in _artifacts)
+            {
+                artifact.TryDelete(out _);
+            }
+            _artifacts = [];
             _stager.Dispose();
         }
         finally

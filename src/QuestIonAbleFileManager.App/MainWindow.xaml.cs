@@ -955,7 +955,11 @@ public partial class MainWindow : Window
             async () =>
             {
                 var execution = await ExecuteOperatorAsync(
-                    OperatorCommands.InstallRustyKiosk(device.Serial, _rustyKioskBundle, operatorConfirmed: true));
+                    OperatorCommands.InstallRustyKiosk(
+                        device.Serial,
+                        _rustyKioskBundle,
+                        operatorConfirmed: true,
+                        product: SelectedKioskProduct()));
                 var install = execution.RustyKioskInstallResult ??
                     throw new InvalidOperationException("Rusty Kiosk installation returned no verification result.");
                 KioskInstallStatusText.Text = "Rusty Kiosk: installed";
@@ -995,7 +999,10 @@ public partial class MainWindow : Window
             async () =>
             {
                 await ExecuteOperatorAsync(
-                    OperatorCommands.ProvisionRustyKiosk(device.Serial, operatorConfirmed: true));
+                    OperatorCommands.ProvisionRustyKiosk(
+                        device.Serial,
+                        operatorConfirmed: true,
+                        product: SelectedKioskProduct()));
                 await RefreshKioskAsync();
             },
             "Provisioning Rusty Kiosk Setup…");
@@ -2037,6 +2044,15 @@ public partial class MainWindow : Window
     private void SetRustyKioskBundle(RustyKioskBundle? bundle)
     {
         _rustyKioskBundle = bundle;
+        if (bundle?.DeclaredProduct is { } declaredProduct)
+        {
+            KioskProductChannelBox.SelectedItem = KioskProductChannelBox.Items
+                .OfType<ComboBoxItem>()
+                .Single(item => string.Equals(
+                    item.Tag as string,
+                    declaredProduct.WireName,
+                    StringComparison.Ordinal));
+        }
         KioskBundlePathBox.Text = bundle?.Source ?? string.Empty;
         KioskBundleStatusText.Text = bundle is null
             ? "Kiosk bundle not located. Normal file-manager features are still fully available."

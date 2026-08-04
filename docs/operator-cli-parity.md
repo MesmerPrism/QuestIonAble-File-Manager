@@ -49,6 +49,12 @@ The CLI can be invoked directly in PowerShell without translating GUI labels
 into a different automation model. Agents can include `--adb <path>` when an
 exact tool selection is part of the test.
 
+Starting with Labs Alpha.13, CLI `kiosk install` and `kiosk provision` require
+exactly one explicit `--product-channel stable|labs`. This is an intentional
+fail-closed CLI migration: older scripts that omitted the option receive input
+exit code 2 before ADB dispatch. Typed Core callers retain the historical
+Stable default.
+
 For app-provided launch options, WPF presents only the bounded read-only rows
 returned for Kiosk's current selected app. The CLI equivalent accepts the same
 opaque option id, with a 160-character limit. Neither surface can supply an
@@ -79,8 +85,8 @@ whitespace; File Manager does not normalize an app-defined identifier.
 | Install one APK on checked Wi-Fi headsets | `apk install-many` |
 | Install one APK bundle on checked Wi-Fi headsets | `apk install-bundle-many` |
 | Refresh optional Kiosk status/catalog | `kiosk status` |
-| Install bundled Kiosk pair | `kiosk install --confirm-kiosk-setup` |
-| Provision installed Kiosk helper | `kiosk provision --confirm-kiosk-setup` |
+| Install bundled Kiosk pair | `kiosk install --product-channel <stable\|labs> --confirm-kiosk-setup` |
+| Provision installed Kiosk helper | `kiosk provision --product-channel <stable\|labs> --confirm-kiosk-setup` |
 | Kiosk panel/focus/select/tag/launch/requirement/passthrough/setup action | `kiosk command` |
 | Launch one read-only app-provided option | `kiosk command --command launch-option --value <opaque-option-id> --confirm-kiosk-control` |
 | Export/import Kiosk tag file | `kiosk tags export` / `kiosk tags import` |
@@ -123,7 +129,8 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk status --serial <quest-serial> --product-channel labs --json --adb <path-to-adb>
-& '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --confirm-kiosk-setup --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk install --serial <usb-serial> --product-channel labs --confirm-kiosk-setup --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' kiosk provision --serial <usb-serial> --product-channel labs --confirm-kiosk-setup --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-kiosk --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command set-launch-requirement --value wifi-on --confirm-kiosk-control --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' kiosk command --serial <quest-serial> --product-channel labs --command launch-option --value <opaque-option-id> --confirm-kiosk-control --json --adb <path-to-adb>

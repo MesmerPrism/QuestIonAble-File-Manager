@@ -195,14 +195,25 @@ public sealed class OperatorActionRegistryTests
             wpf,
             "private RustyKioskProductContract SelectedKioskProduct",
             "private async Task SetKeepAwakeAsync");
+        var wpfInstall = SourceMethod(
+            wpf,
+            "private async void OnInstallKiosk",
+            "private async void OnProvisionKiosk");
+        var wpfProvision = SourceMethod(
+            wpf,
+            "private async void OnProvisionKiosk",
+            "private async void OnRefreshKiosk");
         var cliKiosk = SourceMethod(
             cli,
             "private static async Task<int> RunKioskAsync",
             "private static async Task<int> RunDeviceAsync");
 
         Assert.Contains("product: SelectedKioskProduct()", wpfCommand, StringComparison.Ordinal);
+        Assert.Contains("product: SelectedKioskProduct()", wpfInstall, StringComparison.Ordinal);
+        Assert.Contains("product: SelectedKioskProduct()", wpfProvision, StringComparison.Ordinal);
         Assert.Contains("KioskProductChannelBox.SelectedItem", wpfProduct, StringComparison.Ordinal);
         Assert.Contains("--product-channel", cliKiosk, StringComparison.Ordinal);
+        Assert.Contains("ParseRequiredKioskSetupProductChannel(arguments)", cliKiosk, StringComparison.Ordinal);
         Assert.Contains("OperatorCommands.InspectRustyKiosk(serial, product)", cliKiosk, StringComparison.Ordinal);
         Assert.Contains("product: product", cliKiosk, StringComparison.Ordinal);
         Assert.Contains(

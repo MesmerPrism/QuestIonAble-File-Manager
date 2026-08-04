@@ -199,8 +199,10 @@ internal static class OperatorMutations
         OperatorCommandKind.DisconnectWifiAdb => "Wi-Fi ADB endpoint disconnected from this PC",
         OperatorCommandKind.InstallApkMany => "APK installed on every selected headset",
         OperatorCommandKind.InstallApkBundleMany => "APK package set installed on every selected headset",
-        OperatorCommandKind.InstallRustyKiosk => "Rusty Kiosk installed and USB authority provisioned",
-        OperatorCommandKind.ProvisionRustyKiosk => "Rusty Kiosk USB authority provisioned",
+        OperatorCommandKind.InstallRustyKiosk =>
+            $"Rusty Kiosk {KioskSetupIdentity(command.RustyKioskProduct)} installed and USB authority provisioned",
+        OperatorCommandKind.ProvisionRustyKiosk =>
+            $"Rusty Kiosk {KioskSetupIdentity(command.RustyKioskProduct)} USB authority provisioned",
         OperatorCommandKind.PushRustyKioskTags => "tag file hotloaded by Rusty Kiosk",
         OperatorCommandKind.SetQuestKeepAwake => command.Enabled == true
             ? "keep-awake enabled"
@@ -218,8 +220,8 @@ internal static class OperatorMutations
     {
         return command.Kind switch
         {
-            OperatorCommandKind.InstallRustyKiosk => ObserveKioskInstall(result),
-            OperatorCommandKind.ProvisionRustyKiosk => ObserveKioskProvision(result),
+            OperatorCommandKind.InstallRustyKiosk => ObserveKioskInstall(command, result),
+            OperatorCommandKind.ProvisionRustyKiosk => ObserveKioskProvision(command, result),
             OperatorCommandKind.InvokeRustyKiosk => ObserveKioskCommand(command, result),
             OperatorCommandKind.PushRustyKioskTags => ObserveKioskTagHotload(result),
             OperatorCommandKind.SetQuestKeepAwake => ObserveKeepAwake(command, result),
@@ -293,27 +295,61 @@ internal static class OperatorMutations
                 "Waiting for exact package/version/signer/base-APK digest and size readback on the selected serial.");
     }
 
-    private static OperatorMutationObservation ObserveKioskInstall(OperatorExecutionResult result)
+    private static OperatorMutationObservation ObserveKioskInstall(
+        OperatorCommand command,
+        OperatorExecutionResult result)
     {
         var install = result.RustyKioskInstallResult ??
             throw new InvalidOperationException("Rusty Kiosk installation returned no verification result.");
-        return install.HelperReady && install.SameSignerControlGranted
-            ? OperatorMutationObservation.Confirmed("Both APKs and their same-signer setup authority are ready.")
+        return KioskSetupProductMatches(command, install.Product) &&
+               install.HelperReady && install.SameSignerControlGranted
+            ? OperatorMutationObservation.Confirmed(
+                $"The {KioskSetupIdentity(install.Product)} APK pair, helper grant, same-signer control, and typed host operator are ready.")
             : OperatorMutationObservation.Pending(
-                "Kiosk installation is incomplete.",
-                "Waiting for both APKs and the same-signer authority to read back as ready.");
+                "Kiosk installation is incomplete or its readback crossed product channels.",
+                "Waiting for both APKs and the selected channel's same-signer authority to read back as ready.");
     }
 
-    private static OperatorMutationObservation ObserveKioskProvision(OperatorExecutionResult result)
+    private static OperatorMutationObservation ObserveKioskProvision(
+        OperatorCommand command,
+        OperatorExecutionResult result)
     {
         var provision = result.RustyKioskProvisionResult ??
             throw new InvalidOperationException("Rusty Kiosk provisioning returned no verification result.");
-        return provision.HelperReady && provision.SameSignerControlGranted
-            ? OperatorMutationObservation.Confirmed("The helper and same-signer control permission are ready.")
+        return KioskSetupProductMatches(command, provision.Product) &&
+               provision.HelperReady &&
+               provision.SameSignerControlGranted &&
+               provision.Status.HostOperatorAvailable
+            ? OperatorMutationObservation.Confirmed(
+                $"The {KioskSetupIdentity(provision.Product)} helper grant, same-signer control, and typed host operator are ready.")
             : OperatorMutationObservation.Pending(
-                "Kiosk provisioning is incomplete.",
-                "Waiting for helper authority readback.");
+                "Kiosk provisioning is incomplete or its readback crossed product channels.",
+                "Waiting for the selected channel's helper authority readback.");
     }
+
+    private static bool KioskSetupProductMatches(
+        OperatorCommand command,
+        RustyKioskProductContract resultProduct)
+    {
+        if (command.RustyKioskProduct is null)
+        {
+            return false;
+        }
+        try
+        {
+            return RustyKioskProductContract.RequireKnown(command.RustyKioskProduct) ==
+                RustyKioskProductContract.RequireKnown(resultProduct);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string KioskSetupIdentity(RustyKioskProductContract? product) =>
+        product is null
+            ? "channel=unknown"
+            : $"channel={product.WireName} main={product.MainPackage} helper={product.SetupHelperPackage}";
 
     private static OperatorMutationObservation ObserveKioskTagHotload(OperatorExecutionResult result)
     {
