@@ -67,8 +67,9 @@ action can be automated and tested.
   target-free, explicitly non-authorizing description of its existing typed
   registry without reading stdin or initializing a backend;
 - optionally verify one configured signed Rusty Fleet Windows release and open
-  Fleet's own guided installer from a signed Pages metadata document whose v2
-  payload binds one immutable GitHub Release asset, without giving File Manager
+  Fleet's own guided installer from a signed Pages metadata document whose v4
+  payload binds one immutable channel-specific GitHub Release asset and its
+  explicit Authenticode trust posture, without giving File Manager
   Fleet device, connectivity, hotspot, credential, policy, or hidden-elevation
   authority;
 - expose the same typed routes through a Windows WPF app and CLI;
@@ -121,8 +122,8 @@ and register the App Installer update feed. See the [release workflow](docs/rele
 for signature and Smart App Control limitations.
 
 Friends testing Rusty Kiosk Labs should use the exact
-[File Manager Labs `v0.5.0-alpha.7` onboarding](docs/labs-tester-onboarding.md).
-That prerelease embeds and validates Kiosk `v0.6.6-alpha.8`; the stable
+[File Manager Labs `v0.5.0-alpha.9` onboarding](docs/labs-tester-onboarding.md).
+That prerelease embeds and validates Kiosk `v0.6.6-alpha.9`; the stable
 `releases/latest` installer remains on the stable product channel.
 
 Version `0.4.0` is the first release under the QuestIonAble File Manager name.
@@ -222,9 +223,10 @@ The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact
 `fleet status` / `fleet install` CLI routes even when ADB is absent. It accepts
 no runtime URL or executable argument. Core verifies the configured signed
-v2 release descriptor at the canonical MesmerPrism Pages metadata path, its
-explicit immutable numeric-version GitHub Release URL, exact
-`RustyFleet-Setup.exe` size and SHA-256, Windows signer, and Fleet's
+v4 release descriptor at the canonical MesmerPrism Pages metadata path, its
+explicit immutable channel/maturity GitHub Release URL, exact
+`RustyFleet[-Labs]-Setup.exe` size and SHA-256, Windows signer/trust posture,
+and Fleet's
 non-mutating plan before opening the visible Fleet-owned installer. Signed
 payload bytes must use RFC 8785 JCS, carry a required exact duration binding
 issue to expiry, and remain valid for no more than 24 hours.
@@ -276,6 +278,13 @@ use the explicit development runtime environment fallback. Pages remains binary-
 Receipts expose release evidence and truthful source kind but no source URL,
 local path, credential, process argument, or device data. Fleet remains the
 authority for all fleet/device/connectivity behavior.
+
+Labs embeds the reviewed Fleet Labs descriptor key and signer pins and uses
+the separate `QuestIonAbleFileManagerLabs/FleetInstaller` replay root. Its
+signed Setup provisions only that root-bound protected record; Stable replay
+state is neither imported nor reused. The release gate rejects partial,
+cross-channel, stable-root, ambient, and wrong-signer Labs configuration.
+
 The optional [Rusty Fleet integration](docs/fleet-integration.md) is disabled
 until the operator configures an approved staging root. Its shipped v1 CLI
 routes are single-device and read-only: bounded list, staged pull, and durable

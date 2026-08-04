@@ -199,9 +199,10 @@ documented.
   ignores environment overrides. Environment and explicitly enabled local
   fixture configuration are development-only fallbacks. MesmerPrism Pages is
   metadata-only: never publish, derive, or download a sibling Setup binary
-  there. The strict v2 signed payload binds the exact immutable
-  `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`
-  asset URL. Release trust exists only as the complete eight-field metadata
+  there. The strict v4 signed payload binds the exact immutable channel-specific
+  `https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>[-<maturity>.<sequence>]/RustyFleet[-Labs]-Setup.exe`
+  asset URL, distribution axes, timestamp requirement, and Authenticode trust
+  posture. Release trust exists only as the complete eight-field metadata
   block in checked-in `FleetInstallerReleaseConfiguration.cs`, reviewed on
   the exact clean tagged release commit. Ordinary MSBuild, environment,
   release-script arguments, and generated `obj` files have no trust authority.
@@ -500,9 +501,13 @@ independently bounded `github-release|github-prerelease` axis. Stable uses
 exact published Rusty Kiosk bundle-v2 release whose product channel, maturity,
 distribution track, tag, revision, URL, signer, manifest hash, coinstallable
 core/helper package identities, Kiosk owner metadata, and closed asset set match protected
-release policy. Labs Setup must reject every Fleet replay repair/reset/accept/test route and
-skip normal replay provisioning so it cannot touch stable registry, Program
-Files helper, or state namespaces.
+release policy. Labs Setup may provision and invoke Fleet replay authority
+only when the complete checked-in Fleet block declares channel `labs`, its
+state root is exactly `QuestIonAbleFileManagerLabs/FleetInstaller`, and the
+Setup's own signer hash matches the reviewed provisioning pin. The root digest
+isolates its HKLM record from Stable; the protected helper binds every
+accept/repair/reset request to that exact embedded root. Reject absent,
+partial, cross-channel, stable-root, ambient, or wrong-signer configuration.
 Labs releases also publish the QFM-owned
 `questionable-file-manager-labs-owner-release.json` v2 catalog asset. Keep it
 deterministic and Labs-only, binding all three axes, exact tag/versions, source

@@ -42,14 +42,15 @@ tag. After creation it reads back the exact tag and peeled commit, draft and
 prerelease flags, every asset name/size/SHA-256 digest, and proves the
 repository's latest release has a different tag.
 
-Labs Setup rejects repair, destructive reset, protected accept, lock-test,
-and security-self-test replay routes before they can read or mutate the stable
-Fleet replay registry, Program Files helper, or per-user state. Normal Labs
-installation also skips stable Fleet replay provisioning. The organizational
-certificate still signs Labs binaries, but its certificate hash is not imported
-into Fleet's separate provisioning-signer authority when that checked-in Fleet
-configuration is intentionally absent. Stable Setup retains its existing replay
-behavior.
+Labs Setup provisions a separate Fleet replay authority only when its reviewed
+checked-in release block is complete, declares channel `labs`, uses the exact
+`QuestIonAbleFileManagerLabs/FleetInstaller` state root, and pins the actual
+Labs Setup signer. The root digest gives Labs a distinct protected HKLM record
+and per-user state namespace; the protected helper binds accept, repair, reset,
+lock, and security-test routes back to that exact embedded root. The release
+gate rejects absent, partial, cross-channel, stable-root, ambient, or
+wrong-signer configuration. Stable Setup retains its existing separate replay
+root and behavior.
 
 Each Labs prerelease also publishes
 `questionable-file-manager-labs-owner-release.json`, a deterministic QFM-owned
@@ -202,8 +203,9 @@ and requires the authoritative tag's peeled commit to equal `GITHUB_SHA`
 before restoring signing material.
 
 The canonical Pages location publishes only signed `release.json` metadata
-valid for at most 24 hours. Its v2 payload must use RFC 8785 JCS bytes and bind
-`https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>/RustyFleet-Setup.exe`;
+valid for at most 24 hours. Its v4 payload must use RFC 8785 JCS bytes and bind
+the exact channel-specific
+`https://github.com/MesmerPrism/rusty-fleet/releases/download/v<version>[-<maturity>.<sequence>]/RustyFleet[-Labs]-Setup.exe`;
 never publish or derive a Pages-sibling Setup binary.
 
 The default consumer test exercises the elevated guided route. On an

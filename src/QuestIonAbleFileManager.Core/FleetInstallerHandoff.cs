@@ -18,23 +18,40 @@ namespace QuestIonAbleFileManager.Core;
 
 public static class FleetInstallerContract
 {
-    public const string EnvelopeSchema = "rusty.fleet.release_descriptor_envelope.v2";
-    public const string PayloadSchema = "rusty.fleet.windows_release.v2";
-    public const string PlanSchema = "rusty.fleet.guided_installer_plan.v1";
+    public const string EnvelopeSchema = "rusty.fleet.release_descriptor_envelope.v4";
+    public const string PayloadSchema = "rusty.fleet.windows_release.v4";
+    public const string PlanSchema = "rusty.fleet.guided_installer_plan.v2";
     public const string StatusSchema = "questionable.file_manager.fleet_installer_status.v1";
     public const string HandoffSchema = "questionable.file_manager.fleet_installer_handoff.v1";
     public const string StateSchema = "questionable.file_manager.fleet_installer_state.v1";
     public const string StateAnchorSchema =
         "questionable.file_manager.fleet_installer_state_anchor.v1";
     public const string Product = "rusty-fleet";
+    public const string LabsProduct = "rusty-fleet-labs";
     public const string AssetName = "RustyFleet-Setup.exe";
-    public const string InstallerProtocol = "rusty.fleet.guided_setup.v1";
+    public const string LabsAssetName = "RustyFleet-Labs-Setup.exe";
+    public const string InstallerProtocol = "rusty.fleet.guided_setup.v2";
+    public const string StableAuthenticodeTrustMode = "public-chain-only";
+    public const string LabsAuthenticodeTrustMode =
+        "exact-pinned-self-issued-untrusted-root-only";
     public const int MaximumDescriptorBytes = 64 * 1024;
     public const long MaximumAssetBytes = 512L * 1024 * 1024;
     public static readonly TimeSpan MaximumDescriptorLifetime = TimeSpan.FromHours(24);
     public const string PagesMetadataOrigin = "https://mesmerprism.com";
     public const string PagesMetadataRoot = "/Rusty-Fleet/metadata";
     public const string ReleaseAssetOrigin = "https://github.com";
+
+    public static string ProductForChannel(string channel) =>
+        channel == "labs" ? LabsProduct : Product;
+
+    public static string AssetNameForChannel(string channel) =>
+        channel == "labs" ? LabsAssetName : AssetName;
+
+    public static string DistributionTrackForChannel(string channel) =>
+        channel == "labs" ? "github-prerelease" : "github-release";
+
+    public static string AuthenticodeTrustModeForChannel(string channel) =>
+        channel == "labs" ? LabsAuthenticodeTrustMode : StableAuthenticodeTrustMode;
 }
 
 public sealed class FleetInstallerException : InvalidOperationException
@@ -376,17 +393,14 @@ public sealed class LocalFleetReleaseSource : IFleetReleaseSource
         long maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                asset.Name,
-                FleetInstallerContract.AssetName,
-                StringComparison.Ordinal))
+        if (!FleetInstallerValidation.IsSupportedAssetName(asset.Name))
         {
             throw new FleetInstallerException(
                 "fleet_asset_name_invalid",
                 "The Fleet descriptor selected an unsupported installer asset.");
         }
 
-        var assetPath = Path.Combine(_fixtureDirectory, FleetInstallerContract.AssetName);
+        var assetPath = Path.Combine(_fixtureDirectory, asset.Name);
         await using var input = OpenSecureRead(assetPath);
         await CopyBoundedAsync(input, destination, maximumBytes, cancellationToken)
             .ConfigureAwait(false);
@@ -505,10 +519,7 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
         long maximumBytes,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(
-                asset.Name,
-                FleetInstallerContract.AssetName,
-                StringComparison.Ordinal))
+        if (!FleetInstallerValidation.IsSupportedAssetName(asset.Name))
         {
             throw new FleetInstallerException(
                 "fleet_asset_name_invalid",
@@ -516,7 +527,10 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
         }
         var assetUri = FleetInstallerValidation.ValidateReleaseAssetUri(
             asset.Url,
-            expectedVersion: null);
+            expectedVersion: null,
+            asset.Name,
+            expectedChannel: null,
+            expectedMaturity: null);
         using var response = await SendBoundedAsync(assetUri, cancellationToken)
             .ConfigureAwait(false);
         await using var input = await response.Content.ReadAsStreamAsync(cancellationToken)
@@ -600,19 +614,28 @@ public sealed class HttpsFleetReleaseSource : IFleetReleaseSource, IDisposable
 }
 
 public sealed record FleetReleaseAsset(
+    string AuthenticodeTrustMode,
+    string InstallerProtocol,
+    string MediaType,
     string Name,
-    string Url,
-    long SizeBytes,
+    bool PublicTrustClaim,
     string Sha256,
     string SignerCertificateSha256,
-    string MediaType,
-    string InstallerProtocol);
+    bool SignerSelfIssued,
+    string SignerSubject,
+    string SignerThumbprint,
+    long SizeBytes,
+    bool TimestampRequired,
+    string Url);
 
 public sealed record FleetReleaseDescriptor(
     string DescriptorId,
     string Product,
     string Version,
     string Channel,
+    string DistributionTrack,
+    string Maturity,
+    string ProductChannel,
     long IssuedAtMs,
     long ExpiresAtMs,
     long ValidityDurationMs,
@@ -654,7 +677,7 @@ public sealed record FleetInstallerHandoffReceipt(
 
 public interface IFleetInstallerArtifactTrustVerifier
 {
-    string Verify(string executablePath);
+    string Verify(string executablePath, FleetReleaseAsset asset);
 }
 
 public interface IFleetInstallerProcessRunner
@@ -674,24 +697,46 @@ public sealed record FleetInstallerPlanReceipt(
     string Version,
     string Channel,
     string AssetSha256,
+    string AuthenticodeTrustMode,
+    string? SignerCertificateSha256,
+    bool SignerSelfIssued,
+    bool PublicTrustClaim,
+    bool TimestampRequired,
     bool Ready);
 
 public sealed class WindowsFleetInstallerArtifactTrustVerifier :
     IFleetInstallerArtifactTrustVerifier
 {
-    public string Verify(string executablePath)
+    public string Verify(string executablePath, FleetReleaseAsset asset)
     {
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException(
                 "Fleet installer Authenticode verification requires Windows.");
         }
-        WindowsAuthenticode.Verify(executablePath);
+        var allowUntrustedRoot =
+            asset.AuthenticodeTrustMode == FleetInstallerContract.LabsAuthenticodeTrustMode &&
+            asset.SignerSelfIssued &&
+            !asset.PublicTrustClaim;
+        WindowsAuthenticode.Verify(executablePath, allowUntrustedRoot);
 #pragma warning disable SYSLIB0057 // No X509CertificateLoader API reads the signer embedded in a PE Authenticode signature.
-        using var certificate = X509Certificate.CreateFromSignedFile(executablePath);
+        using var certificate = new X509Certificate2(
+            X509Certificate.CreateFromSignedFile(executablePath));
 #pragma warning restore SYSLIB0057
         var rawCertificate = certificate.Export(X509ContentType.Cert);
-        return Convert.ToHexString(SHA256.HashData(rawCertificate)).ToLowerInvariant();
+        var signer = Convert.ToHexString(SHA256.HashData(rawCertificate)).ToLowerInvariant();
+        var selfIssued = certificate.SubjectName.RawData.AsSpan().SequenceEqual(
+            certificate.IssuerName.RawData);
+        if (selfIssued != asset.SignerSelfIssued ||
+            !string.Equals(certificate.Subject, asset.SignerSubject, StringComparison.Ordinal) ||
+            !string.Equals(certificate.Thumbprint, asset.SignerThumbprint, StringComparison.Ordinal) ||
+            !asset.TimestampRequired)
+        {
+            throw new FleetInstallerException(
+                "fleet_installer_authenticode_policy_mismatch",
+                "The Fleet installer signature does not match the signed channel trust policy.");
+        }
+        return signer;
     }
 }
 
@@ -1300,7 +1345,9 @@ public sealed class FleetInstallerHandoff
                 "Staging and hashing the exact Fleet guided installer…",
                 1,
                 5));
-            using var stage = workspace.CreateStage(descriptor.DescriptorId);
+            using var stage = workspace.CreateStage(
+                descriptor.DescriptorId,
+                descriptor.Asset.Name);
             await stage.WriteAssetAsync(
                 _settings.Source,
                 descriptor.Asset,
@@ -1311,7 +1358,9 @@ public sealed class FleetInstallerHandoff
                 "Verifying the Fleet installer signature and trust policy…",
                 2,
                 5));
-            var signer = _artifactTrustVerifier.Verify(stage.ExecutablePath);
+            var signer = _artifactTrustVerifier.Verify(
+                stage.ExecutablePath,
+                descriptor.Asset);
             if (!FleetInstallerValidation.FixedLowerHexEquals(
                     signer,
                     descriptor.Asset.SignerCertificateSha256) ||
@@ -1446,6 +1495,13 @@ public sealed class FleetInstallerHandoff
             !FleetInstallerValidation.FixedLowerHexEquals(
                 plan.AssetSha256,
                 descriptor.Asset.Sha256) ||
+            plan.AuthenticodeTrustMode != descriptor.Asset.AuthenticodeTrustMode ||
+            !FleetInstallerValidation.FixedLowerHexEquals(
+                plan.SignerCertificateSha256 ?? string.Empty,
+                descriptor.Asset.SignerCertificateSha256) ||
+            plan.SignerSelfIssued != descriptor.Asset.SignerSelfIssued ||
+            plan.PublicTrustClaim != descriptor.Asset.PublicTrustClaim ||
+            plan.TimestampRequired != descriptor.Asset.TimestampRequired ||
             !plan.Ready)
         {
             throw new FleetInstallerException(
@@ -2077,8 +2133,14 @@ internal sealed class FleetInstallerWorkspace : IDisposable
                 Encoding.UTF8.GetBytes(root.ToUpperInvariant())))
             .ToLowerInvariant();
 
-    public FleetInstallerStage CreateStage(string descriptorId)
+    public FleetInstallerStage CreateStage(string descriptorId, string assetName)
     {
+        if (!FleetInstallerValidation.IsSupportedAssetName(assetName))
+        {
+            throw new FleetInstallerException(
+                "fleet_asset_name_invalid",
+                "The Fleet descriptor selected an unsupported installer asset.");
+        }
         FleetWindowsFileSafety.ValidateDirectory(_rootHandle, _root);
         var token = "fleet-" +
             Convert.ToHexString(
@@ -2092,7 +2154,7 @@ internal sealed class FleetInstallerWorkspace : IDisposable
         {
             handle = FleetWindowsFileSafety.OpenDirectory(path, allowDelete: true);
             FleetWindowsFileSafety.ValidateDirectory(handle, path);
-            return new FleetInstallerStage(path, handle);
+            return new FleetInstallerStage(path, handle, assetName);
         }
         catch
         {
@@ -2151,11 +2213,14 @@ internal sealed class FleetInstallerStage : IDisposable
     private FleetWindowsFileIdentity? _fileIdentity;
     private bool _cleaned;
 
-    public FleetInstallerStage(string path, SafeFileHandle directoryHandle)
+    public FleetInstallerStage(
+        string path,
+        SafeFileHandle directoryHandle,
+        string assetName)
     {
         _path = path;
         _directoryHandle = directoryHandle;
-        ExecutablePath = Path.Combine(path, FleetInstallerContract.AssetName);
+        ExecutablePath = Path.Combine(path, assetName);
     }
 
     public string ExecutablePath { get; }
@@ -2376,6 +2441,9 @@ internal static class FleetInstallerValidation
             parsed.Product,
             parsed.Version,
             parsed.Channel,
+            parsed.DistributionTrack,
+            parsed.Maturity,
+            parsed.ProductChannel,
             parsed.IssuedAtMs,
             parsed.ExpiresAtMs,
             parsed.ValidityDurationMs,
@@ -2433,6 +2501,15 @@ internal static class FleetInstallerValidation
             char.IsAsciiHexDigit(character) &&
             !char.IsAsciiLetterUpper(character));
 
+    public static bool IsUpperSha1(string? value) =>
+        value is { Length: 40 } &&
+        value.All(static character =>
+            char.IsAsciiHexDigit(character) &&
+            !char.IsAsciiLetterLower(character));
+
+    public static bool IsSupportedAssetName(string? value) =>
+        value is FleetInstallerContract.AssetName or FleetInstallerContract.LabsAssetName;
+
     public static bool FixedLowerHexEquals(string left, string right) =>
         IsLowerSha256(left) &&
         IsLowerSha256(right) &&
@@ -2462,30 +2539,48 @@ internal static class FleetInstallerValidation
         }
 
         using var output = new MemoryStream(1024);
-        WriteAscii(output, "{\"asset\":{\"installer_protocol\":");
+        WriteAscii(output, "{\"asset\":{\"authenticode_trust_mode\":");
+        WriteCanonicalString(output, payload.Asset.AuthenticodeTrustMode);
+        WriteAscii(output, ",\"installer_protocol\":");
         WriteCanonicalString(output, payload.Asset.InstallerProtocol);
         WriteAscii(output, ",\"media_type\":");
         WriteCanonicalString(output, payload.Asset.MediaType);
         WriteAscii(output, ",\"name\":");
         WriteCanonicalString(output, payload.Asset.Name);
+        WriteAscii(output, ",\"public_trust_claim\":");
+        WriteCanonicalBoolean(output, payload.Asset.PublicTrustClaim);
         WriteAscii(output, ",\"sha256\":");
         WriteCanonicalString(output, payload.Asset.Sha256);
         WriteAscii(output, ",\"signer_certificate_sha256\":");
         WriteCanonicalString(output, payload.Asset.SignerCertificateSha256);
+        WriteAscii(output, ",\"signer_self_issued\":");
+        WriteCanonicalBoolean(output, payload.Asset.SignerSelfIssued);
+        WriteAscii(output, ",\"signer_subject\":");
+        WriteCanonicalString(output, payload.Asset.SignerSubject);
+        WriteAscii(output, ",\"signer_thumbprint\":");
+        WriteCanonicalString(output, payload.Asset.SignerThumbprint);
         WriteAscii(output, ",\"size_bytes\":");
         WriteCanonicalInteger(output, payload.Asset.SizeBytes);
+        WriteAscii(output, ",\"timestamp_required\":");
+        WriteCanonicalBoolean(output, payload.Asset.TimestampRequired);
         WriteAscii(output, ",\"url\":");
         WriteCanonicalString(output, payload.Asset.Url);
         WriteAscii(output, "},\"channel\":");
         WriteCanonicalString(output, payload.Channel);
+        WriteAscii(output, ",\"distribution_track\":");
+        WriteCanonicalString(output, payload.DistributionTrack);
         WriteAscii(output, ",\"descriptor_id\":");
         WriteCanonicalString(output, payload.DescriptorId);
         WriteAscii(output, ",\"expires_at_ms\":");
         WriteCanonicalInteger(output, payload.ExpiresAtMs);
         WriteAscii(output, ",\"issued_at_ms\":");
         WriteCanonicalInteger(output, payload.IssuedAtMs);
+        WriteAscii(output, ",\"maturity\":");
+        WriteCanonicalString(output, payload.Maturity);
         WriteAscii(output, ",\"product\":");
         WriteCanonicalString(output, payload.Product);
+        WriteAscii(output, ",\"product_channel\":");
+        WriteCanonicalString(output, payload.ProductChannel);
         WriteAscii(output, ",\"schema\":");
         WriteCanonicalString(output, payload.Schema);
         WriteAscii(output, ",\"validity_duration_ms\":");
@@ -2495,6 +2590,9 @@ internal static class FleetInstallerValidation
         WriteAscii(output, "}");
         return output.ToArray();
     }
+
+    private static void WriteCanonicalBoolean(Stream output, bool value) =>
+        WriteAscii(output, value ? "true" : "false");
 
     private static void WriteCanonicalString(Stream output, string value)
     {
@@ -2578,7 +2676,10 @@ internal static class FleetInstallerValidation
 
     public static Uri ValidateReleaseAssetUri(
         string value,
-        string? expectedVersion)
+        string? expectedVersion,
+        string assetName,
+        string? expectedChannel,
+        string? expectedMaturity)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
             !uri.IsAbsoluteUri ||
@@ -2596,7 +2697,13 @@ internal static class FleetInstallerValidation
         var prefix =
             $"{FleetInstallerContract.ReleaseAssetOrigin}/MesmerPrism/" +
             "rusty-fleet/releases/download/v";
-        var suffix = $"/{FleetInstallerContract.AssetName}";
+        if (!IsSupportedAssetName(assetName))
+        {
+            throw new FleetInstallerException(
+                "fleet_asset_source_invalid",
+                "The Fleet installer asset name is invalid.");
+        }
+        var suffix = $"/{assetName}";
         if (!value.StartsWith(prefix, StringComparison.Ordinal) ||
             !value.EndsWith(suffix, StringComparison.Ordinal))
         {
@@ -2604,13 +2711,43 @@ internal static class FleetInstallerValidation
                 "fleet_asset_source_invalid",
                 "The Fleet installer asset must use the immutable GitHub Release path.");
         }
-        var version = value[prefix.Length..^suffix.Length];
+        var tagVersion = value[prefix.Length..^suffix.Length];
+        var version = tagVersion;
+        string? maturity = null;
+        var ordinal = 0;
+        foreach (var candidate in new[] { "alpha", "beta", "rc" })
+        {
+            var marker = $"-{candidate}.";
+            var markerIndex = tagVersion.IndexOf(marker, StringComparison.Ordinal);
+            if (markerIndex > 0 &&
+                int.TryParse(
+                    tagVersion[(markerIndex + marker.Length)..],
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out ordinal) &&
+                ordinal > 0 &&
+                ordinal.ToString(CultureInfo.InvariantCulture) ==
+                    tagVersion[(markerIndex + marker.Length)..])
+            {
+                version = tagVersion[..markerIndex];
+                maturity = candidate;
+                break;
+            }
+        }
         if (!IsThreePartVersion(version) ||
             (expectedVersion is not null &&
              !string.Equals(version, expectedVersion, StringComparison.Ordinal)) ||
+            (expectedChannel == "labs" &&
+             (assetName != FleetInstallerContract.LabsAssetName ||
+              maturity is null ||
+              maturity != expectedMaturity)) ||
+            (expectedChannel == "stable" &&
+             (assetName != FleetInstallerContract.AssetName ||
+              maturity is not null ||
+              expectedMaturity != "released")) ||
             !string.Equals(
                 value,
-                $"{prefix}{version}{suffix}",
+                $"{prefix}{tagVersion}{suffix}",
                 StringComparison.Ordinal))
         {
             throw new FleetInstallerException(
@@ -2697,8 +2834,21 @@ internal static class FleetInstallerValidation
         FleetInstallerTrustPolicy policy,
         DateTimeOffset now)
     {
+        var expectedProduct = FleetInstallerContract.ProductForChannel(policy.Channel);
+        var expectedAssetName = FleetInstallerContract.AssetNameForChannel(policy.Channel);
+        var expectedTrack = FleetInstallerContract.DistributionTrackForChannel(policy.Channel);
+        var expectedTrustMode =
+            FleetInstallerContract.AuthenticodeTrustModeForChannel(policy.Channel);
+        var expectedSelfIssued = policy.Channel == "labs";
+        var expectedPublicTrustClaim = policy.Channel != "labs";
+        var maturityAllowed = policy.Channel == "labs"
+            ? payload.Maturity is "alpha" or "beta" or "rc"
+            : payload.Maturity == "released";
         if (payload.Schema != FleetInstallerContract.PayloadSchema ||
-            payload.Product != FleetInstallerContract.Product ||
+            payload.Product != expectedProduct ||
+            payload.ProductChannel != policy.Channel ||
+            payload.DistributionTrack != expectedTrack ||
+            !maturityAllowed ||
             !IsIdentifier(payload.DescriptorId, 128) ||
             !IsThreePartVersion(payload.Version) ||
             payload.Channel != policy.Channel)
@@ -2712,7 +2862,7 @@ internal static class FleetInstallerValidation
             payload.ExpiresAtMs,
             payload.ValidityDurationMs,
             now);
-        if (payload.Asset.Name != FleetInstallerContract.AssetName ||
+        if (payload.Asset.Name != expectedAssetName ||
             payload.Asset.SizeBytes is < 1 or > FleetInstallerContract.MaximumAssetBytes ||
             !IsLowerSha256(payload.Asset.Sha256) ||
             !IsLowerSha256(payload.Asset.SignerCertificateSha256) ||
@@ -2720,13 +2870,25 @@ internal static class FleetInstallerValidation
                 payload.Asset.SignerCertificateSha256,
                 policy.InstallerSignerCertificateSha256) ||
             payload.Asset.MediaType != "application/vnd.microsoft.portable-executable" ||
-            payload.Asset.InstallerProtocol != FleetInstallerContract.InstallerProtocol)
+            payload.Asset.InstallerProtocol != FleetInstallerContract.InstallerProtocol ||
+            payload.Asset.AuthenticodeTrustMode != expectedTrustMode ||
+            payload.Asset.PublicTrustClaim != expectedPublicTrustClaim ||
+            payload.Asset.SignerSelfIssued != expectedSelfIssued ||
+            string.IsNullOrWhiteSpace(payload.Asset.SignerSubject) ||
+            payload.Asset.SignerSubject.Length > 256 ||
+            !IsUpperSha1(payload.Asset.SignerThumbprint) ||
+            !payload.Asset.TimestampRequired)
         {
             throw new FleetInstallerException(
                 "fleet_asset_binding_invalid",
                 "The Fleet installer asset identity or trust binding is invalid.");
         }
-        ValidateReleaseAssetUri(payload.Asset.Url, payload.Version);
+        ValidateReleaseAssetUri(
+            payload.Asset.Url,
+            payload.Version,
+            payload.Asset.Name,
+            payload.Channel,
+            payload.Maturity);
     }
 
     internal static void ValidateDescriptorFreshness(
@@ -2819,6 +2981,9 @@ internal sealed record FleetReleasePayload(
     string Product,
     string Version,
     string Channel,
+    string DistributionTrack,
+    string Maturity,
+    string ProductChannel,
     long IssuedAtMs,
     long ExpiresAtMs,
     long ValidityDurationMs,
@@ -2826,10 +2991,11 @@ internal sealed record FleetReleasePayload(
 
 internal static class WindowsAuthenticode
 {
+    private const int CertificateUntrustedRoot = unchecked((int)0x800B0109);
     private static readonly Guid GenericVerifyV2 =
         new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
 
-    public static void Verify(string path)
+    public static void Verify(string path, bool allowUntrustedRoot = false)
     {
         var fileInfo = new WinTrustFileInfo(path);
         var fileInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustFileInfo>());
@@ -2844,7 +3010,7 @@ internal static class WindowsAuthenticode
                 IntPtr.Zero,
                 GenericVerifyV2,
                 dataPointer);
-            if (result != 0)
+            if (result != 0 && !(allowUntrustedRoot && result == CertificateUntrustedRoot))
             {
                 throw new FleetInstallerException(
                     "fleet_installer_authenticode_invalid",

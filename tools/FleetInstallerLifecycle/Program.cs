@@ -14,9 +14,9 @@ internal static class Program
     private const string ReceiptSchema =
         "questionable.file_manager.fleet_installer_lifecycle_receipt.v1";
     private const string BuildReceiptSchema =
-        "rusty.fleet.windows_setup_build_receipt.v1";
+        "rusty.fleet.windows_setup_build_receipt.v3";
     private const string DescriptorReceiptSchema =
-        "rusty.fleet.windows_release_descriptor_receipt.v2";
+        "rusty.fleet.windows_release_descriptor_receipt.v5";
     private const string FleetStateSchema =
         "rusty.fleet.windows_setup_state.v2";
     private static readonly JsonSerializerOptions Json = new()
@@ -918,6 +918,9 @@ internal static class Program
         string Result,
         string Version,
         string Channel,
+        string ProductChannel,
+        string Maturity,
+        string DistributionTrack,
         string BuildKind,
         string SetupSha256,
         string BundleSha256,
@@ -927,20 +930,44 @@ internal static class Program
         bool SourceTreeClean,
         string CanonicalPePayloadSha256,
         long CanonicalPePayloadSizeBytes,
+        string AuthenticodeTrustMode,
+        string? SignerCertificateSha256,
+        bool SignerSelfIssued,
+        bool PublicTrustClaim,
+        bool TimestampRequired,
         string DistributionEligibility);
+
+    private sealed record ReleasePrimaryArtifact(
+        string Role,
+        string Name,
+        string Sha256,
+        long Bytes,
+        string Url);
 
     private sealed record ReleaseDescriptorReceipt(
         string Schema,
         string Result,
         string DescriptorId,
         string Version,
+        string ProductChannel,
+        string Maturity,
         string Channel,
+        string DistributionTrack,
+        string ReleaseTag,
+        string InstallationIdentity,
+        ReleasePrimaryArtifact PrimaryArtifact,
         long IssuedAtMs,
         long ExpiresAtMs,
         long ValidityDurationMs,
         string SetupSha256,
         long SetupSizeBytes,
         string SetupSignerCertificateSha256,
+        string SetupSignerSubject,
+        string SetupSignerThumbprint,
+        bool SetupSignerSelfIssued,
+        string AuthenticodeTrustMode,
+        bool PublicTrustClaim,
+        bool TimestampRequired,
         string SetupBuildReceiptSha256,
         string SourceRevision,
         string SourceTree,
@@ -1054,13 +1081,12 @@ internal static class Program
                 throw new InvalidOperationException(
                     "The external Fleet release root is missing or reparsed.");
             }
-            var setupPath = ExactLeaf(
-                fullRoot,
-                FleetInstallerContract.AssetName);
+            var setupName = FleetInstallerContract.AssetNameForChannel(channel);
+            var setupPath = ExactLeaf(fullRoot, setupName);
             var descriptorPath = ExactLeaf(fullRoot, "release.json");
             var buildReceiptPath = ExactLeaf(
                 fullRoot,
-                "RustyFleet-Setup.build-receipt.json");
+                Path.GetFileNameWithoutExtension(setupName) + ".build-receipt.json");
             var descriptorReceiptPath = ExactLeaf(
                 fullRoot,
                 "release-descriptor.receipt.json");
@@ -1089,7 +1115,7 @@ internal static class Program
             var timeProvider = new FixedTimeProvider(now);
             var signer =
                 new WindowsFleetInstallerArtifactTrustVerifier()
-                    .Verify(setupPath);
+                    .Verify(setupPath, descriptor.Asset);
             Require(
                 signer == trustedInstallerSignerPin &&
                 signer ==
@@ -1113,6 +1139,12 @@ internal static class Program
                 plan.Version == descriptor.Version &&
                 plan.Channel == descriptor.Channel &&
                 plan.AssetSha256 == descriptor.Asset.Sha256 &&
+                plan.AuthenticodeTrustMode == descriptor.Asset.AuthenticodeTrustMode &&
+                plan.SignerCertificateSha256 ==
+                    descriptor.Asset.SignerCertificateSha256 &&
+                plan.SignerSelfIssued == descriptor.Asset.SignerSelfIssued &&
+                plan.PublicTrustClaim == descriptor.Asset.PublicTrustClaim &&
+                plan.TimestampRequired == descriptor.Asset.TimestampRequired &&
                 plan.Ready,
                 "The exact Fleet Setup plan does not bind the signed descriptor.");
 
@@ -1161,6 +1193,9 @@ internal static class Program
                 build.Result == "pass" &&
                 build.Version == descriptor.Version &&
                 build.Channel == descriptor.Channel &&
+                build.ProductChannel == descriptor.ProductChannel &&
+                build.Maturity == descriptor.Maturity &&
+                build.DistributionTrack == descriptor.DistributionTrack &&
                 build.BuildKind == "signed-release" &&
                 build.SourceTreeClean &&
                 build.DistributionEligibility ==
@@ -1177,14 +1212,32 @@ internal static class Program
                 IsLowerHex40(build.SourceTree) &&
                 FleetInstallerValidation.IsLowerSha256(
                     build.CanonicalPePayloadSha256) &&
-                build.CanonicalPePayloadSizeBytes > 0,
+                build.CanonicalPePayloadSizeBytes > 0 &&
+                build.AuthenticodeTrustMode ==
+                    descriptor.Asset.AuthenticodeTrustMode &&
+                build.SignerCertificateSha256 ==
+                    descriptor.Asset.SignerCertificateSha256 &&
+                build.SignerSelfIssued == descriptor.Asset.SignerSelfIssued &&
+                build.PublicTrustClaim == descriptor.Asset.PublicTrustClaim &&
+                build.TimestampRequired == descriptor.Asset.TimestampRequired,
                 "The Fleet Setup build receipt is invalid.");
+            var releaseTag = new Uri(descriptor.Asset.Url).Segments[^2].TrimEnd('/');
             Require(
                 receipt.Schema == DescriptorReceiptSchema &&
                 receipt.Result == "pass" &&
                 receipt.DescriptorId == descriptor.DescriptorId &&
                 receipt.Version == descriptor.Version &&
+                receipt.ProductChannel == descriptor.ProductChannel &&
+                receipt.Maturity == descriptor.Maturity &&
                 receipt.Channel == descriptor.Channel &&
+                receipt.DistributionTrack == descriptor.DistributionTrack &&
+                receipt.ReleaseTag == releaseTag &&
+                receipt.InstallationIdentity == descriptor.Product &&
+                receipt.PrimaryArtifact.Role == "complete-product" &&
+                receipt.PrimaryArtifact.Name == descriptor.Asset.Name &&
+                receipt.PrimaryArtifact.Sha256 == descriptor.Asset.Sha256 &&
+                receipt.PrimaryArtifact.Bytes == descriptor.Asset.SizeBytes &&
+                receipt.PrimaryArtifact.Url == descriptor.Asset.Url &&
                 receipt.IssuedAtMs == descriptor.IssuedAtMs &&
                 receipt.ExpiresAtMs == descriptor.ExpiresAtMs &&
                 receipt.ValidityDurationMs ==
@@ -1194,6 +1247,12 @@ internal static class Program
                     new FileInfo(setupPath).Length &&
                 receipt.SetupSignerCertificateSha256 ==
                     descriptor.Asset.SignerCertificateSha256 &&
+                receipt.SetupSignerSubject == descriptor.Asset.SignerSubject &&
+                receipt.SetupSignerThumbprint == descriptor.Asset.SignerThumbprint &&
+                receipt.SetupSignerSelfIssued == descriptor.Asset.SignerSelfIssued &&
+                receipt.AuthenticodeTrustMode == descriptor.Asset.AuthenticodeTrustMode &&
+                receipt.PublicTrustClaim == descriptor.Asset.PublicTrustClaim &&
+                receipt.TimestampRequired == descriptor.Asset.TimestampRequired &&
                 receipt.SetupBuildReceiptSha256 ==
                     FileSha256(buildReceiptPath) &&
                 receipt.SourceRevision == build.SourceRevision &&

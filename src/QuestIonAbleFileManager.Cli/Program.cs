@@ -1944,8 +1944,8 @@ internal static class CliApplication
             The optional fleet routes are a distribution bootstrap only. Configuration
             selects the canonical MesmerPrism Pages metadata descriptor (or an explicitly
             enabled development fixture) and pins both its descriptor key and Windows
-            installer signer. Its strict v2 payload binds the exact numeric-version GitHub
-            Release URL for RustyFleet-Setup.exe; Pages never carries the binary. Payload
+            installer signer. Its strict v4 payload binds the exact channel/maturity GitHub
+            Release URL for RustyFleet[-Labs]-Setup.exe; Pages never carries the binary. Payload
             bytes must use RFC 8785 JCS, bind issue/expiry with a required duration, and
             expire within 24 hours. Embedded release trust
             comes only from reviewed checked-in source on the clean tagged release commit;

@@ -433,7 +433,7 @@ Tag: $tag
     $setupPublisher = Get-Content -Raw -LiteralPath (
         Join-Path $repoRoot 'tools\app\Publish-GuidedSetup.ps1')
     foreach ($requiredAuthorityBoundary in @(
-        "if (`$ProductChannel -ceq 'stable')",
+        '[Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile',
         '$releaseTrustParameters.ExpectedSetupSignerCertificateSha256'
     )) {
         if (-not $setupPublisher.Contains(
@@ -446,9 +446,9 @@ Tag: $tag
         Join-Path $repoRoot `
             'tools\Test-FleetInstallerReleaseConfiguration.ps1')
     if (-not $fleetReleaseValidator.Contains(
-            'Labs releases require the checked-in Fleet installer trust block to remain absent.',
+            'Labs releases require the complete isolated checked-in Fleet installer trust block.',
             [StringComparison]::Ordinal)) {
-        throw 'Labs validation does not require absent checked-in Fleet trust.'
+        throw 'Labs validation does not require complete channel-isolated Fleet trust.'
     }
 
     $stableWorkflowPath = Join-Path $repoRoot '.github\workflows\release.yml'
@@ -483,18 +483,18 @@ Tag: $tag
         -ExpectedProductChannel labs `
         -SetupExecutablePath (Join-Path $labsSetup `
             'QuestIonAbleFileManager.Setup.exe') | ConvertFrom-Json
-    if ($labsFleetValidation.compiled_field_count -ne 0 -or
+    if ($labsFleetValidation.compiled_field_count -ne 8 -or
         $labsFleetValidation.setup_replay_security -cne
-            'stable_routes_disabled_and_rejected' -or
+            'channel_isolated_self_test_passed' -or
         $labsFleetValidation.status -cne 'passed') {
-        throw 'Labs Fleet validation did not prove absent trust and disabled stable replay routes.'
+        throw 'Labs Fleet validation did not prove complete trust and isolated replay authority.'
     }
     Assert-Rejected {
         & (Join-Path $repoRoot `
             'tools\Test-FleetInstallerReleaseConfiguration.ps1') `
             -ExpectedProductChannel labs `
             -ExpectedSetupSignerCertificateSha256 ('f' * 64) | Out-Null
-    } 'stable Fleet provisioning signer authority supplied to Labs'
+    } 'wrong QFM Labs provisioning signer authority'
     foreach ($oldTrack in @('stable', 'labs')) {
         $invalidSetup = Join-Path $testRoot "invalid-track-$oldTrack"
         & dotnet publish (Join-Path $repoRoot 'src\QuestIonAbleFileManager.Setup\QuestIonAbleFileManager.Setup.csproj') --configuration Release --runtime win-x64 --self-contained false -p:QfmProductChannel=labs -p:QfmMaturity=alpha -p:QfmDistributionTrack=$oldTrack -p:QfmReleaseTag=v2.3.4-alpha.5 -p:QfmPackageIdentity=MesmerPrism.QuestIonAbleFileManager.Labs '-p:QfmDistributionDisplayName=QuestIonAble File Manager Labs' -p:QfmSetupAssetStem=QuestIonAbleFileManager-Labs --output $invalidSetup *> $null

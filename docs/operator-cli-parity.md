@@ -24,7 +24,7 @@ WPF `Keep awake` button continues to map only to `device keep-awake`.
 The distribution-only **Get Fleet** tab is different: its two buttons are
 ordinary typed operator routes with exact CLI equivalents. They verify and
 handoff one configured Fleet installer release: signed canonical Pages
-metadata binds one immutable numeric-version GitHub Release Setup asset.
+metadata binds one immutable channel/maturity GitHub Release Setup asset.
 Published builds take this trust configuration only from embedded release
 metadata; status reports its sanitized source kind. They do not project any
 Fleet runtime or device capability.
