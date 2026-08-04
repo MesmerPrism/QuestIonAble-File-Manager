@@ -11,8 +11,8 @@ co-installable Rusty Kiosk Labs preview. The current tested pair is File Manager
 - [Rusty Kiosk Labs tester guide](https://mesmerprism.com/Rusty-Kiosk/#labs)
 - [Meta Alpha invite](https://www.meta.com/s/4SlXf1lVo)
 - [Exact Kiosk Labs release](https://github.com/MesmerPrism/Rusty-Kiosk/releases/tag/v0.6.6-alpha.9)
-- [Exact Fleet Labs release](https://github.com/MesmerPrism/rusty-fleet/releases/tag/v0.1.0-alpha.7)
-- [Fleet Labs guided setup](https://github.com/MesmerPrism/rusty-fleet/releases/download/v0.1.0-alpha.7/RustyFleet-Labs-Setup.exe)
+- [Exact Fleet Labs release](https://github.com/MesmerPrism/rusty-fleet/releases/tag/v0.1.0-alpha.8)
+- [Fleet Labs guided setup](https://github.com/MesmerPrism/rusty-fleet/releases/download/v0.1.0-alpha.8/RustyFleet-Labs-Setup.exe)
 
 Labs prereleases are immutable exact-version releases and are deliberately not
 the repository's `latest` stable download.
