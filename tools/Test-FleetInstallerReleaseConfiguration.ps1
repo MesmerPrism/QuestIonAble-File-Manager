@@ -7,7 +7,7 @@ param(
     [string]$ExpectedTag,
 
     [ValidateSet('stable', 'labs')]
-    [string]$ExpectedProductChannel = 'stable',
+    [string]$ExpectedProductChannel,
 
     [string[]]$AssemblyPath = @(),
 
@@ -587,6 +587,14 @@ foreach ($path in @(
 
 $configurationSourceText = [IO.File]::ReadAllText($configurationSource)
 $checkedIn = Read-CheckedInConfiguration $configurationSourceText
+if ([string]::IsNullOrWhiteSpace($ExpectedProductChannel)) {
+    $ExpectedProductChannel = if ($checkedIn.Count -eq $expectedNames.Count) {
+        [string]$checkedIn.Channel
+    }
+    else {
+        'stable'
+    }
+}
 if ($ExpectedProductChannel -ceq 'labs' -and
     ($checkedIn.Count -ne $expectedNames.Count -or
      $checkedIn.Channel -cne 'labs' -or
