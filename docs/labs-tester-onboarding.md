@@ -1,8 +1,8 @@
 # Labs tester onboarding
 
 QuestIonAble File Manager Labs is the guided Windows setup route for the
-co-installable Rusty Kiosk Labs preview. The planned next immutable pair is File
-Manager `v0.5.0-alpha.12` and Kiosk `v0.6.6-alpha.9`.
+co-installable Rusty Kiosk Labs preview. The exact immutable pair documented
+here is File Manager `v0.5.0-alpha.12` and Kiosk `v0.6.6-alpha.9`.
 
 ## Exact public links
 
