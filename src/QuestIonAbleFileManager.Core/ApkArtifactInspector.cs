@@ -65,7 +65,18 @@ internal sealed class ApkArtifactInspector(
         "(?<key>[A-Za-z][A-Za-z0-9]*)='(?<value>[^']*)'",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SignerLine = new(
-        "^Signer #(?<number>[0-9]+) certificate SHA-256 digest:\\s*(?<digest>[0-9a-fA-F:]{64,95})\\s*$",
+        "^(?:" +
+        "Signer #[1-9][0-9]*|" +
+        "V(?:1|2|3\\.0) Signer(?: #[1-9][0-9]*)?:|" +
+        "V3\\.(?:0|1) Signer: \\(minSdkVersion=[0-9]+" +
+        "(?: \\(dev release=true\\))?, maxSdkVersion=[0-9]+\\)" +
+        ") " +
+        "certificate SHA-256 digest:\\s*(?<digest>[0-9a-fA-F:]{64,95})\\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex HybridSignerLine = new(
+        "^V3\\.2 Hybrid (?:Classical|PQC) Signer: \\(minSdkVersion=[0-9]+" +
+        "(?: \\(dev release=true\\))?, maxSdkVersion=[0-9]+\\) " +
+        "certificate SHA-256 digest:\\s*[0-9a-fA-F:]{64,95}\\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public async Task<ApkArtifactInspection> InspectAsync(
@@ -126,9 +137,17 @@ internal sealed class ApkArtifactInspector(
         var signer = await runner.RunAsync(
             signerExecutable, signerArguments, Timeout, cancellationToken).ConfigureAwait(false);
         signer.EnsureSuccess("Verify APK signer");
-        var signerDigests = signer.StandardOutput.ReplaceLineEndings("\n")
+        var signerLines = signer.StandardOutput.ReplaceLineEndings("\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => SignerLine.Match(line.Trim()))
+            .Select(static line => line.Trim())
+            .ToArray();
+        if (signerLines.Any(static line => HybridSignerLine.IsMatch(line)))
+        {
+            throw new InvalidDataException(
+                "APK Signature Scheme v3.2 hybrid signers are not supported by the single-signer identity contract.");
+        }
+        var signerDigests = signerLines
+            .Select(static line => SignerLine.Match(line))
             .Where(static match => match.Success)
             .Select(match => match.Groups["digest"].Value.Replace(":", "").ToLowerInvariant())
             .Distinct(StringComparer.Ordinal)

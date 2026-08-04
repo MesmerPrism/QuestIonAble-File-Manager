@@ -124,7 +124,7 @@ and register the App Installer update feed. See the [release workflow](docs/rele
 for signature and Smart App Control limitations.
 
 Friends testing Rusty Kiosk Labs should use the exact
-[File Manager Labs `v0.5.0-alpha.10` onboarding](docs/labs-tester-onboarding.md).
+[File Manager Labs onboarding](docs/labs-tester-onboarding.md).
 That prerelease embeds and validates Kiosk `v0.6.6-alpha.9`; the stable
 `releases/latest` installer remains on the stable product channel.
 

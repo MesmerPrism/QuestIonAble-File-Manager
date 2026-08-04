@@ -49,7 +49,7 @@ The CLI can be invoked directly in PowerShell without translating GUI labels
 into a different automation model. Agents can include `--adb <path>` when an
 exact tool selection is part of the test.
 
-Starting with Labs Alpha.13, CLI `kiosk install` and `kiosk provision` require
+Starting with Labs Alpha.14, CLI `kiosk install` and `kiosk provision` require
 exactly one explicit `--product-channel stable|labs`. This is an intentional
 fail-closed CLI migration: older scripts that omitted the option receive input
 exit code 2 before ADB dispatch. Typed Core callers retain the historical
