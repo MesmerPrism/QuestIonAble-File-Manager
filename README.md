@@ -87,6 +87,8 @@ user; this is not unrestricted access to the entire headset filesystem.
 - .NET 10 SDK for source builds;
 - Android SDK Platform Tools (`adb`) for bootstrap, general shared-path tools,
   package export, advanced installs, device settings, and diagnostics;
+- Android SDK Build Tools (`aapt2` and `apksigner`) for inspected APK routes
+  and the channel-bound Rusty Kiosk install transaction;
 - a Meta Quest with Developer Mode enabled and this computer authorized for
   USB debugging.
 - for Wi-Fi ADB, the PC and headset must share a reachable network; a USB
@@ -154,7 +156,8 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi connect --host <que
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file ./example.apk --parallelism 2 --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder ./example-apk-set --parallelism 2 --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk status --serial <quest-serial> --json
-dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk install --serial <usb-serial> --confirm-kiosk-setup --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk install --serial <usb-serial> --product-channel stable --confirm-kiosk-setup --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk provision --serial <usb-serial> --product-channel stable --confirm-kiosk-setup --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags export --serial <quest-serial> --output ./app-tags.v1.json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk tags import --serial <quest-serial> --file ./app-tags.v1.json --confirm-kiosk-control --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- kiosk-direct status --serial <usb-serial> --product-channel labs --confirm-kiosk-direct-bootstrap --json

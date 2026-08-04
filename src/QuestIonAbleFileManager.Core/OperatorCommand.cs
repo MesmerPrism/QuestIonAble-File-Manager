@@ -673,21 +673,27 @@ public static class OperatorCommands
     public static OperatorCommand InstallRustyKiosk(
         string serial,
         RustyKioskBundle bundle,
-        bool operatorConfirmed = false)
+        bool operatorConfirmed = false,
+        RustyKioskProductContract? product = null)
     {
         RequireApproval(operatorConfirmed, "Rusty Kiosk installation and USB setup");
         serial = AndroidInput.RequireSerial(serial);
         ArgumentNullException.ThrowIfNull(bundle);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
+        bundle.ValidateProductSelection(product);
         return new OperatorCommand(
             OperatorCommandKind.InstallRustyKiosk,
             [
                 "kiosk", "install", "--serial", serial,
+                "--product-channel", product.WireName,
                 "--bundle", bundle.Source,
                 "--confirm-kiosk-setup"
             ],
             serial: serial,
             operatorConfirmed: true,
-            rustyKioskBundle: bundle);
+            rustyKioskBundle: bundle,
+            rustyKioskProduct: product);
     }
 
     public static OperatorCommand InspectRustyKiosk(
@@ -707,15 +713,59 @@ public static class OperatorCommands
 
     public static OperatorCommand ProvisionRustyKiosk(
         string serial,
-        bool operatorConfirmed = false)
+        bool operatorConfirmed = false,
+        RustyKioskProductContract? product = null)
     {
         RequireApproval(operatorConfirmed, "Rusty Kiosk USB setup");
         serial = AndroidInput.RequireSerial(serial);
+        product = RustyKioskProductContract.RequireKnown(
+            product ?? RustyKioskProductContract.For(RustyKioskProductChannel.Stable));
         return new OperatorCommand(
             OperatorCommandKind.ProvisionRustyKiosk,
-            ["kiosk", "provision", "--serial", serial, "--confirm-kiosk-setup"],
+            [
+                "kiosk", "provision", "--serial", serial,
+                "--product-channel", product.WireName,
+                "--confirm-kiosk-setup"
+            ],
             serial: serial,
-            operatorConfirmed: true);
+            operatorConfirmed: true,
+            rustyKioskProduct: product);
+    }
+
+    public static RustyKioskProductContract ParseRequiredKioskSetupProductChannel(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        var indices = arguments
+            .Select(static (argument, index) => (argument, index))
+            .Where(static entry => string.Equals(
+                entry.argument,
+                "--product-channel",
+                StringComparison.OrdinalIgnoreCase))
+            .Select(static entry => entry.index)
+            .ToArray();
+        if (indices.Length == 0)
+        {
+            throw new ArgumentException(
+                "Rusty Kiosk install and provision require --product-channel <stable|labs>.",
+                nameof(arguments));
+        }
+        if (indices.Length != 1)
+        {
+            throw new ArgumentException(
+                "Rusty Kiosk setup accepts exactly one --product-channel option.",
+                nameof(arguments));
+        }
+
+        var index = indices[0];
+        if (index + 1 >= arguments.Count ||
+            arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Option --product-channel requires stable or labs.",
+                nameof(arguments));
+        }
+        return RustyKioskProductContract.Parse(arguments[index + 1]);
     }
 
     public static OperatorCommand InvokeRustyKiosk(
@@ -1328,7 +1378,9 @@ public sealed class OperatorCommandExecutor
                         command.RustyKioskBundle ??
                             throw new InvalidOperationException("The operator command is missing its Rusty Kiosk bundle."),
                         cancellationToken,
-                        progress).ConfigureAwait(false));
+                        progress,
+                        command.RustyKioskProduct ??
+                            throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.")).ConfigureAwait(false));
 
             case OperatorCommandKind.InspectRustyKiosk:
                 {
@@ -1357,7 +1409,9 @@ public sealed class OperatorCommandExecutor
                     command,
                     RustyKioskProvisionResult: await client.ProvisionRustyKioskAsync(
                         Require(command.Serial, nameof(command.Serial)),
-                        cancellationToken).ConfigureAwait(false));
+                        cancellationToken,
+                        command.RustyKioskProduct ??
+                            throw new InvalidOperationException("The operator command is missing its Rusty Kiosk product channel.")).ConfigureAwait(false));
 
             case OperatorCommandKind.InvokeRustyKiosk:
                 {

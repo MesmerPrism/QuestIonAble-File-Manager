@@ -196,6 +196,579 @@ public sealed class RustyKioskIntegrationTests
     [Theory]
     [InlineData(RustyKioskProductChannel.Stable)]
     [InlineData(RustyKioskProductChannel.Labs)]
+    public async Task InstallAndProvisionUseOnlyTheSelectedProductSetupIdentity(
+        RustyKioskProductChannel channel)
+    {
+        var product = RustyKioskProductContract.For(channel);
+        var other = RustyKioskProductContract.For(
+            channel == RustyKioskProductChannel.Stable
+                ? RustyKioskProductChannel.Labs
+                : RustyKioskProductChannel.Stable);
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-setup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var main = Path.Combine(tempRoot, RustyKioskContract.MainApkFileName);
+        var helper = Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName);
+        await File.WriteAllBytesAsync(main, [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(helper, [0x50, 0x4b, 0x03, 0x05]);
+        var bundle = CreateCommittedKioskBundle(main, helper, tempRoot, product);
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
+        {
+            if (fileName == "aapt2-test")
+            {
+                var package = File.ReadAllBytes(arguments[^1])[^1] == 0x04
+                    ? product.MainPackage
+                    : product.SetupHelperPackage;
+                return Success($"package: name='{package}' versionCode='60609' versionName='0.6.6-alpha.9'\n");
+            }
+            if (fileName == "apksigner-test")
+            {
+                return Success(
+                    $"Signer #1 certificate SHA-256 digest: {RustyKioskContract.TrustedSignerSha256}\n");
+            }
+            if (arguments.Count > 2 && arguments[2] == "install")
+            {
+                return Success("Success\n");
+            }
+            if (arguments.Contains("shell", StringComparer.Ordinal) &&
+                arguments.Any(static argument => argument.Contains("pm list packages -3", StringComparison.Ordinal)))
+            {
+                return Success($"package:{product.MainPackage}\npackage:{product.SetupHelperPackage}\n");
+            }
+            if (arguments.Contains("dumpsys", StringComparer.Ordinal) &&
+                arguments.Contains("package", StringComparer.Ordinal))
+            {
+                var package = arguments.Last();
+                if (package == product.MainPackage)
+                {
+                    return Success(
+                        $"Package [{package}]\nversionName=0.6.6-alpha.9\n" +
+                        $"  {product.SetupControlPermission}: granted=true\n");
+                }
+                if (package == product.SetupHelperPackage)
+                {
+                    return Success(
+                        $"Package [{package}]\nversionName=0.6.6-alpha.9\n" +
+                        $"  {RustyKioskContract.WriteSecureSettingsPermission}: granted=true\n");
+                }
+            }
+            if (arguments.Contains("grant", StringComparer.Ordinal))
+            {
+                return arguments.Contains(product.SetupHelperPackage, StringComparer.Ordinal) &&
+                       arguments.Contains(RustyKioskContract.WriteSecureSettingsPermission, StringComparer.Ordinal)
+                    ? Success(string.Empty)
+                    : new CommandResult("adb-test", arguments, 1, string.Empty, "wrong grant", TimeSpan.Zero);
+            }
+            if (ProviderMethod(arguments) == "contract")
+            {
+                return Bundle(
+                    $"accepted=true, completed=true, schema={RustyKioskContract.HostOperatorSuccessorSchema}, " +
+                    $"package={product.MainPackage}, product_channel={product.WireName}");
+            }
+            return new CommandResult("adb-test", arguments, 1, string.Empty, "unexpected call", TimeSpan.Zero);
+        });
+        var client = new AdbClient(
+            "adb-test",
+            runner,
+            new AndroidBuildToolPaths("aapt2-test", "apksigner-test"));
+        var executor = new OperatorCommandExecutor(client);
+
+        try
+        {
+            var installExecution = await executor.ExecuteAsync(
+                OperatorCommands.InstallRustyKiosk(
+                    "QUEST123",
+                    bundle,
+                    operatorConfirmed: true,
+                    product: product));
+            var provisionExecution = await executor.ExecuteAsync(
+                OperatorCommands.ProvisionRustyKiosk(
+                    "QUEST123",
+                    operatorConfirmed: true,
+                    product: product));
+            var install = installExecution.RustyKioskInstallResult!;
+            var provision = provisionExecution.RustyKioskProvisionResult!;
+
+            Assert.Equal(product, install.Product);
+            Assert.Equal(product, provision.Product);
+            Assert.Equal(OperatorMutationStage.Confirmed, installExecution.MutationReceipt!.Stage);
+            Assert.Equal(OperatorMutationStage.Confirmed, provisionExecution.MutationReceipt!.Stage);
+            Assert.Contains(product.WireName, installExecution.MutationReceipt.DesiredState, StringComparison.Ordinal);
+            Assert.Contains(product.WireName, installExecution.MutationReceipt.ObservedState, StringComparison.Ordinal);
+            Assert.Contains(product.WireName, provisionExecution.MutationReceipt.DesiredState, StringComparison.Ordinal);
+            Assert.Contains(product.WireName, provisionExecution.MutationReceipt.ObservedState, StringComparison.Ordinal);
+            Assert.True(install.HelperReady);
+            Assert.True(install.SameSignerControlGranted);
+            Assert.True(provision.HelperReady);
+            Assert.True(provision.SameSignerControlGranted);
+            var installPaths = runner.Calls
+                .Where(static call => call.FileName == "adb-test" &&
+                                      call.Arguments.Count > 2 &&
+                                      call.Arguments[2] == "install")
+                .Select(static call => call.Arguments[^1])
+                .ToArray();
+            Assert.Equal(2, installPaths.Length);
+            Assert.All(
+                installPaths,
+                path =>
+                {
+                    Assert.Contains("QuestIonAbleFileManager.ApkAdmission", path, StringComparison.Ordinal);
+                    Assert.NotEqual(main, path);
+                    Assert.NotEqual(helper, path);
+                });
+            Assert.Equal(
+                2,
+                runner.Calls.Count(call =>
+                    call.Arguments.Contains("grant", StringComparer.Ordinal) &&
+                    call.Arguments.Contains(product.SetupHelperPackage, StringComparer.Ordinal)));
+            Assert.Contains(
+                runner.Calls,
+                call => ProviderMethod(call.Arguments) == "contract" &&
+                        call.Arguments.Contains(product.OperatorUri, StringComparer.Ordinal));
+            Assert.DoesNotContain(
+                runner.Calls.SelectMany(static call => call.Arguments),
+                argument => argument == other.MainPackage ||
+                            argument == other.SetupHelperPackage ||
+                            argument == other.SetupControlPermission ||
+                            argument == other.OperatorUri);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task KioskSetupRejectsCrossChannelBundleWithoutFallback()
+    {
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var bundle = new RustyKioskBundle("main.apk", "helper.apk", "bundle", stable);
+        var runner = new RecordingCommandRunner((_, arguments) =>
+            new CommandResult("adb-test", arguments, 1, string.Empty, "must not dispatch", TimeSpan.Zero));
+        var client = new AdbClient("adb-test", runner);
+
+        Assert.Throws<InvalidDataException>(() => OperatorCommands.InstallRustyKiosk(
+            "QUEST123",
+            bundle,
+            operatorConfirmed: true,
+            product: labs));
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.InstallRustyKioskAsync(
+            "QUEST123",
+            bundle,
+            product: labs));
+        Assert.Empty(runner.Calls);
+    }
+
+    [Fact]
+    public async Task MixedKioskApkPairFailsPreflightWithoutAnyAdbFallback()
+    {
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-mixed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var main = Path.Combine(tempRoot, RustyKioskContract.MainApkFileName);
+        var helper = Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName);
+        await File.WriteAllBytesAsync(main, [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(helper, [0x50, 0x4b, 0x03, 0x05]);
+        var bundle = new RustyKioskBundle(
+            main,
+            helper,
+            tempRoot,
+            labs,
+            new RustyKioskBundleApkCommitment(
+                labs.MainPackage,
+                Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(main))).ToLowerInvariant(),
+                new FileInfo(main).Length),
+            new RustyKioskBundleApkCommitment(
+                labs.SetupHelperPackage,
+                Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(helper))).ToLowerInvariant(),
+                new FileInfo(helper).Length),
+            RustyKioskContract.TrustedSignerSha256);
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
+        {
+            if (fileName == "aapt2-test")
+            {
+                var package = File.ReadAllBytes(arguments[^1])[^1] == 0x04
+                    ? labs.MainPackage
+                    : stable.SetupHelperPackage;
+                return Success($"package: name='{package}' versionCode='60609'\n");
+            }
+            if (fileName == "apksigner-test")
+            {
+                return Success(
+                    $"Signer #1 certificate SHA-256 digest: {RustyKioskContract.TrustedSignerSha256}\n");
+            }
+            return new CommandResult(fileName, arguments, 1, string.Empty, "must not dispatch", TimeSpan.Zero);
+        });
+        var client = new AdbClient(
+            "adb-test",
+            runner,
+            new AndroidBuildToolPaths("aapt2-test", "apksigner-test"));
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => client.InstallRustyKioskAsync(
+                "QUEST123",
+                bundle,
+                product: labs));
+            Assert.DoesNotContain(runner.Calls, static call => call.FileName == "adb-test");
+            Assert.Equal(4, runner.Calls.Count);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CrossSignedKioskPairFailsPreflightWithoutAnyAdbCall()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-cross-signed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var main = Path.Combine(tempRoot, RustyKioskContract.MainApkFileName);
+        var helper = Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName);
+        await File.WriteAllBytesAsync(main, [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(helper, [0x50, 0x4b, 0x03, 0x05]);
+        var bundle = CreateCommittedKioskBundle(main, helper, tempRoot, labs);
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
+        {
+            if (fileName == "aapt2-test")
+            {
+                var package = File.ReadAllBytes(arguments[^1])[^1] == 0x04
+                    ? labs.MainPackage
+                    : labs.SetupHelperPackage;
+                return Success($"package: name='{package}' versionCode='60609'\n");
+            }
+            if (fileName == "apksigner-test")
+            {
+                var signer = File.ReadAllBytes(arguments[^1])[^1] == 0x04
+                    ? RustyKioskContract.TrustedSignerSha256
+                    : new string('b', 64);
+                return Success($"Signer #1 certificate SHA-256 digest: {signer}\n");
+            }
+            return new CommandResult(fileName, arguments, 1, string.Empty, "must not dispatch", TimeSpan.Zero);
+        });
+        var client = new AdbClient(
+            "adb-test",
+            runner,
+            new AndroidBuildToolPaths("aapt2-test", "apksigner-test"));
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => client.InstallRustyKioskAsync(
+                "QUEST123",
+                bundle,
+                product: labs));
+            Assert.DoesNotContain(runner.Calls, static call => call.FileName == "adb-test");
+            Assert.Equal(4, runner.Calls.Count);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CryptographicallyInvalidKioskApkFailsBeforeAnyAdbCall()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-invalid-signature-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        var main = Path.Combine(tempRoot, RustyKioskContract.MainApkFileName);
+        var helper = Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName);
+        await File.WriteAllBytesAsync(main, [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(helper, [0x50, 0x4b, 0x03, 0x05]);
+        var bundle = CreateCommittedKioskBundle(main, helper, tempRoot, labs);
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
+        {
+            if (fileName == "aapt2-test")
+            {
+                return Success($"package: name='{labs.MainPackage}' versionCode='60609'\n");
+            }
+            if (fileName == "apksigner-test")
+            {
+                return new CommandResult(
+                    fileName,
+                    arguments,
+                    1,
+                    string.Empty,
+                    "DOES NOT VERIFY",
+                    TimeSpan.Zero);
+            }
+            return new CommandResult(fileName, arguments, 1, string.Empty, "must not dispatch", TimeSpan.Zero);
+        });
+        var client = new AdbClient(
+            "adb-test",
+            runner,
+            new AndroidBuildToolPaths("aapt2-test", "apksigner-test"));
+
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() => client.InstallRustyKioskAsync(
+                "QUEST123",
+                bundle,
+                product: labs));
+            Assert.DoesNotContain(runner.Calls, static call => call.FileName == "adb-test");
+            Assert.Equal(2, runner.Calls.Count);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "ExternalFixture")]
+    public async Task ReleaseKioskBundleCryptographicAdmissionMatchesPinnedIdentityWhenConfigured()
+    {
+        var bundleDirectory = Environment.GetEnvironmentVariable("QFM_KIOSK_RELEASE_FIXTURE_DIR");
+        if (string.IsNullOrWhiteSpace(bundleDirectory))
+        {
+            return;
+        }
+
+        var bundle = RustyKioskBundle.FromDirectory(bundleDirectory);
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        using var immutable = await ImmutableApkAdmission.CreateManyAsync(
+            [bundle.MainApkPath, bundle.SetupHelperApkPath],
+            CancellationToken.None);
+        var adb = Path.Combine(
+            Environment.GetEnvironmentVariable("ANDROID_SDK_ROOT") ??
+            Environment.GetEnvironmentVariable("ANDROID_HOME") ??
+                throw new InvalidOperationException(
+                    "ANDROID_SDK_ROOT or ANDROID_HOME is required for the external fixture gate."),
+            "platform-tools",
+            "adb.exe");
+        var inspector = new ApkArtifactInspector(
+            new CommandRunner(),
+            AndroidBuildToolPaths.FindFromAdb(adb));
+        var main = await inspector.InspectAsync(immutable.Paths[0]);
+        var helper = await inspector.InspectAsync(immutable.Paths[1]);
+        var admission = bundle.AcquireAdmission(labs, main, helper);
+
+        Assert.Equal(bundle.MainCommitment!.Sha256, main.Sha256);
+        Assert.Equal(bundle.SetupHelperCommitment!.Sha256, helper.Sha256);
+        Assert.Equal(labs.MainPackage, main.Identity.PackageName);
+        Assert.Equal(labs.SetupHelperPackage, helper.Identity.PackageName);
+        Assert.Equal(RustyKioskContract.TrustedSignerSha256, main.Identity.SignerSha256);
+        Assert.Equal(RustyKioskContract.TrustedSignerSha256, helper.Identity.SignerSha256);
+        Assert.Equal(main.Path, admission.MainApkPath);
+        Assert.Equal(helper.Path, admission.SetupHelperApkPath);
+        Assert.NotEqual(bundle.MainApkPath, admission.MainApkPath);
+        Assert.NotEqual(bundle.SetupHelperApkPath, admission.SetupHelperApkPath);
+    }
+
+    [Fact]
+    public void KioskSetupCliProductChannelIsRequiredStrictAndHasNoDefaultFallback()
+    {
+        Assert.Equal(
+            RustyKioskProductChannel.Stable,
+            OperatorCommands.ParseRequiredKioskSetupProductChannel(
+                ["kiosk", "install", "--product-channel", "stable"]).Channel);
+        Assert.Equal(
+            RustyKioskProductChannel.Labs,
+            OperatorCommands.ParseRequiredKioskSetupProductChannel(
+                ["kiosk", "provision", "--product-channel", "labs"]).Channel);
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.ParseRequiredKioskSetupProductChannel(
+                ["kiosk", "install"]));
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.ParseRequiredKioskSetupProductChannel(
+                ["kiosk", "install", "--product-channel", "Labs"]));
+        Assert.Throws<ArgumentException>(() =>
+            OperatorCommands.ParseRequiredKioskSetupProductChannel(
+                [
+                    "kiosk", "install",
+                    "--product-channel", "labs",
+                    "--product-channel", "stable"
+                ]));
+    }
+
+    [Fact]
+    public void KioskSetupFactoriesPreserveStableDefaultAndExactLabsCliVectors()
+    {
+        var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+        var stable = RustyKioskProductContract.For(RustyKioskProductChannel.Stable);
+        var stableBundle = new RustyKioskBundle("main.apk", "helper.apk", "bundle");
+        var labsBundle = new RustyKioskBundle(
+            "main.apk",
+            "helper.apk",
+            "bundle",
+            labs,
+            new RustyKioskBundleApkCommitment(labs.MainPackage, new string('a', 64), 1),
+            new RustyKioskBundleApkCommitment(labs.SetupHelperPackage, new string('b', 64), 1),
+            RustyKioskContract.TrustedSignerSha256);
+        var stableInstall = OperatorCommands.InstallRustyKiosk(
+            "QUEST123",
+            stableBundle,
+            operatorConfirmed: true);
+        var labsInstall = OperatorCommands.InstallRustyKiosk(
+            "QUEST123",
+            labsBundle,
+            operatorConfirmed: true,
+            product: labs);
+        var labsProvision = OperatorCommands.ProvisionRustyKiosk(
+            "QUEST123",
+            operatorConfirmed: true,
+            product: labs);
+
+        Assert.Equal(stable, stableInstall.RustyKioskProduct);
+        var stableChannelIndex = stableInstall.CliArguments.ToList().IndexOf("--product-channel");
+        Assert.True(stableChannelIndex >= 0);
+        Assert.Equal("stable", stableInstall.CliArguments[stableChannelIndex + 1]);
+        Assert.Equal(labs, labsInstall.RustyKioskProduct);
+        Assert.Equal(labs, labsProvision.RustyKioskProduct);
+        Assert.Contains("--product-channel", labsInstall.CliArguments);
+        Assert.Contains("labs", labsInstall.CliArguments);
+        Assert.Contains("--product-channel", labsProvision.CliArguments);
+        Assert.Contains("labs", labsProvision.CliArguments);
+    }
+
+    [Fact]
+    public async Task BundledLabsManifestSelectsExactLabsIdentityAndRejectsStableSelection()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-manifest-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        await File.WriteAllBytesAsync(
+            Path.Combine(tempRoot, RustyKioskContract.MainApkFileName),
+            [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(
+            Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName),
+            [0x50, 0x4b, 0x03, 0x05]);
+        var mainPath = Path.Combine(tempRoot, RustyKioskContract.MainApkFileName);
+        var helperPath = Path.Combine(tempRoot, RustyKioskContract.SetupHelperApkFileName);
+        var mainSha = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(mainPath))).ToLowerInvariant();
+        var helperSha = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(helperPath))).ToLowerInvariant();
+        await File.WriteAllTextAsync(
+            Path.Combine(tempRoot, "bundle-manifest.json"),
+            $$"""
+            {
+              "schema": "meta.quest.file_manager.rusty_kiosk_bundle.v2",
+              "product_channel": "labs",
+              "signer_sha256": "{{RustyKioskContract.TrustedSignerSha256}}",
+              "files": [
+                {
+                  "name": "rusty-kiosk.apk",
+                  "package_name": "io.github.mesmerprism.rustykiosk.labs",
+                  "sha256": "{{mainSha}}",
+                  "bytes": {{new FileInfo(mainPath).Length}}
+                },
+                {
+                  "name": "rusty-kiosk-setup-helper.apk",
+                  "package_name": "io.github.mesmerprism.rustykiosk.setuphelper.labs",
+                  "sha256": "{{helperSha}}",
+                  "bytes": {{new FileInfo(helperPath).Length}}
+                }
+              ]
+            }
+            """);
+
+        try
+        {
+            var bundle = RustyKioskBundle.FromDirectory(tempRoot);
+            var labs = RustyKioskProductContract.For(RustyKioskProductChannel.Labs);
+            var command = OperatorCommands.InstallRustyKiosk(
+                "QUEST123",
+                bundle,
+                operatorConfirmed: true,
+                product: bundle.DeclaredProduct);
+
+            Assert.Equal(labs, bundle.DeclaredProduct);
+            Assert.Equal(labs, command.RustyKioskProduct);
+            Assert.Throws<InvalidDataException>(() => OperatorCommands.InstallRustyKiosk(
+                "QUEST123",
+                bundle,
+                operatorConfirmed: true));
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ExplicitKioskBundleErrorsNeverFallThroughToAnotherCandidate()
+    {
+        var missing = Path.Combine(Path.GetTempPath(), $"qfm-missing-kiosk-{Guid.NewGuid():N}");
+        Assert.Throws<DirectoryNotFoundException>(() =>
+            RustyKioskBundleLocator.ResolveRequiredForSetup(missing));
+
+        var malformed = Path.Combine(Path.GetTempPath(), $"qfm-malformed-kiosk-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(malformed);
+        await File.WriteAllBytesAsync(
+            Path.Combine(malformed, RustyKioskContract.MainApkFileName),
+            [0x50, 0x4b, 0x03, 0x04]);
+        await File.WriteAllBytesAsync(
+            Path.Combine(malformed, RustyKioskContract.SetupHelperApkFileName),
+            [0x50, 0x4b, 0x03, 0x05]);
+        await File.WriteAllTextAsync(
+            Path.Combine(malformed, "bundle-manifest.json"),
+            "{\"product_channel\":\"labs\"}");
+        try
+        {
+            Assert.Throws<InvalidDataException>(() =>
+                RustyKioskBundleLocator.ResolveRequiredForSetup(malformed));
+        }
+        finally
+        {
+            Directory.Delete(malformed, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task KioskBundleManifestBoundsRejectOversizedBytesAndExcessiveFileRows()
+    {
+        static async Task SeedApksAsync(string root)
+        {
+            Directory.CreateDirectory(root);
+            await File.WriteAllBytesAsync(
+                Path.Combine(root, RustyKioskContract.MainApkFileName),
+                [0x50, 0x4b, 0x03, 0x04]);
+            await File.WriteAllBytesAsync(
+                Path.Combine(root, RustyKioskContract.SetupHelperApkFileName),
+                [0x50, 0x4b, 0x03, 0x05]);
+        }
+
+        var oversized = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-oversized-{Guid.NewGuid():N}");
+        var excessive = Path.Combine(Path.GetTempPath(), $"qfm-kiosk-excessive-{Guid.NewGuid():N}");
+        await SeedApksAsync(oversized);
+        await SeedApksAsync(excessive);
+        await File.WriteAllBytesAsync(
+            Path.Combine(oversized, "bundle-manifest.json"),
+            new byte[512 * 1024 + 1]);
+        await File.WriteAllTextAsync(
+            Path.Combine(excessive, "bundle-manifest.json"),
+            JsonSerializer.Serialize(new
+            {
+                schema = "meta.quest.file_manager.rusty_kiosk_bundle.v2",
+                product_channel = "labs",
+                signer_sha256 = RustyKioskContract.TrustedSignerSha256,
+                files = Enumerable.Range(0, 65).Select(index => new
+                {
+                    name = $"extra-{index}.txt"
+                })
+            }));
+
+        try
+        {
+            var oversizedError = Assert.Throws<InvalidDataException>(() =>
+                RustyKioskBundle.FromDirectory(oversized));
+            Assert.Contains("2..524288 bytes", oversizedError.Message, StringComparison.Ordinal);
+            var excessiveError = Assert.Throws<InvalidDataException>(() =>
+                RustyKioskBundle.FromDirectory(excessive));
+            Assert.Contains("at most 64 file rows", excessiveError.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(oversized, recursive: true);
+            Directory.Delete(excessive, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(RustyKioskProductChannel.Stable)]
+    [InlineData(RustyKioskProductChannel.Labs)]
     public async Task AdbStatusAndCommandUseOnlyTheSelectedProductIdentity(
         RustyKioskProductChannel channel)
     {
@@ -985,6 +1558,28 @@ public sealed class RustyKioskIntegrationTests
     {
         var index = Array.IndexOf(arguments.ToArray(), "--method");
         return index >= 0 && index + 1 < arguments.Count ? arguments[index + 1] : null;
+    }
+
+    private static RustyKioskBundle CreateCommittedKioskBundle(
+        string mainPath,
+        string helperPath,
+        string source,
+        RustyKioskProductContract product)
+    {
+        static RustyKioskBundleApkCommitment Commit(string path, string packageName) =>
+            new(
+                packageName,
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant(),
+                new FileInfo(path).Length);
+
+        return new RustyKioskBundle(
+            mainPath,
+            helperPath,
+            source,
+            product,
+            Commit(mainPath, product.MainPackage),
+            Commit(helperPath, product.SetupHelperPackage),
+            RustyKioskContract.TrustedSignerSha256);
     }
 
     private sealed class RecordingCommandRunner(

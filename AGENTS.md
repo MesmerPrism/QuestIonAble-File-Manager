@@ -328,7 +328,7 @@ questionable-file-manager.exe wifi disconnect --host <quest-ip> --port 5555 --co
 questionable-file-manager.exe apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json
 questionable-file-manager.exe apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json
 questionable-file-manager.exe kiosk status --serial <quest-serial> --json
-questionable-file-manager.exe kiosk install --serial <usb-serial> --confirm-kiosk-setup
+questionable-file-manager.exe kiosk install --serial <usb-serial> --product-channel stable --confirm-kiosk-setup
 questionable-file-manager.exe kiosk command --serial <quest-serial> --command request-wifi-adb --confirm-kiosk-control --json
 questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json
 questionable-file-manager.exe kiosk-direct status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --json
