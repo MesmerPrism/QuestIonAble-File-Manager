@@ -712,7 +712,7 @@ internal static class FleetWindowsFileSafety
             FileShareRead,
             IntPtr.Zero,
             OpenExisting,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open staged push input '{path}'");
         return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
@@ -726,7 +726,7 @@ internal static class FleetWindowsFileSafety
             FileShareRead,
             IntPtr.Zero,
             CreateNew,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"create retained file '{path}'");
         return new FileStream(handle, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
@@ -740,7 +740,7 @@ internal static class FleetWindowsFileSafety
             FileShareRead,
             IntPtr.Zero,
             OpenExisting,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open retained staged file '{path}'");
         return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
@@ -757,7 +757,7 @@ internal static class FleetWindowsFileSafety
             FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero,
             OpenExisting,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(
             handle,
@@ -773,7 +773,7 @@ internal static class FleetWindowsFileSafety
             0,
             IntPtr.Zero,
             OpenExisting,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open file for deletion '{path}'");
         return new FileStream(handle, FileAccess.Read, 4 * 1024, isAsync: false);
@@ -787,7 +787,7 @@ internal static class FleetWindowsFileSafety
             FileShareRead | FileShareWrite | FileShareDelete,
             IntPtr.Zero,
             OpenExisting,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open retained file '{path}'");
         return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
@@ -801,7 +801,7 @@ internal static class FleetWindowsFileSafety
             0,
             IntPtr.Zero,
             OpenAlways,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         ThrowIfInvalid(handle, $"open exclusive file '{path}'");
         return new FileStream(handle, FileAccess.ReadWrite, 4 * 1024, isAsync: false);
@@ -828,7 +828,7 @@ internal static class FleetWindowsFileSafety
             0,
             IntPtr.Zero,
             CreateNew,
-            FileAttributeNormal | FileFlagOpenReparsePoint,
+            FileFlagOpenReparsePoint,
             IntPtr.Zero);
         if (handle.IsInvalid)
         {
@@ -978,6 +978,37 @@ internal static class FleetWindowsFileSafety
         }
     }
 
+    private static SafeFileHandle CreateFile(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile) =>
+        CreateFileNative(
+            ToExtendedPath(fileName),
+            desiredAccess,
+            shareMode,
+            securityAttributes,
+            creationDisposition,
+            flagsAndAttributes,
+            templateFile);
+
+    private static string ToExtendedPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (fullPath.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            return fullPath;
+        }
+        if (fullPath.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return @"\\?\UNC\" + fullPath[2..];
+        }
+        return @"\\?\" + fullPath;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct FileTime
     {
@@ -1020,7 +1051,7 @@ internal static class FleetWindowsFileSafety
     }
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern SafeFileHandle CreateFile(
+    private static extern SafeFileHandle CreateFileNative(
         string fileName,
         uint desiredAccess,
         uint shareMode,

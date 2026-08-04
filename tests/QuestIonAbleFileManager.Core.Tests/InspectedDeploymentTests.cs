@@ -31,6 +31,42 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Inspect_AcceptsCallerOwnedReadOnlyArtifact()
+    {
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            "QuestIonAbleFileManager.LongReadOnly",
+            Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(
+            testRoot,
+            new string('a', 80),
+            new string('b', 80),
+            new string('c', 80));
+        var apk = Path.Combine(root, "read-only.apk");
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.readonly' versionCode='7' versionName='1.0'\n")
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('b', 64) + "\n"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            await File.WriteAllBytesAsync(apk, [1, 2, 3, 4]);
+            Assert.True(apk.Length > 260);
+            File.SetAttributes(apk, File.GetAttributes(apk) | FileAttributes.ReadOnly);
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .InspectApkAsync(apk);
+
+            Assert.Equal("com.example.readonly", result.Identity.PackageName);
+            Assert.Equal(4, result.SizeBytes);
+            Assert.True(File.GetAttributes(apk).HasFlag(FileAttributes.ReadOnly));
+        }
+        finally
+        {
+            File.SetAttributes(apk, File.GetAttributes(apk) & ~FileAttributes.ReadOnly);
+            Directory.Delete(testRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Inspect_RejectsAmbiguousSignerAndSplitArtifact()
     {
         var apk = await CreateApkAsync();
