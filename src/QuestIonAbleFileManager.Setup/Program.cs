@@ -34,7 +34,54 @@ internal static class DistributionIdentity
             return ProductChannel == "labs";
         }
     }
-    internal static bool FleetReplayProtectionEnabled => !IsLabs;
+    internal static bool FleetReplayProtectionEnabled
+    {
+        get
+        {
+            ValidateAxes();
+            var values = FleetInstallerReleaseProof.ReadValues();
+            if (values.Count == 0)
+            {
+                return false;
+            }
+            if (!values.TryGetValue("Channel", out var channel) ||
+                !string.Equals(channel, ProductChannel, StringComparison.Ordinal) ||
+                !values.TryGetValue("StateRootRelativePath", out var stateRoot) ||
+                (IsLabs && !string.Equals(
+                    stateRoot,
+                    "QuestIonAbleFileManagerLabs/FleetInstaller",
+                    StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    "Fleet replay authority does not match the closed distribution identity.");
+            }
+            return true;
+        }
+    }
+
+    internal static int WriteFleetReplayBindingProof()
+    {
+        var values = FleetInstallerReleaseProof.ReadValues();
+        var enabled = FleetReplayProtectionEnabled;
+        values.TryGetValue("Channel", out var fleetChannel);
+        values.TryGetValue("StateRootRelativePath", out var stateRoot);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            schema =
+                "questionable.file_manager.fleet_replay_channel_binding.v1",
+            product_channel = ProductChannel,
+            configured = enabled,
+            fleet_channel = fleetChannel,
+            state_root_relative_path = stateRoot,
+            channel_isolated = enabled &&
+                string.Equals(fleetChannel, ProductChannel, StringComparison.Ordinal) &&
+                (!IsLabs || string.Equals(
+                    stateRoot,
+                    "QuestIonAbleFileManagerLabs/FleetInstaller",
+                    StringComparison.Ordinal))
+        }));
+        return 0;
+    }
 
     private static void ValidateAxes()
     {
@@ -46,30 +93,6 @@ internal static class DistributionIdentity
         {
             throw new InvalidOperationException(
                 "The embedded product_channel, maturity, and distribution_track axes are invalid.");
-        }
-    }
-
-    internal static void RejectLabsFleetReplayOperation(
-        bool repair,
-        bool destructiveReset)
-    {
-        if (IsLabs && (repair || destructiveReset))
-        {
-            throw new ArgumentException(
-                "Labs Setup cannot read, repair, reset, or provision the stable Fleet replay authority.");
-        }
-    }
-
-    internal static void RejectLabsFleetReplayArguments(string[] args)
-    {
-        if (IsLabs &&
-            args.Any(argument =>
-                argument.StartsWith(
-                    "--fleet-replay",
-                    StringComparison.Ordinal)))
-        {
-            throw new ArgumentException(
-                "Labs Setup cannot invoke stable Fleet replay authority routes.");
         }
     }
 
@@ -152,9 +175,6 @@ internal sealed record InstallerOptions(
             throw new ArgumentException(
                 "Fleet replay repair and destructive reset are mutually exclusive.");
         }
-        DistributionIdentity.RejectLabsFleetReplayOperation(
-            repairFleetReplayProtection,
-            destructiveResetFleetReplayProtection);
         if (DistributionIdentity.IsLabs)
         {
             ValidateLabsSource(
@@ -576,7 +596,7 @@ internal sealed class GuidedInstaller
                     options.RepairFleetReplayProtection,
                     options.DestructiveResetFleetReplayProtection)
             : new FleetReplayProtectionSetupResult(
-                "labs_disabled",
+                "not_configured",
                 StateRootSha256: null);
 
         var launched = false;
@@ -812,10 +832,13 @@ internal static class Program
     {
         try
         {
-            DistributionIdentity.RejectLabsFleetReplayArguments(args);
             if (args is ["--fleet-release-configuration-proof"])
             {
                 return FleetInstallerReleaseProof.Write();
+            }
+            if (args is ["--fleet-replay-binding-proof"])
+            {
+                return DistributionIdentity.WriteFleetReplayBindingProof();
             }
             if (args is ["--fleet-replay-security-self-test"])
             {

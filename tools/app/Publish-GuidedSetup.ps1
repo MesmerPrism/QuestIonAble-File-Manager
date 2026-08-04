@@ -81,22 +81,20 @@ if (-not $Unsigned) {
         AssemblyPath = @($coreAssemblies.FullName)
         SetupExecutablePath = $outputExe
     }
-    if ($ProductChannel -ceq 'stable') {
-        $setupSigningCertificate =
-            [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
-                [IO.Path]::GetFullPath($CertificatePath),
-                $CertificatePassword,
-                [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
-        try {
-            $releaseTrustParameters.ExpectedSetupSignerCertificateSha256 =
-                [Convert]::ToHexString(
-                    [Security.Cryptography.SHA256]::HashData(
-                        $setupSigningCertificate.RawData)
-                ).ToLowerInvariant()
-        }
-        finally {
-            $setupSigningCertificate.Dispose()
-        }
+    $setupSigningCertificate =
+        [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
+            [IO.Path]::GetFullPath($CertificatePath),
+            $CertificatePassword,
+            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    try {
+        $releaseTrustParameters.ExpectedSetupSignerCertificateSha256 =
+            [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData(
+                    $setupSigningCertificate.RawData)
+            ).ToLowerInvariant()
+    }
+    finally {
+        $setupSigningCertificate.Dispose()
     }
     & (Join-Path $repoRoot `
         'tools\Test-FleetInstallerReleaseConfiguration.ps1') `

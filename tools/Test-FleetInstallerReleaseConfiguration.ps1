@@ -19,11 +19,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ($ExpectedProductChannel -ceq 'labs' -and
-    -not [string]::IsNullOrWhiteSpace(
-        $ExpectedSetupSignerCertificateSha256)) {
-    throw 'Labs Setup validation must not import stable Fleet provisioning signer authority.'
-}
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $project = Join-Path $repoRoot `
     'src\QuestIonAbleFileManager.Core\QuestIonAbleFileManager.Core.csproj'
@@ -280,12 +275,16 @@ function Assert-SetupSecuritySelfTest {
     }
 }
 
-function Assert-LabsSetupReplayIsolation {
-    param([Parameter(Mandatory)][string]$Path)
+function Assert-SetupReplayBindingProof {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][Collections.IDictionary]$Expected,
+        [Parameter(Mandatory)][string]$ProductChannel
+    )
 
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = [IO.Path]::GetFullPath($Path)
-    $startInfo.ArgumentList.Add('--fleet-replay-security-self-test')
+    $startInfo.ArgumentList.Add('--fleet-replay-binding-proof')
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -294,20 +293,33 @@ function Assert-LabsSetupReplayIsolation {
     $process.StartInfo = $startInfo
     try {
         if (-not $process.Start()) {
-            throw 'The Labs Setup replay-isolation proof did not start.'
+            throw 'The Setup replay-channel binding proof did not start.'
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(30000)) {
             $process.Kill($true)
-            throw 'The Labs Setup replay-isolation proof timed out.'
+            throw 'The Setup replay-channel binding proof timed out.'
         }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 2 -or
-            -not [string]::IsNullOrEmpty($stdout) -or
-            $stderr -cne "Setup failed.$([Environment]::NewLine)") {
-            throw 'Labs Setup did not reject the Stable replay-security route exactly.'
+        if ($process.ExitCode -ne 0 -or
+            -not [string]::IsNullOrEmpty($stderr)) {
+            throw 'The Setup replay-channel binding proof failed.'
+        }
+        $proof = $stdout | ConvertFrom-Json -NoEnumerate
+        $configured = $Expected.Count -eq $expectedNames.Count
+        if ($proof.schema -cne
+                'questionable.file_manager.fleet_replay_channel_binding.v1' -or
+            $proof.product_channel -cne $ProductChannel -or
+            $proof.configured -ne $configured -or
+            ($configured -and
+             ($proof.fleet_channel -cne $Expected.Channel -or
+              $proof.state_root_relative_path -cne
+                $Expected.StateRootRelativePath -or
+              $proof.channel_isolated -ne $true)) -or
+            (-not $configured -and $proof.channel_isolated -ne $false)) {
+            throw 'The Setup replay-channel binding proof is invalid.'
         }
     }
     finally {
@@ -321,7 +333,7 @@ function Read-CheckedInConfiguration {
     $allPattern =
         '(?m)^\s*\[assembly:\s*AssemblyMetadata\("QuestIonAbleFileManager\.FleetInstaller\.[^\r\n]*$'
     $exactPattern =
-        '(?m)^\s*\[assembly:\s*AssemblyMetadata\("QuestIonAbleFileManager\.FleetInstaller\.(?<name>[A-Za-z]+)",\s*"(?<value>[^"\r\n]*)"\)\]\s*$'
+        '(?m)^\s*\[assembly:\s*AssemblyMetadata\("QuestIonAbleFileManager\.FleetInstaller\.(?<name>[A-Za-z][A-Za-z0-9]*)",\s*"(?<value>[^"\r\n]*)"\)\]\s*$'
     $all = [regex]::Matches($Text, $allPattern)
     $exact = [regex]::Matches($Text, $exactPattern)
     if ($all.Count -ne $exact.Count) {
@@ -575,8 +587,16 @@ foreach ($path in @(
 
 $configurationSourceText = [IO.File]::ReadAllText($configurationSource)
 $checkedIn = Read-CheckedInConfiguration $configurationSourceText
-if ($ExpectedProductChannel -ceq 'labs' -and $checkedIn.Count -ne 0) {
-    throw 'Labs releases require the checked-in Fleet installer trust block to remain absent.'
+if ($ExpectedProductChannel -ceq 'labs' -and
+    ($checkedIn.Count -ne $expectedNames.Count -or
+     $checkedIn.Channel -cne 'labs' -or
+     $checkedIn.StateRootRelativePath -cne
+        'QuestIonAbleFileManagerLabs/FleetInstaller')) {
+    throw 'Labs releases require the complete isolated checked-in Fleet installer trust block.'
+}
+if ($checkedIn.Count -eq $expectedNames.Count -and
+    $checkedIn.Channel -cne $ExpectedProductChannel) {
+    throw 'Checked-in Fleet installer trust does not match the product channel.'
 }
 $sourceHashBefore = (
     Get-FileHash -LiteralPath $configurationSource -Algorithm SHA256
@@ -662,16 +682,14 @@ try {
         Assert-SetupExecutableProof `
             $SetupExecutablePath `
             $checkedIn
-        if ($ExpectedProductChannel -ceq 'labs') {
-            Assert-LabsSetupReplayIsolation $SetupExecutablePath
-        }
-        else {
-            Assert-SetupSecuritySelfTest $SetupExecutablePath
-        }
+        Assert-SetupReplayBindingProof `
+            $SetupExecutablePath `
+            $checkedIn `
+            $ExpectedProductChannel
+        Assert-SetupSecuritySelfTest $SetupExecutablePath
         $validatedBinaries++
     }
-    if ($ExpectedProductChannel -ceq 'stable' -and
-        -not [string]::IsNullOrWhiteSpace(
+    if (-not [string]::IsNullOrWhiteSpace(
             $ExpectedSetupSignerCertificateSha256) -and
         $ExpectedSetupSignerCertificateSha256 -cne
             $checkedIn.ProvisioningSetupSignerCertificateSha256) {
@@ -702,12 +720,7 @@ try {
                 $SetupExecutablePath)) {
             'not_evaluated'
         }
-        elseif ($ExpectedProductChannel -ceq 'labs') {
-            'stable_routes_disabled_and_rejected'
-        }
-        else {
-            'stable_self_test_passed'
-        }
+        else { 'channel_isolated_self_test_passed' }
         custom_build_hooks_absent = $true
         status = 'passed'
     } | ConvertTo-Json -Compress

@@ -156,9 +156,10 @@ value generated from `$(Version)`, then checked against the shared contract's
 strict lowercase semantic-version grammar before any descriptor is emitted.
 
 The Fleet installer handoff owns only release-consumer verification: a pinned
-descriptor RSA key and channel, strict v2 signed payload, exact immutable
-GitHub Release URL/version plus installer size/hash/name/protocol, pinned
-Authenticode signer, a private retained stage, replay/downgrade state, and
+descriptor RSA key and channel, strict v4 signed payload, exact immutable
+GitHub Release URL/version/maturity plus installer size/hash/name/protocol and
+explicit Authenticode trust posture, pinned signer, a private retained stage,
+replay/downgrade state, and
 Fleet's fixed non-mutating plan contract. The canonical MesmerPrism Pages path
 owns metadata only; it is never an installer origin. Published builds use
 release-owned embedded trust metadata present only in reviewed checked-in

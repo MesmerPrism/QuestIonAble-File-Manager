@@ -63,9 +63,9 @@ using System.Reflection;
 [assembly: AssemblyMetadata("QuestIonAbleFileManager.FleetInstaller.StateRootRelativePath", "QuestIonAbleFileManager/FleetInstaller")]
 ```
 
-The default checked-in file is intentionally inert. Enabling the handoff is an
-intentional source change containing all eight public fields in the release
-commit. The official release gate requires the exact clean commit to carry the
+An unconfigured development branch may keep the checked-in file inert.
+Enabling the handoff is an intentional source change containing all eight
+public fields in the release commit. The official release gate requires the exact clean commit to carry the
 matching `v<version>` tag, compiles and validates the complete metadata, and
 then enters the existing Windows signing pipeline. Ordinary MSBuild
 properties, environment variables, release-script arguments, and generated
@@ -73,6 +73,29 @@ properties, environment variables, release-script arguments, and generated
 the former six ambient property names and proves that the compiled metadata is
 byte-for-byte unchanged. Custom source builds can of course edit checked-in
 source, but they cannot become an official signed QFM release.
+
+The Labs release uses channel `labs` and the exact relative root
+`QuestIonAbleFileManagerLabs/FleetInstaller`. Signed Labs Setup provisions and
+updates only the protected record bound to that root digest, while Stable keeps
+its separate root. Setup verifies its own exact signer pin before provisioning,
+and the protected helper independently rejects any accept, repair, reset, or
+transition request whose state-root digest differs from the embedded release.
+The release gate rejects missing, partial, cross-channel, Stable-root, ambient,
+or wrong-signer Labs configuration.
+
+Agents can inspect a built guided Setup without elevation or mutation:
+
+```powershell
+QuestIonAbleFileManager-Labs-Setup.exe --fleet-release-configuration-proof
+QuestIonAbleFileManager-Labs-Setup.exe --fleet-replay-binding-proof
+```
+
+The first receipt binds the exact compiled eight-field configuration digest.
+The second emits
+`questionable.file_manager.fleet_replay_channel_binding.v1` with only the
+public product channel, configured state, Fleet channel, relative state root,
+and `channel_isolated` result. It does not read or write HKLM, download Fleet,
+stage an installer, or expose absolute paths.
 
 No private key, certificate, absolute state path, installer binary, or source
 credential belongs in the checked-in configuration. The public descriptor key
@@ -100,15 +123,15 @@ tests:
 
 A partial or invalid configuration fails closed. An absolute local descriptor
 path is accepted only when
-`QUESTIONABLE_FILE_MANAGER_FLEET_ALLOW_LOCAL_FIXTURE=1`; its sibling
-`RustyFleet-Setup.exe` is test input only. The status receipt distinguishes
+`QUESTIONABLE_FILE_MANAGER_FLEET_ALLOW_LOCAL_FIXTURE=1`; its channel-specific
+`RustyFleet[-Labs]-Setup.exe` sibling is test input only. The status receipt distinguishes
 `embedded_pages_metadata`, `environment_pages_metadata`,
 `environment_local_fixture`, and inert `none` source kinds without exposing a
 URL or path.
 
 The production source split is fixed: MesmerPrism Pages carries only the small
 signed `release.json` metadata document. It must not carry, mirror, redirect
-to, or place `RustyFleet-Setup.exe` beside that document. The signed payload
+to, or place a Fleet Setup executable beside that document. The signed payload
 instead binds the exact immutable GitHub Release asset URL.
 
 ## Signed Release Contract
@@ -117,7 +140,7 @@ The descriptor envelope uses strict UTF-8 JSON:
 
 ```json
 {
-  "schema": "rusty.fleet.release_descriptor_envelope.v2",
+  "schema": "rusty.fleet.release_descriptor_envelope.v4",
   "payload_base64url": "<canonical-base64url>",
   "signature_base64url": "<canonical-base64url>",
   "signer_spki_sha256": "<64-lowercase-hex>"
@@ -137,33 +160,45 @@ actual signed bytes are the compact JCS form with this lexicographic order:
 ```json
 {
   "asset": {
-    "installer_protocol": "rusty.fleet.guided_setup.v1",
+    "authenticode_trust_mode": "exact-pinned-self-issued-untrusted-root-only",
+    "installer_protocol": "rusty.fleet.guided_setup.v2",
     "media_type": "application/vnd.microsoft.portable-executable",
-    "name": "RustyFleet-Setup.exe",
+    "name": "RustyFleet-Labs-Setup.exe",
+    "public_trust_claim": false,
     "sha256": "<64-lowercase-hex>",
     "signer_certificate_sha256": "<64-lowercase-hex>",
+    "signer_self_issued": true,
+    "signer_subject": "CN=MesmerPrism",
+    "signer_thumbprint": "<40-uppercase-hex>",
     "size_bytes": 123456,
-    "url": "https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3/RustyFleet-Setup.exe"
+    "timestamp_required": true,
+    "url": "https://github.com/MesmerPrism/rusty-fleet/releases/download/v1.2.3-alpha.4/RustyFleet-Labs-Setup.exe"
   },
-  "channel": "stable",
+  "channel": "labs",
+  "distribution_track": "github-prerelease",
   "descriptor_id": "<release-id>",
   "expires_at_ms": 1800086400000,
   "issued_at_ms": 1800000000000,
-  "product": "rusty-fleet",
-  "schema": "rusty.fleet.windows_release.v2",
+  "maturity": "alpha",
+  "product": "rusty-fleet-labs",
+  "product_channel": "labs",
+  "schema": "rusty.fleet.windows_release.v4",
   "validity_duration_ms": 86400000,
   "version": "1.2.3"
 }
 ```
 
-Unknown or duplicate properties, v1 schemas, non-JCS signed payload bytes,
+Unknown or duplicate properties, v1-v3 schemas, non-JCS signed payload bytes,
 case variants, noncanonical base64url, malformed three-part versions, an issue
 time more than 30 seconds in the future, expiry, a missing/nonpositive validity,
 validity longer than 24 hours, or any value where `expires_at_ms` is not
 exactly `issued_at_ms + validity_duration_ms`, wrong
-product/channel/asset/protocol, an asset URL whose exact numeric `v<version>`
-tag differs from the payload, oversized inputs, and signer mismatch are
-rejected. The descriptor is capped at 64 KiB and the asset at 512 MiB.
+product/channel/maturity/distribution/asset/protocol/trust posture, an asset URL
+whose channel and maturity tag disagree with the payload, oversized inputs,
+and signer mismatch are rejected. Labs requires the exact self-issued,
+non-public-trust posture and `RustyFleet-Labs-Setup.exe`; Stable requires the
+public-chain posture and `RustyFleet-Setup.exe`. The descriptor is capped at
+64 KiB and the asset at 512 MiB.
 
 The HTTPS client does not follow redirects automatically. The canonical Pages
 metadata request may not redirect. The explicit GitHub Release asset may make
@@ -190,8 +225,9 @@ enforced.
 8. Start the exact staged file with only `--plan --json`, an allowlisted
    environment, the private stage as its working directory, bounded output,
    and a 30-second timeout. Require strict schema
-   `rusty.fleet.guided_installer_plan.v1` bound to product, version, channel,
-   asset SHA-256, and `ready=true`.
+   `rusty.fleet.guided_installer_plan.v2` bound to product, version, channel,
+   asset SHA-256, Authenticode trust mode, signer certificate, self-issued and
+   public-trust facts, timestamp requirement, and `ready=true`.
 9. Start the same exact file with no arguments, no shell, no `runas` verb, no
    hidden elevation, no redirected streams, and a 15-minute timeout. The
    console-guided prompt is genuinely visible. A nonzero exit fails the
@@ -332,8 +368,8 @@ The bounded Windows lifecycle gate consumes two independently pinned,
 externally staged Fleet release directories. Each directory must contain these
 exact files:
 
-- `RustyFleet-Setup.exe`;
-- `RustyFleet-Setup.build-receipt.json`;
+- `RustyFleet[-Labs]-Setup.exe` for the selected channel;
+- its matching `RustyFleet[-Labs]-Setup.build-receipt.json`;
 - `release.json`;
 - `release-descriptor.receipt.json`;
 - `release-descriptor.spki.der`.

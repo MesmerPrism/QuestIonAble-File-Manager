@@ -15,6 +15,8 @@ public sealed class FleetInstallerHandoffTests
     private static readonly DateTimeOffset Now =
         DateTimeOffset.FromUnixTimeMilliseconds(1_800_000_000_000);
     private static readonly string InstallerSigner = new('a', 64);
+    private const string SignerSubject = "CN=MesmerPrism";
+    private static readonly string SignerThumbprint = new('A', 40);
 
     [Fact]
     public async Task ValidOfflineReleaseHasTypedStatusAndGuidedHandoffWithoutAdb()
@@ -60,6 +62,30 @@ public sealed class FleetInstallerHandoffTests
             "https://mesmerprism.com/",
             receipts,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LabsV4ReleaseUsesExactPrereleaseAndSelfIssuedTrustBindings()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var fixture = new SignedFixture(
+            channel: "labs",
+            maturity: "alpha",
+            prereleaseOrdinal: 6);
+        var status = await fixture.CreateService().GetStatusAsync();
+
+        Assert.Equal("ready", status.Status);
+        Assert.Equal(FleetInstallerContract.LabsProduct, status.Product);
+        Assert.Equal("labs", status.Channel);
+        Assert.Equal(FleetInstallerContract.LabsAuthenticodeTrustMode,
+            fixture.Plan.AuthenticodeTrustMode);
+        Assert.True(fixture.Plan.SignerSelfIssued);
+        Assert.False(fixture.Plan.PublicTrustClaim);
+        Assert.True(fixture.Plan.TimestampRequired);
     }
 
     [Fact]
@@ -117,22 +143,27 @@ public sealed class FleetInstallerHandoffTests
     }
 
     [Fact]
-    public async Task VersionOneDescriptorContractsAreRejected()
+    public async Task PriorDescriptorContractsAreRejectedWithoutFallback()
     {
-        using var fixture = new SignedFixture();
-        var envelope = JsonNode.Parse(fixture.DescriptorBytes)!.AsObject();
-        envelope["schema"] = "rusty.fleet.release_descriptor_envelope.v1";
-        fixture.DescriptorBytes = Encoding.UTF8.GetBytes(envelope.ToJsonString());
+        foreach (var version in new[] { "v1", "v2", "v3" })
+        {
+            using var envelopeFixture = new SignedFixture();
+            var envelope = JsonNode.Parse(envelopeFixture.DescriptorBytes)!.AsObject();
+            envelope["schema"] = $"rusty.fleet.release_descriptor_envelope.{version}";
+            envelopeFixture.DescriptorBytes =
+                Encoding.UTF8.GetBytes(envelope.ToJsonString());
 
-        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
-            () => fixture.CreateService().GetStatusAsync());
-        Assert.Equal("fleet_descriptor_signer_mismatch", exception.Code);
+            var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+                () => envelopeFixture.CreateService().GetStatusAsync());
+            Assert.Equal("fleet_descriptor_signer_mismatch", exception.Code);
 
-        fixture.ResignPayload(
-            payload => payload["schema"] = "rusty.fleet.windows_release.v1");
-        exception = await Assert.ThrowsAsync<FleetInstallerException>(
-            () => fixture.CreateService().GetStatusAsync());
-        Assert.Equal("fleet_descriptor_binding_invalid", exception.Code);
+            using var payloadFixture = new SignedFixture();
+            payloadFixture.ResignPayload(
+                payload => payload["schema"] = $"rusty.fleet.windows_release.{version}");
+            exception = await Assert.ThrowsAsync<FleetInstallerException>(
+                () => payloadFixture.CreateService().GetStatusAsync());
+            Assert.Equal("fleet_descriptor_binding_invalid", exception.Code);
+        }
     }
 
     [Fact]
@@ -226,6 +257,66 @@ public sealed class FleetInstallerHandoffTests
         var exception = await Assert.ThrowsAsync<FleetInstallerException>(
             () => fixture.CreateService().GetStatusAsync());
         Assert.Equal("fleet_asset_binding_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("authenticode_trust_mode", "public-chain-only")]
+    [InlineData("signer_subject", "")]
+    [InlineData("signer_thumbprint", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public async Task LabsV4StringTrustDamageFailsClosed(
+        string property,
+        string value)
+    {
+        using var fixture = new SignedFixture(
+            channel: "labs",
+            maturity: "alpha",
+            prereleaseOrdinal: 6);
+        fixture.ResignPayload(
+            payload => payload["asset"]!.AsObject()[property] = value);
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_asset_binding_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("public_trust_claim")]
+    [InlineData("signer_self_issued")]
+    [InlineData("timestamp_required")]
+    public async Task LabsV4BooleanTrustDamageFailsClosed(string property)
+    {
+        using var fixture = new SignedFixture(
+            channel: "labs",
+            maturity: "alpha",
+            prereleaseOrdinal: 6);
+        fixture.ResignPayload(payload =>
+        {
+            var asset = payload["asset"]!.AsObject();
+            asset[property] = !asset[property]!.GetValue<bool>();
+        });
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_asset_binding_invalid", exception.Code);
+    }
+
+    [Theory]
+    [InlineData("product_channel", "stable")]
+    [InlineData("distribution_track", "github-release")]
+    [InlineData("maturity", "released")]
+    public async Task LabsV4DistributionAxisDamageFailsClosed(
+        string property,
+        string value)
+    {
+        using var fixture = new SignedFixture(
+            channel: "labs",
+            maturity: "alpha",
+            prereleaseOrdinal: 6);
+        fixture.ResignPayload(payload => payload[property] = value);
+
+        var exception = await Assert.ThrowsAsync<FleetInstallerException>(
+            () => fixture.CreateService().GetStatusAsync());
+        Assert.Equal("fleet_descriptor_binding_invalid", exception.Code);
     }
 
     [Fact]
@@ -1254,7 +1345,10 @@ public sealed class FleetInstallerHandoffTests
 
         public SignedFixture(
             string version = "1.2.3",
-            string descriptorId = "release-123")
+            string descriptorId = "release-123",
+            string channel = "stable",
+            string maturity = "released",
+            int prereleaseOrdinal = 0)
         {
             AssetBytes = Encoding.UTF8.GetBytes(
                 "offline signed Fleet installer fixture");
@@ -1271,14 +1365,23 @@ public sealed class FleetInstallerHandoffTests
                 spki,
                 spkiHash,
                 InstallerSigner,
-                "stable");
+                channel);
+            var product = FleetInstallerContract.ProductForChannel(channel);
+            var assetName = FleetInstallerContract.AssetNameForChannel(channel);
+            var trustMode =
+                FleetInstallerContract.AuthenticodeTrustModeForChannel(channel);
+            var selfIssued = channel == "labs";
             _payload = new JsonObject
             {
                 ["schema"] = FleetInstallerContract.PayloadSchema,
                 ["descriptor_id"] = descriptorId,
-                ["product"] = FleetInstallerContract.Product,
+                ["product"] = product,
                 ["version"] = version,
-                ["channel"] = "stable",
+                ["channel"] = channel,
+                ["distribution_track"] =
+                    FleetInstallerContract.DistributionTrackForChannel(channel),
+                ["maturity"] = maturity,
+                ["product_channel"] = channel,
                 ["issued_at_ms"] = Now.AddMinutes(-1).ToUnixTimeMilliseconds(),
                 ["expires_at_ms"] = Now.AddHours(12).ToUnixTimeMilliseconds(),
                 ["validity_duration_ms"] =
@@ -1286,23 +1389,38 @@ public sealed class FleetInstallerHandoffTests
                         TimeSpan.FromMinutes(1)).TotalMilliseconds,
                 ["asset"] = new JsonObject
                 {
-                    ["name"] = FleetInstallerContract.AssetName,
-                    ["url"] = ReleaseAssetUrl(version),
+                    ["authenticode_trust_mode"] = trustMode,
+                    ["installer_protocol"] =
+                        FleetInstallerContract.InstallerProtocol,
+                    ["media_type"] =
+                        "application/vnd.microsoft.portable-executable",
+                    ["name"] = assetName,
+                    ["public_trust_claim"] = !selfIssued,
+                    ["url"] = ReleaseAssetUrl(
+                        version,
+                        channel,
+                        maturity,
+                        prereleaseOrdinal),
                     ["size_bytes"] = AssetBytes.LongLength,
                     ["sha256"] = Sha256(AssetBytes),
                     ["signer_certificate_sha256"] = InstallerSigner,
-                    ["media_type"] =
-                        "application/vnd.microsoft.portable-executable",
-                    ["installer_protocol"] =
-                        FleetInstallerContract.InstallerProtocol
+                    ["signer_self_issued"] = selfIssued,
+                    ["signer_subject"] = SignerSubject,
+                    ["signer_thumbprint"] = SignerThumbprint,
+                    ["timestamp_required"] = true
                 }
             };
             Plan = new FleetInstallerPlanReceipt(
                 FleetInstallerContract.PlanSchema,
-                FleetInstallerContract.Product,
+                product,
                 version,
-                "stable",
+                channel,
                 Sha256(AssetBytes),
+                trustMode,
+                InstallerSigner,
+                selfIssued,
+                PublicTrustClaim: !selfIssued,
+                TimestampRequired: true,
                 Ready: true);
             SignPayload();
         }
@@ -1452,8 +1570,9 @@ public sealed class FleetInstallerHandoffTests
                 long maximumBytes,
                 CancellationToken cancellationToken)
             {
-                Assert.Equal(FleetInstallerContract.AssetName, asset.Name);
-                Assert.Equal(ReleaseAssetUrl(fixture.Plan.Version), asset.Url);
+            Assert.Equal(
+                FleetInstallerContract.AssetNameForChannel(fixture.Plan.Channel),
+                asset.Name);
                 await destination.WriteAsync(
                     fixture.AssetBytes,
                     cancellationToken);
@@ -1464,9 +1583,9 @@ public sealed class FleetInstallerHandoffTests
     private sealed class FixedVerifier(string signer) :
         IFleetInstallerArtifactTrustVerifier
     {
-        public string Verify(string executablePath)
+        public string Verify(string executablePath, FleetReleaseAsset asset)
         {
-            Assert.Equal(FleetInstallerContract.AssetName, Path.GetFileName(executablePath));
+            Assert.Equal(asset.Name, Path.GetFileName(executablePath));
             return signer;
         }
     }
@@ -1483,7 +1602,9 @@ public sealed class FleetInstallerHandoffTests
             CancellationToken cancellationToken)
         {
             PlanCalls++;
-            Assert.Equal(FleetInstallerContract.AssetName, Path.GetFileName(executablePath));
+            Assert.Equal(
+                FleetInstallerContract.AssetNameForChannel(plan.Channel),
+                Path.GetFileName(executablePath));
             return Task.FromResult(plan);
         }
 
@@ -1642,17 +1763,29 @@ public sealed class FleetInstallerHandoffTests
         string version = "1.2.3",
         long sizeBytes = 9) =>
         new(
+            FleetInstallerContract.StableAuthenticodeTrustMode,
+            FleetInstallerContract.InstallerProtocol,
+            "application/vnd.microsoft.portable-executable",
             FleetInstallerContract.AssetName,
-            ReleaseAssetUrl(version),
-            sizeBytes,
+            PublicTrustClaim: true,
             new string('1', 64),
             InstallerSigner,
-            "application/vnd.microsoft.portable-executable",
-            FleetInstallerContract.InstallerProtocol);
+            SignerSelfIssued: false,
+            SignerSubject,
+            SignerThumbprint,
+            sizeBytes,
+            TimestampRequired: true,
+            ReleaseAssetUrl(version));
 
-    private static string ReleaseAssetUrl(string version) =>
+    private static string ReleaseAssetUrl(
+        string version,
+        string channel = "stable",
+        string maturity = "released",
+        int prereleaseOrdinal = 0) =>
         "https://github.com/MesmerPrism/rusty-fleet/releases/download/" +
-        $"v{version}/{FleetInstallerContract.AssetName}";
+        $"v{version}" +
+        (channel == "labs" ? $"-{maturity}.{prereleaseOrdinal}" : string.Empty) +
+        $"/{FleetInstallerContract.AssetNameForChannel(channel)}";
 
     private static string Sha256(byte[] value) =>
         Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
