@@ -7,6 +7,176 @@ namespace QuestIonAbleFileManager.Core.Tests;
 
 public sealed class InspectedDeploymentTests
 {
+    [Theory]
+    [InlineData("apksigner-print-certs-build-tools-34.txt")]
+    [InlineData("apksigner-print-certs-build-tools-36.txt")]
+    [InlineData("apksigner-print-certs-build-tools-37.txt")]
+    public async Task Inspect_AcceptsExactBuildToolsSignerOutputFixtures(string fixtureName)
+    {
+        var apk = await CreateApkAsync();
+        var signerOutput = await File.ReadAllTextAsync(Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures",
+            fixtureName));
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='io.github.mesmerprism.rustykiosk.labs' " +
+                      "versionCode='60609' versionName='0.6.6-alpha.9'\n")
+            : Success(signerOutput));
+        try
+        {
+            var result = await new ApkArtifactInspector(
+                runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk);
+
+            Assert.Equal(
+                "423d20004c79dd140c692e31aa80369cd3677b1ae2688dbd75011a4c83a0f1fb",
+                result.Identity.SignerSha256);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_BuildTools37RejectsMultipleDistinctCurrentSigners()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success(
+                "V2 Signer #1: certificate SHA-256 digest: " + new string('a', 64) + "\n" +
+                "V2 Signer #2: certificate SHA-256 digest: " + new string('b', 64) + "\n"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_BuildTools37IgnoresSourceStampAndPastLineageSigners()
+    {
+        var apk = await CreateApkAsync();
+        var current = new string('a', 64);
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success(
+                $"V3.1 Signer: (minSdkVersion=35 (dev release=true), maxSdkVersion=36) " +
+                $"certificate SHA-256 digest: {current}\n" +
+                $"V3.0 Signer: (minSdkVersion=28, maxSdkVersion=34) " +
+                $"certificate SHA-256 digest: {current}\n" +
+                $"Source Stamp Signer: certificate SHA-256 digest: {new string('b', 64)}\n" +
+                $"Signer #1 in lineage certificate SHA-256 digest: {new string('c', 64)}\n"));
+        try
+        {
+            var result = await new ApkArtifactInspector(
+                runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk);
+
+            Assert.Equal(current, result.Identity.SignerSha256);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_BuildTools37AcceptsV30SingleCurrentSigner()
+    {
+        var apk = await CreateApkAsync();
+        var current = new string('a', 64);
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success($"V3.0 Signer: certificate SHA-256 digest: {current}\n"));
+        try
+        {
+            var result = await new ApkArtifactInspector(
+                runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk);
+
+            Assert.Equal(current, result.Identity.SignerSha256);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_BuildTools37RejectsDistinctV31EffectiveRangeSigners()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success(
+                $"V3.1 Signer: (minSdkVersion=35, maxSdkVersion=36) " +
+                $"certificate SHA-256 digest: {new string('a', 64)}\n" +
+                $"V3.0 Signer: (minSdkVersion=28, maxSdkVersion=34) " +
+                $"certificate SHA-256 digest: {new string('b', 64)}\n"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_BuildTools37RejectsV32HybridSignerSetExplicitly()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success(
+                $"V3.2 Hybrid Classical Signer: (minSdkVersion=35, maxSdkVersion=36) " +
+                $"certificate SHA-256 digest: {new string('a', 64)}\n" +
+                $"V3.2 Hybrid PQC Signer: (minSdkVersion=35, maxSdkVersion=36) " +
+                $"certificate SHA-256 digest: {new string('b', 64)}\n"));
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk));
+
+            Assert.Contains("v3.2 hybrid signers", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Inspect_RejectsWhenOnlyNonCurrentCertificateLinesExist()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success("package: name='com.example.app' versionCode='42'\n")
+            : Success(
+                $"Source Stamp Signer: certificate SHA-256 digest: {new string('a', 64)}\n" +
+                $"Signer #1 in lineage certificate SHA-256 digest: {new string('b', 64)}\n"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner")).InspectAsync(apk));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
     [Fact]
     public async Task Inspect_ReturnsContentAndExactManifestSignerFacts()
     {
