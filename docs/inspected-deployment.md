@@ -53,9 +53,16 @@ acceptance policy; File Manager does not infer OpenXR readiness. Identity,
 digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings.
 
-`operator-actions --json` advertises the inspected-deployment and runtime-
-observation contract revisions without selecting a device or performing a
-mutation. Provider resolvers can require those revisions before a run.
+`operator-actions --json` advertises the inspected-deployment, launch-result,
+launcher-export-proof, and runtime-observation contract revisions without
+selecting a device or performing a mutation. The consolidated
+`questionable.file_manager.inspected_deployment.v3` contract requires all of
+the behavior above: immutable artifact admission, exact installed-byte
+readback, one JSON launch envelope on success or failure, the bounded current-
+Quest resolver-table fallback, and runtime observation v2. Provider resolvers
+should require these exact revisions before a run so an older hash-pinned CLI
+cannot silently reintroduce empty launch JSON or reject the known Quest VR
+launcher projection.
 
 This slice requires Android Platform Tools and Android SDK Build Tools. It is
 single-device and single-base-APK only. Split-set inspected deployment and

@@ -8,6 +8,12 @@ return await CliApplication.RunAsync(args);
 internal static class CliApplication
 {
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
+    private const string InspectedDeploymentContract =
+        "questionable.file_manager.inspected_deployment.v3";
+    private const string LauncherExportProofContract =
+        "questionable.file_manager.launcher_export_proof.v2";
+    private const string RuntimeObservationContract =
+        "questionable.file_manager.app_runtime_observation.v2";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -52,8 +58,10 @@ internal static class CliApplication
                     schema = "questionable.file_manager.operator_actions.v1",
                     contracts = new
                     {
-                        inspectedDeployment = "questionable.file_manager.inspected_deployment.v2",
-                        runtimeObservation = "questionable.file_manager.app_runtime_observation.v2"
+                        inspectedDeployment = InspectedDeploymentContract,
+                        apkLaunchResult = ApkLaunchResultSchema,
+                        launcherExportProof = LauncherExportProofContract,
+                        runtimeObservation = RuntimeObservationContract
                     },
                     actions = OperatorActionRegistry.Actions
                 });
