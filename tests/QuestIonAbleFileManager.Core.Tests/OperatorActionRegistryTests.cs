@@ -513,6 +513,34 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void OperatorActionsAdvertisesConsolidatedInspectedDeploymentContracts()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+
+        Assert.Contains(
+            "questionable.file_manager.inspected_deployment.v3",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.apk_launch_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.launcher_export_proof.v2",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.app_runtime_observation.v2",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SharedBootstrapFixturePinsNoSecretStatusAndGenerationBoundCleanup()
     {
         var root = FindRepositoryRoot();

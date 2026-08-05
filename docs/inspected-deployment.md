@@ -43,10 +43,26 @@ whether fixed-component dispatch was attempted; they do not mirror command
 output to standard error or claim successful dispatch after `am start` fails.
 
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
-installed package and byte facts, foreground/top-resumed flags, and package
-process IDs from fixed serial-scoped probes. Identity, digest, and size must
-match before runtime probes execute. It does not claim OpenXR state or
+installed package and byte facts, foreground/top-resumed flags, exact observed
+foreground and top-resumed component sets, known blocking Quest system
+components, and package process IDs from fixed serial-scoped probes. The
+component sets are independent facts: an immersive app can be top-resumed and
+alive without appearing in the legacy foreground projection, while Guardian or
+sensor-lock UI is simultaneously visible. Consumers choose their own 2D or XR
+acceptance policy; File Manager does not infer OpenXR readiness. Identity,
+digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings.
+
+`operator-actions --json` advertises the inspected-deployment, launch-result,
+launcher-export-proof, and runtime-observation contract revisions without
+selecting a device or performing a mutation. The consolidated
+`questionable.file_manager.inspected_deployment.v3` contract requires all of
+the behavior above: immutable artifact admission, exact installed-byte
+readback, one JSON launch envelope on success or failure, the bounded current-
+Quest resolver-table fallback, and runtime observation v2. Provider resolvers
+should require these exact revisions before a run so an older hash-pinned CLI
+cannot silently reintroduce empty launch JSON or reject the known Quest VR
+launcher projection.
 
 This slice requires Android Platform Tools and Android SDK Build Tools. It is
 single-device and single-base-APK only. Split-set inspected deployment and

@@ -517,6 +517,34 @@ public sealed class InspectedDeploymentTests
         }
     }
 
+    [Fact]
+    public async Task Launch_AcceptsBoundLauncherClassOutsideApplicationIdNamespace()
+    {
+        var apk = await CreateApkAsync();
+        const string packageName = "com.example.app.debug";
+        const string activityName = "com.example.app.SpatialActivity";
+        var component = $"{packageName}/{activityName}";
+        var runner = CreateDeploymentRunner(
+            apk,
+            packageName: packageName,
+            activityName: activityName,
+            activities: $"topResumedActivity=ActivityRecord{{abc u0 {component} t1}}\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal(component, result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", component]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
     [Theory]
     [InlineData(
         "Activity Resolver Table:\n" +
@@ -769,9 +797,58 @@ public sealed class InspectedDeploymentTests
 
             Assert.True(result.IsForeground);
             Assert.True(result.IsTopResumed);
+            Assert.Equal(
+                ["com.example.app/com.example.app.Main"],
+                result.ForegroundComponents);
+            Assert.Equal(
+                ["com.example.app/com.example.app.Main"],
+                result.TopResumedComponents);
+            Assert.Empty(result.BlockingSystemComponents);
+            Assert.True(result.ProcessAlive);
             Assert.Equal([123, 456], result.ProcessIds);
             Assert.All(runner.Calls.Where(call => call.FileName == "adb"),
                 call => Assert.Equal(["-s", "QUEST123"], call.Arguments.Take(2)));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Observe_PreservesImmersiveTopResumeAndBlockingSystemOverlayIndependently()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(apk, activities:
+            "mResumedActivity: ActivityRecord{1 com.oculus.systemux/.guardian.GuardianDialogActivity}\n" +
+            "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n" +
+            "topResumedActivity=ActivityRecord{3 com.oculus.systemux/.sensor.SensorLockActivity}\n" +
+            "topResumedActivity=ActivityRecord{4 com.oculus.vrshell/.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity}\n");
+        try
+        {
+            var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
+            var result = await client.ObserveInspectedAppAsync("QUEST123", apk);
+
+            Assert.False(result.IsForeground);
+            Assert.True(result.IsTopResumed);
+            Assert.Equal(
+                ["com.oculus.systemux/com.oculus.systemux.guardian.GuardianDialogActivity"],
+                result.ForegroundComponents);
+            Assert.Equal(
+                [
+                    "com.example.app/com.example.app.Main",
+                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity",
+                    "com.oculus.vrshell/com.oculus.vrshell.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity"
+                ],
+                result.TopResumedComponents);
+            Assert.Equal(
+                [
+                    "com.oculus.systemux/com.oculus.systemux.guardian.GuardianDialogActivity",
+                    "com.oculus.systemux/com.oculus.systemux.sensor.SensorLockActivity",
+                    "com.oculus.vrshell/com.oculus.vrshell.systemdialog.launchcheck.LaunchCheckControllerRequiredDialogActivity"
+                ],
+                result.BlockingSystemComponents);
+            Assert.True(result.ProcessAlive);
         }
         finally
         {
