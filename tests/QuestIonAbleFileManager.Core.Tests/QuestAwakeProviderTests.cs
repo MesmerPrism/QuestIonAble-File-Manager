@@ -51,6 +51,38 @@ public sealed class QuestAwakeProviderTests
     }
 
     [Fact]
+    public void CurrentHorizonReadbacks_ParseDefaultDisplayAndLocalizedProximityAge()
+    {
+        var status = QuestControlParser.Parse(
+            "level: 80\nstatus: 3\n",
+            string.Empty,
+            "mWakefulness=Awake\nmStayOn=true\nmHoldingDisplaySuspendBlocker=true\n",
+            """
+            Virtual proximity state: CLOSE
+              00:05:18.380 (4,84s ago) - received com.oculus.vrpowermanager.prox_close broadcast: duration=28800000
+              00:05:12.000 (10,04s ago) - received com.oculus.vrpowermanager.automation_disable broadcast: duration=0
+            """,
+            string.Empty,
+            string.Empty,
+            ContractNow,
+            """
+            Display Power Controller:
+                mDisplayId=0
+            Display Power State:
+                mStopped=false
+                mScreenState=ON
+            Display Power Controller:
+                mDisplayId=2
+            Display Power State:
+                mScreenState=OFF
+            """);
+
+        Assert.Equal("ON", status.DisplayState);
+        Assert.Equal(28_800_000, status.ProximityHoldDurationMilliseconds);
+        Assert.Equal(28_795_160, status.ProximityHoldRemainingMilliseconds);
+    }
+
+    [Fact]
     public async Task RepairOnce_IsReadOnlyWhenEveryIndependentReadbackMatches()
     {
         var runner = new AwakeRunner
@@ -227,8 +259,11 @@ public sealed class QuestAwakeProviderTests
         Assert.False(receipt.DeviceWatchdogEffective);
         Assert.Equal("watchdogsStoppedSettingsUnchanged", receipt.Outcome);
         Assert.Contains(runner.Calls, static arguments =>
-            arguments.Any(argument =>
-                argument.Contains("questionable-file-manager-awake-watchdog.stop", StringComparison.Ordinal)));
+            arguments.Count == 4 &&
+            arguments[2] == "shell" &&
+            arguments[3].Contains(
+                "questionable-file-manager-awake-watchdog.stop",
+                StringComparison.Ordinal));
         Assert.DoesNotContain(runner.Calls, static arguments =>
             arguments.Contains("com.oculus.vrpowermanager.automation_disable", StringComparer.Ordinal));
         Assert.DoesNotContain(runner.Calls, static arguments =>
@@ -260,10 +295,12 @@ public sealed class QuestAwakeProviderTests
         Assert.True(receipt.WakeEffective);
         Assert.Equal(Generation, receipt.DeviceWatchdog.Generation);
         Assert.Contains(runner.Calls, static arguments =>
-            arguments.Any(argument =>
-                argument.Contains(
-                    "nohup sh /data/local/tmp/questionable-file-manager-awake-watchdog.sh",
-                    StringComparison.Ordinal)));
+            arguments.Count == 4 &&
+            arguments[2] == "shell" &&
+            arguments[3].Contains(
+                "nohup sh /data/local/tmp/questionable-file-manager-awake-watchdog.sh",
+                StringComparison.Ordinal) &&
+            arguments[3].EndsWith("&)", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -769,7 +806,8 @@ public sealed class QuestAwakeProviderTests
             }
             if (arguments.Any(argument =>
                     argument.Contains("questionable-file-manager-awake-watchdog.stop", StringComparison.Ordinal)) &&
-                arguments.Contains("-c", StringComparer.Ordinal))
+                arguments.Count == 4 &&
+                arguments[2] == "shell")
             {
                 if (!IgnoreWatchdogStopMutation)
                 {
@@ -816,6 +854,14 @@ public sealed class QuestAwakeProviderTests
                     $"mInteractive={(Awake ? "true" : "false")}\n" +
                     $"mStayOn={(StayOn ? "true" : "false")}\n" +
                     $"Display Power: state={(Awake ? "ON" : "OFF")}\n";
+            }
+            if (arguments.Contains("display", StringComparer.Ordinal))
+            {
+                return
+                    "Display Power Controller:\n" +
+                    "  mDisplayId=0\n" +
+                    "Display Power State:\n" +
+                    $"  mScreenState={(Awake ? "ON" : "OFF")}\n";
             }
             if (arguments.Contains("vrpowermanager", StringComparer.Ordinal))
             {

@@ -1806,13 +1806,15 @@ public sealed partial class AdbClient
         var batteryTask = RunForDeviceAsync(serial, ["shell", "dumpsys", "battery"], InspectionTimeout, cancellationToken);
         var trackingTask = RunForDeviceAsync(serial, ["shell", "dumpsys", "tracking"], InspectionTimeout, cancellationToken);
         var powerTask = RunForDeviceAsync(serial, ["shell", "dumpsys", "power"], InspectionTimeout, cancellationToken);
+        var displayTask = RunForDeviceAsync(serial, ["shell", "dumpsys", "display"], InspectionTimeout, cancellationToken);
         var proximityTask = RunForDeviceAsync(serial, ["shell", "dumpsys", "vrpowermanager"], InspectionTimeout, cancellationToken);
         var cpuTask = RunForDeviceAsync(serial, ["shell", "getprop", "debug.oculus.cpuLevel"], InspectionTimeout, cancellationToken);
         var gpuTask = RunForDeviceAsync(serial, ["shell", "getprop", "debug.oculus.gpuLevel"], InspectionTimeout, cancellationToken);
-        await Task.WhenAll(batteryTask, trackingTask, powerTask, proximityTask, cpuTask, gpuTask).ConfigureAwait(false);
+        await Task.WhenAll(batteryTask, trackingTask, powerTask, displayTask, proximityTask, cpuTask, gpuTask).ConfigureAwait(false);
         var battery = await batteryTask.ConfigureAwait(false);
         var tracking = await trackingTask.ConfigureAwait(false);
         var power = await powerTask.ConfigureAwait(false);
+        var display = await displayTask.ConfigureAwait(false);
         var proximity = await proximityTask.ConfigureAwait(false);
         var cpu = await cpuTask.ConfigureAwait(false);
         var gpu = await gpuTask.ConfigureAwait(false);
@@ -1825,7 +1827,8 @@ public sealed partial class AdbClient
             proximity.Succeeded ? proximity.StandardOutput : string.Empty,
             cpu.Succeeded ? cpu.StandardOutput : string.Empty,
             gpu.Succeeded ? gpu.StandardOutput : string.Empty,
-            DateTimeOffset.Now);
+            DateTimeOffset.Now,
+            display.Succeeded ? display.StandardOutput : string.Empty);
     }
 
     public async Task<QuestKeepAwakeResult> SetQuestKeepAwakeAsync(
