@@ -36,8 +36,9 @@ action can be automated and tested.
   phase-based for Wi-Fi setup, and target-based for parallel installs;
 - optionally install and provision the separately licensed Rusty Kiosk app and
   same-signer setup helper, without making file-manager features depend on them;
-- search Kiosk apps, filter/edit tags, preserve named entries for apps not
-  installed on this headset, hotload tag files, and launch normally or guarded;
+- run separator-tolerant multi-term Kiosk app search, filter/edit tags, preserve
+  named entries for apps not installed on this headset, hotload tag files, and
+  launch normally or guarded;
 - request/disable Wi-Fi ADB, manage its after-restart prompt preference, and
   enable/disable Kiosk Accessibility through fixed typed routes;
 - after one-time setup, connect directly to the wearer-enabled Rusty Kiosk

@@ -2168,18 +2168,9 @@ public partial class MainWindow : Window
 
         var selectedKey = (KioskAppsList.SelectedItem as RustyKioskAppEntry)?.Key ??
             _rustyKioskState.SelectedKey;
-        var search = KioskSearchBox.Text.Trim();
-        var tag = KioskTagFilterBox.SelectedItem as string;
-        var entries = _rustyKioskState.Entries
-            .Where(entry => search.Length == 0 ||
-                            entry.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                            (entry.PackageName?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                            entry.Tags.Any(candidate => candidate.Contains(search, StringComparison.OrdinalIgnoreCase)))
-            .Where(entry => string.IsNullOrWhiteSpace(tag) ||
-                            string.Equals(tag, "All tags", StringComparison.Ordinal) ||
-                            entry.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
-            .OrderBy(static entry => entry.Name, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var selectedTag = KioskTagFilterBox.SelectedItem as string;
+        var tag = string.Equals(selectedTag, "All tags", StringComparison.Ordinal) ? null : selectedTag;
+        var entries = RustyKioskCatalogFilter.Apply(_rustyKioskState.Entries, KioskSearchBox.Text, tag);
         KioskAppsList.ItemsSource = entries;
         KioskAppsList.SelectedItem = entries.FirstOrDefault(entry =>
             string.Equals(entry.Key, selectedKey, StringComparison.Ordinal));
