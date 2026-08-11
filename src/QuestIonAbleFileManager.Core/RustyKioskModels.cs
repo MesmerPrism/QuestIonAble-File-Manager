@@ -213,29 +213,86 @@ public static class RustyKioskCatalogFilter
         @"[^\p{L}\p{N}]+",
         RegexOptions.CultureInvariant);
 
+    private sealed record SearchTerm(string Value, bool Phrase);
+
     public static IReadOnlyList<RustyKioskAppEntry> Apply(
         IEnumerable<RustyKioskAppEntry> entries,
         string? searchQuery,
         string? selectedTag)
     {
         ArgumentNullException.ThrowIfNull(entries);
-        var terms = SearchTermSeparator
-            .Split(searchQuery?.Trim() ?? string.Empty)
-            .Where(static term => term.Length > 0)
-            .ToArray();
+        var terms = ParseSearchTerms(searchQuery);
         var tag = selectedTag?.Trim();
 
         return entries
             .Where(entry => terms.All(term =>
-                entry.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                (entry.PackageName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                entry.Tags.Any(candidate => candidate.Contains(term, StringComparison.OrdinalIgnoreCase))))
+                MatchesSearchTerm(entry.Name, term) ||
+                MatchesSearchTerm(entry.PackageName, term) ||
+                entry.Tags.Any(candidate => MatchesSearchTerm(candidate, term))))
             .Where(entry => string.IsNullOrWhiteSpace(tag) ||
                             entry.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
             .OrderBy(static entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static entry => entry.PackageName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static IReadOnlyList<SearchTerm> ParseSearchTerms(string? searchQuery)
+    {
+        var terms = new List<SearchTerm>();
+        var token = new StringBuilder();
+        var quoted = false;
+
+        void Flush()
+        {
+            if (quoted)
+            {
+                var phrase = NormalizeSearchPhrase(token.ToString());
+                if (phrase.Length > 0)
+                {
+                    terms.Add(new SearchTerm(phrase, Phrase: true));
+                }
+            }
+            else
+            {
+                terms.AddRange(SearchTermSeparator
+                    .Split(token.ToString())
+                    .Where(static term => term.Length > 0)
+                    .Select(static term => new SearchTerm(term, Phrase: false)));
+            }
+
+            token.Clear();
+        }
+
+        foreach (var character in searchQuery ?? string.Empty)
+        {
+            if (character == '"')
+            {
+                Flush();
+                quoted = !quoted;
+            }
+            else
+            {
+                token.Append(character);
+            }
+        }
+
+        Flush();
+        return terms;
+    }
+
+    private static bool MatchesSearchTerm(string? value, SearchTerm term)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        var candidate = term.Phrase ? NormalizeSearchPhrase(value) : value;
+        return candidate.Contains(term.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSearchPhrase(string value) =>
+        SearchTermSeparator.Replace(value, " ").Trim();
 }
 
 public sealed record RustyKioskLaunchOption(

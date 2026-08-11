@@ -1037,7 +1037,7 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
-    public void CatalogFilterMatchesSeparatorTolerantTermsAcrossFields()
+    public void CatalogFilterMatchesTermsAcrossFieldsAndQuotedPhrasesWithinOneField()
     {
         RustyKioskAppEntry[] entries =
         [
@@ -1051,7 +1051,17 @@ public sealed class RustyKioskIntegrationTests
             RustyKioskCatalogFilter.Apply(entries, "quiet/calm", null)).Name);
         Assert.Equal("Motion App", Assert.Single(
             RustyKioskCatalogFilter.Apply(entries, "example/movement", "movement")).Name);
+        Assert.Equal("Motion App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "\"example motion\"", null)).Name);
+        Assert.Equal("Motion App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "\"example/motion\"", null)).Name);
+        Assert.Equal("Quiet App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "\"quiet app\"", null)).Name);
+        Assert.Equal("Motion App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "\"motion app\" movement", null)).Name);
         Assert.Empty(RustyKioskCatalogFilter.Apply(entries, "motion/calm", null));
+        Assert.Empty(RustyKioskCatalogFilter.Apply(entries, "\"quiet calm\"", null));
+        Assert.Empty(RustyKioskCatalogFilter.Apply(entries, "\"example movement\"", null));
         Assert.Equal(["Motion App", "Quiet App"],
             RustyKioskCatalogFilter.Apply(entries, "---", null).Select(static entry => entry.Name));
     }

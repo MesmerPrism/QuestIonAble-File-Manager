@@ -46,8 +46,10 @@ when the bundle is absent or Kiosk is never installed.
 ## Desktop Functions
 
 The tab displays the complete Kiosk catalog, including tag-file entries named
-for apps not installed on the current headset. Separator-tolerant multi-term
-search matches across app name, package, and tags. Tag filtering, tag add/remove,
+for apps not installed on the current headset. Separator-tolerant unquoted
+terms may match across app name, package, and tags. Double quotes group a
+contiguous phrase that must occur within one field; separators inside the phrase
+normalize to spaces. Tag filtering, tag add/remove,
 normal launch, and guarded launch use the same Kiosk command semantics as the
 headset panel. The alpha.7-compatible
 surface also switches between Apps and Controls, requests the headset keyboard
