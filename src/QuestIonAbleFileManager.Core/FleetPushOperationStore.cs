@@ -41,6 +41,7 @@ internal sealed record FleetPushReservation(
 
 internal sealed class FleetPushOperationStore
 {
+    private const int JournalReadAttempts = 16;
     private const string JournalSchema = "questionable.file_manager.integration.push_journal.v1";
     private const string ReservationSchema = "questionable.file_manager.integration.push_reservation.v1";
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -277,8 +278,24 @@ internal sealed class FleetPushOperationStore
             UpdatedAtUtc = _utcNow().ToUniversalTime(),
             Reason = "Cancellation was durably requested; terminal cleanup remains separately observable."
         };
-        Append(operationRoot, latest with { Sequence = 0, Status = status });
-        return status;
+        try
+        {
+            Append(operationRoot, latest with { Sequence = 0, Status = status });
+            return status;
+        }
+        catch (FleetIntegrationException exception) when (
+            exception.Code == "operation_journal_transition_rejected")
+        {
+            var concurrent = ReadLatest(operationRoot, operationId);
+            if (concurrent.Status.Phase is FleetIntegrationOperationPhase.Completed or
+                FleetIntegrationOperationPhase.Cancelled or
+                FleetIntegrationOperationPhase.Failed or
+                FleetIntegrationOperationPhase.CleanupRequired)
+            {
+                return concurrent.Status;
+            }
+            throw;
+        }
     }
 
     public (FleetIntegrationOperationRequest Request, string VerifiedAuthorityDigest)
@@ -292,6 +309,35 @@ internal sealed class FleetPushOperationStore
     }
 
     private static FleetPushJournalEntry ReadLatest(
+        string operationRoot,
+        string expectedOperationId)
+    {
+        Win32Exception? contention = null;
+        for (var attempt = 0; attempt < JournalReadAttempts; attempt++)
+        {
+            try
+            {
+                return ReadLatestOnce(operationRoot, expectedOperationId);
+            }
+            catch (Win32Exception exception) when (exception.NativeErrorCode is 32 or 33)
+            {
+                contention = exception;
+                if (attempt + 1 < JournalReadAttempts)
+                {
+                    Thread.Sleep(1 << Math.Min(attempt, 4));
+                }
+            }
+        }
+
+        throw new FleetIntegrationException(
+            FleetIntegrationStatus.Failed,
+            "operation_journal_busy",
+            "A concurrent durable journal writer did not finish within the bounded read window.",
+            retryable: true,
+            contention);
+    }
+
+    private static FleetPushJournalEntry ReadLatestOnce(
         string operationRoot,
         string expectedOperationId)
     {

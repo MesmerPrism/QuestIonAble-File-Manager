@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
@@ -764,6 +766,64 @@ public sealed class FleetIntegrationTests
         Assert.Equal(FleetIntegrationCleanupState.Unknown, status.CleanupState);
         Assert.True(status.DestinationMayExist);
         Assert.True(status.PartialMayExist);
+    }
+
+    [Fact]
+    public async Task DurableStatusWaitsForConcurrentJournalWriterToCommit()
+    {
+        using var root = new TemporaryDirectory();
+        var payload = new byte[] { 4, 4, 2, 1 };
+        StagePushInput(root.Path, "input01", payload);
+        var adapter = CreateReadyAdapter(root.Path, CreatePushRunner(payload));
+        var request = CreatePushRequest(adapter, payload);
+        var store = new FleetPushOperationStore(root.Path, () => Now);
+        using var operation = store.Begin(request, new string('d', 64));
+        operation.Append(
+            FleetIntegrationOperationPhase.Running,
+            FleetIntegrationCleanupState.Pending,
+            null,
+            null,
+            "Running",
+            destinationMayExist: true,
+            partialMayExist: true);
+        var status = FleetPushOperationStore.CreateStatus(
+            request,
+            FleetIntegrationOperationPhase.CancelRequested,
+            FleetIntegrationCleanupState.Pending,
+            null,
+            null,
+            destinationMayExist: true,
+            partialMayExist: true,
+            Now,
+            "Cancellation requested");
+        var entry = new FleetPushJournalEntry(
+            "questionable.file_manager.integration.push_journal.v1",
+            3,
+            status,
+            operation.RequestDigest,
+            request.Operation.LocalArtifactPath!,
+            operation.RemotePartialName,
+            operation.VerifiedAuthorityDigest);
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, options);
+        var path = Path.Combine(operation.OperationRoot, "state-0003.json");
+        Task<FleetIntegrationOperationStatusSnapshot> read;
+        using (var writer = FleetWindowsFileSafety.CreateNewOwnedFile(path))
+        {
+            read = Task.Run(() => store.ReadStatus(request.OperationId));
+            await Task.Delay(50);
+            writer.Write(bytes);
+            writer.Flush(flushToDisk: true);
+            FleetWindowsFileSafety.ValidateFile(writer.SafeFileHandle, path, requireSingleLink: true);
+        }
+
+        var observed = await read.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(FleetIntegrationOperationPhase.CancelRequested, observed.Phase);
+        Assert.Equal(FleetIntegrationCleanupState.Pending, observed.CleanupState);
     }
 
     [Fact]
