@@ -123,11 +123,11 @@ public sealed partial class AdbClient
             $"printf '%s' '{encoded}' | base64 -d > {AwakeWatchdogScriptPath} && " +
             $"chmod 700 {AwakeWatchdogScriptPath} && " +
             $"rm -f {AwakeWatchdogStopPath} {AwakeWatchdogStatusPath} {AwakeWatchdogPidPath} && " +
-            $"nohup sh {AwakeWatchdogScriptPath} </dev/null >/dev/null 2>&1 &";
+            $"(nohup sh {AwakeWatchdogScriptPath} </dev/null >/dev/null 2>&1 &)";
         beforeMutation?.Invoke();
         var command = (await RunForDeviceAsync(
             serial,
-            ["shell", "sh", "-c", launch],
+            ["shell", launch],
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false)).EnsureSuccess("Start Quest device awake watchdog");
 
@@ -172,7 +172,7 @@ public sealed partial class AdbClient
             beforeMutation?.Invoke();
             commands.Add((await RunForDeviceAsync(
                 serial,
-                ["shell", "sh", "-c", $"umask 077; : > {AwakeWatchdogStopPath}"],
+                ["shell", $"umask 077; : > {AwakeWatchdogStopPath}"],
                 InspectionTimeout,
                 cancellationToken).ConfigureAwait(false)).EnsureSuccess("Stop Quest device awake watchdog"));
         }
@@ -202,7 +202,7 @@ public sealed partial class AdbClient
         var result = await RunForDeviceAsync(
             serial,
             [
-                "shell", "sh", "-c",
+                "shell",
                 "printf 'current_boot_id='; cat /proc/sys/kernel/random/boot_id; " +
                 $"if [ -f {AwakeWatchdogStatusPath} ]; then cat {AwakeWatchdogStatusPath}; fi; " +
                 $"process_alive=false; if [ -f {AwakeWatchdogPidPath} ]; then " +
@@ -287,12 +287,12 @@ public sealed partial class AdbClient
               proximity="$(dumpsys vrpowermanager 2>/dev/null)"
               case "$power" in *"mStayOn=true"*) ;; *) svc power stayon true >/dev/null 2>&1 && stay_on_repairs=$((stay_on_repairs + 1)) && last_action=reapplied_stay_on ;; esac
               case "$power" in *"mWakefulness=Awake"*) wakefulness_effective=true ;; *) wakefulness_effective=false ;; esac
-              case "$power" in *"Display Power:"*"state=ON"*) display_effective=true ;; *) display_effective=false ;; esac
+              case "$power" in *"Display Power:"*"state=ON"*|*"mHoldingDisplaySuspendBlocker=true"*) display_effective=true ;; *) display_effective=false ;; esac
               if [ "$wakefulness_effective" != true ] || [ "$display_effective" != true ]; then
                 input keyevent 224 >/dev/null 2>&1 && wake_repairs=$((wake_repairs + 1)) && last_action=reapplied_wake
               fi
-              latest_proximity="$(printf '%s\n' "$proximity" | grep 'received com.oculus.vrpowermanager.' | tail -n 1)"
-              proximity_age_seconds="$(printf '%s\n' "$latest_proximity" | sed -n 's/.*(\([0-9][0-9]*\)\(\.[0-9][0-9]*\)\?s ago).*/\1/p')"
+              latest_proximity="$(printf '%s\n' "$proximity" | grep 'received com.oculus.vrpowermanager.' | head -n 1)"
+              proximity_age_seconds="$(printf '%s\n' "$latest_proximity" | sed -n 's/.*(\([0-9][0-9]*\)[.,][0-9][0-9]*s ago).*/\1/p')"
               case "$proximity" in *"Virtual proximity state: CLOSE"*) proximity_close=true ;; *) proximity_close=false ;; esac
               case "$latest_proximity" in *"prox_close broadcast: duration={{durationMilliseconds}}"*) proximity_duration=true ;; *) proximity_duration=false ;; esac
               case "$proximity_age_seconds" in ''|*[!0-9]*) proximity_fresh=false ;; *) if [ "$proximity_age_seconds" -lt {{holdSeconds}} ]; then proximity_fresh=true; else proximity_fresh=false; fi ;; esac

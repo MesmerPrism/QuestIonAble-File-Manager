@@ -12,7 +12,8 @@ public static partial class QuestControlParser
         string proximityOutput,
         string cpuLevel,
         string gpuLevel,
-        DateTimeOffset capturedAt)
+        DateTimeOffset capturedAt,
+        string displayOutput = "")
     {
         var batteryLevel = ParseIntegerLine(batteryOutput, "level");
         var batteryState = ParseBatteryState(ParseIntegerLine(batteryOutput, "status"));
@@ -22,6 +23,10 @@ public static partial class QuestControlParser
             ? parsedInteractive
             : (bool?)null;
         var displayState = MatchGroup(DisplayStateRegex(), powerOutput);
+        if (displayState.Length == 0)
+        {
+            displayState = ParseDefaultDisplayState(displayOutput);
+        }
         var proximityState = MatchGroup(ProximityStateRegex(), proximityOutput);
         var stayOn = powerOutput.Contains("mStayOn=true", StringComparison.OrdinalIgnoreCase);
         var autoSleepText = MatchGroup(AutoSleepDisabledRegex(), proximityOutput);
@@ -106,17 +111,25 @@ public static partial class QuestControlParser
     private static (int? DurationMilliseconds, int? RemainingMilliseconds)
         ParseLatestProximityHold(string output)
     {
-        var match = ProximityBroadcastRegex()
-            .Matches(output)
-            .Cast<Match>()
-            .LastOrDefault();
+        Match? match = null;
+        var ageSeconds = double.MaxValue;
+        foreach (Match candidate in ProximityBroadcastRegex().Matches(output))
+        {
+            if (double.TryParse(
+                    candidate.Groups["age"].Value.Replace(',', '.'),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out var candidateAgeSeconds) &&
+                candidateAgeSeconds >= 0d &&
+                candidateAgeSeconds < ageSeconds)
+            {
+                match = candidate;
+                ageSeconds = candidateAgeSeconds;
+            }
+        }
+
         if (match is null ||
             !string.Equals(match.Groups["action"].Value, "prox_close", StringComparison.OrdinalIgnoreCase) ||
-            !double.TryParse(
-                match.Groups["age"].Value,
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out var ageSeconds) ||
             !int.TryParse(
                 match.Groups["duration"].Value,
                 NumberStyles.Integer,
@@ -132,6 +145,41 @@ public static partial class QuestControlParser
             0L,
             int.MaxValue);
         return (durationMilliseconds, remainingMilliseconds);
+    }
+
+    private static string ParseDefaultDisplayState(string output)
+    {
+        var inController = false;
+        var isDefaultDisplay = false;
+        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (string.Equals(line, "Display Power Controller:", StringComparison.OrdinalIgnoreCase))
+            {
+                inController = true;
+                isDefaultDisplay = false;
+                continue;
+            }
+            if (!inController)
+            {
+                continue;
+            }
+            if (line.StartsWith("mDisplayId=", StringComparison.OrdinalIgnoreCase))
+            {
+                isDefaultDisplay = string.Equals(
+                    line["mDisplayId=".Length..].Trim(),
+                    "0",
+                    StringComparison.Ordinal);
+                continue;
+            }
+            if (isDefaultDisplay &&
+                line.StartsWith("mScreenState=", StringComparison.OrdinalIgnoreCase))
+            {
+                return line["mScreenState=".Length..].Trim();
+            }
+        }
+
+        return string.Empty;
     }
 
     private static string ParseBatteryState(int? state) => state switch
@@ -180,7 +228,7 @@ public static partial class QuestControlParser
     private static partial Regex ProximityStateRegex();
 
     [GeneratedRegex(
-        @"^\s*\d+(?:\.\d+)?s\s+\((?<age>[\d.]+)s ago\)\s+-\s+received com\.oculus\.vrpowermanager\.(?<action>prox_close|automation_disable) broadcast:\s+duration=(?<duration>\d+)",
+        @"^\s*(?:\d+(?:[.,]\d+)?s|\d{2,}:\d{2}:\d{2}(?:[.,]\d+)?)\s+\((?<age>\d+(?:[.,]\d+)?)s ago\)\s+-\s+received com\.oculus\.vrpowermanager\.(?<action>prox_close|automation_disable) broadcast:\s+duration=(?<duration>\d+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline)]
     private static partial Regex ProximityBroadcastRegex();
 
