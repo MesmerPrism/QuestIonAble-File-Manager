@@ -151,6 +151,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk inspect --file ./exa
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk export --serial <quest-serial> --package com.example.app --output ./com.example.app.apk
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <quest-serial> --file ./example.apk
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <quest-serial> --file ./example.apk --output ./private-diagnostics --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
@@ -230,6 +231,11 @@ bytes, derives and launches the only proven exported launcher, then returns a
 final runtime observation. It does not accept package names, components,
 intents, shell fragments, or generic ADB arguments. See
 [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md).
+`apk diagnose` is the corresponding read-only evidence path. It verifies the
+same exact installed bytes before writing one new no-overwrite local bundle of
+fixed package/runtime/device facts and bounded PID-scoped logs. Diagnostic
+bundles may contain private runtime data and must not be committed or published
+without review. See [APK diagnostic bundle](docs/apk-diagnostic-bundle.md).
 A Meta permission prompt can legitimately remain pending until wearer response.
 The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact
@@ -424,6 +430,7 @@ while copying the same opened handle into PackageInstaller.
 - [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)
 - [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md)
+- [APK diagnostic bundle](docs/apk-diagnostic-bundle.md)
 - [Dedicated local API](docs/local-api.md)
 - [Release workflow](docs/release-workflow.md)
 - [Branding and compatibility](docs/branding-and-compatibility.md)

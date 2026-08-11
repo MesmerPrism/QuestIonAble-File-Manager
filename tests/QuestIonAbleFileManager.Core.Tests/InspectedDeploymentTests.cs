@@ -375,6 +375,111 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Diagnose_WritesAtomicBoundedPackageScopedBundleWithoutMutation()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-test-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities:
+                "mResumedActivity: ActivityRecord{1 com.example.app/.Main}\n" +
+                "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n");
+        try
+        {
+            var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
+
+            var result = await client.CaptureInspectedApkDiagnosticsAsync(
+                "QUEST123",
+                apk,
+                output);
+
+            Assert.Equal("questionable.file_manager.apk_diagnostic_bundle.v1", result.DiagnosticContract);
+            Assert.Equal(Path.GetFullPath(output), result.OutputDirectory);
+            Assert.Equal(Path.GetFullPath(apk), result.Artifact.Path);
+            Assert.Equal(result.Artifact.Sha256, result.Installed.BaseApkSha256);
+            Assert.Equal(0, result.FailedCaptureCount);
+            Assert.Equal(7, result.Files.Count);
+            Assert.All(result.Files, file =>
+            {
+                Assert.True(File.Exists(Path.Combine(output, file.RelativePath)));
+                Assert.Equal(64, file.Sha256.Length);
+            });
+            using var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(
+                Path.Combine(output, "diagnostic-manifest.json")));
+            Assert.Equal(
+                "questionable.file_manager.apk_diagnostic_manifest.v1",
+                manifest.RootElement.GetProperty("schema").GetString());
+            Assert.Equal(
+                "com.example.app",
+                manifest.RootElement.GetProperty("artifact")
+                    .GetProperty("identity")
+                    .GetProperty("packageName")
+                    .GetString());
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "dumpsys", "meminfo", "com.example.app"]));
+            Assert.Equal(2, runner.Calls.Count(call =>
+                call.Arguments.Count == 8 &&
+                call.Arguments[2] == "shell" &&
+                call.Arguments[3] == "logcat" &&
+                call.Arguments[4] == "-d" &&
+                call.Arguments[5] == "-t" &&
+                call.Arguments[6] == "400" &&
+                call.Arguments[7].StartsWith("--pid=", StringComparison.Ordinal)));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("install"));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("am"));
+
+            var callCount = runner.Calls.Count;
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                client.CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+            Assert.Equal(callCount, runner.Calls.Count);
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_RejectsAbsentPackageBeforeRuntimeOrDiagnosticProbes()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-absent-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = new FakeRunner((file, arguments) =>
+        {
+            if (file == "aapt2")
+                return Success("package: name='com.example.app' versionCode='42'\n");
+            if (file == "apksigner")
+                return Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n");
+            if (arguments.Any(value => value.StartsWith("pm path ", StringComparison.Ordinal)))
+                return Success("");
+            return Success("unexpected\n");
+        });
+        try
+        {
+            await Assert.ThrowsAsync<PackageNotInstalledException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.DoesNotContain(runner.Calls, call =>
+                call.Arguments.Contains("dumpsys") ||
+                call.Arguments.Contains("pidof") ||
+                call.Arguments.Contains("logcat") ||
+                call.Arguments.Contains("getprop"));
+            Assert.False(Directory.Exists(output));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Observe_StreamsExactOpenedApkWithoutAdvancingDescriptorBeforeCat()
     {
         var bytes = Enumerable.Range(0, 4096)

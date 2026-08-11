@@ -36,7 +36,8 @@ public enum OperatorCommandKind
     SetQuestPerformance,
     FleetInstallStatus,
     FleetInstall,
-    DeployInspectedApp
+    DeployInspectedApp,
+    DiagnoseInspectedApp
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -75,7 +76,8 @@ public sealed class OperatorCommand
         string? connectivityDeviceId = null,
         QuestConnectivityProfileInputKind connectivityProfileInputKind =
             QuestConnectivityProfileInputKind.None,
-        bool replaceExisting = false)
+        bool replaceExisting = false,
+        string? outputPath = null)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -105,6 +107,7 @@ public sealed class OperatorCommand
         ConnectivityDeviceId = connectivityDeviceId;
         ConnectivityProfileInputKind = connectivityProfileInputKind;
         ReplaceExisting = replaceExisting;
+        OutputPath = outputPath;
     }
 
     public OperatorCommandKind Kind { get; }
@@ -158,6 +161,8 @@ public sealed class OperatorCommand
     public QuestConnectivityProfileInputKind ConnectivityProfileInputKind { get; }
 
     public bool ReplaceExisting { get; }
+
+    public string? OutputPath { get; }
 
     public string ToPowerShellCommand(
         string cliExecutable = ".\\questionable-file-manager.exe",
@@ -560,6 +565,27 @@ public static class OperatorCommands
             serial: serial,
             localPath: fullApkPath,
             installOptions: options);
+    }
+
+    public static OperatorCommand DiagnoseInspectedApp(
+        string serial,
+        string apkPath,
+        string outputDirectory)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        var fullOutputDirectory = Path.GetFullPath(outputDirectory);
+        return new OperatorCommand(
+            OperatorCommandKind.DiagnoseInspectedApp,
+            [
+                "apk", "diagnose", "--serial", serial, "--file", fullApkPath,
+                "--output", fullOutputDirectory
+            ],
+            serial: serial,
+            localPath: fullApkPath,
+            outputPath: fullOutputDirectory);
     }
 
     public static OperatorCommand InspectApk(string apkPath)
@@ -1100,7 +1126,8 @@ public sealed record OperatorExecutionResult(
     QuestConnectivityProfileListReceipt? ConnectivityProfileList = null,
     QuestConnectivityProfileMutationReceipt? ConnectivityProfileMutation = null,
     OperatorMutationReceipt? MutationReceipt = null,
-    InspectedApkDeploymentResult? InspectedApkDeploymentResult = null);
+    InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
+    ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1323,6 +1350,15 @@ public sealed class OperatorCommandExecutor
                         AppRuntimeObservation: deployment.Runtime,
                         InspectedApkDeploymentResult: deployment);
                 }
+
+            case OperatorCommandKind.DiagnoseInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkDiagnosticBundleResult: await client.CaptureInspectedApkDiagnosticsAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.OutputPath, nameof(command.OutputPath)),
+                        cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.LaunchInspectedApp:
                 return new OperatorExecutionResult(
@@ -1583,6 +1619,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.ExportApk => "Exporting and hashing the installed APK…",
         OperatorCommandKind.InstallApk => "Installing the APK…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
+        OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",

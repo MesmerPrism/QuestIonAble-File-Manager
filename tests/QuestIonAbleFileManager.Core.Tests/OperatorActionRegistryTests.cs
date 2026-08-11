@@ -547,6 +547,46 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void ApkDiagnosticJsonWritesOneTypedReadOnlyResultAndKeepsCaptureSetFixed()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var method = SourceMethod(
+            source,
+            "private static async Task<int> RunApkDiagnoseAsync",
+            "private static async Task<int> RunApkDiagnoseJsonAsync");
+
+        Assert.Contains("questionable.file_manager.apk_diagnostic_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("OperatorCommands.DiagnoseInspectedApp", method, StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", method, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(method, "WriteJson\\(").Cast<Match>());
+
+        var failureMethod = SourceMethod(
+            source,
+            "private static int WriteApkDiagnosticFailure",
+            "private static (string Code, string Message, int ExitCode)");
+        Assert.Contains("state_change_possible = false", failureMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
+        Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
+
+        var core = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Core",
+            "AdbClient.ApkDiagnostics.cs"));
+        Assert.Contains("DiagnosticLogLineCount = 400", core, StringComparison.Ordinal);
+        Assert.Contains("MaximumDiagnosticProcessCount = 8", core, StringComparison.Ordinal);
+        Assert.DoesNotContain("screencap", core, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("bugreport", core, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void OperatorActionsAdvertisesConsolidatedInspectedDeploymentContracts()
     {
         var root = FindRepositoryRoot();
@@ -566,6 +606,10 @@ public sealed class OperatorActionRegistryTests
             StringComparison.Ordinal);
         Assert.Contains(
             "questionable.file_manager.apk_deploy_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.apk_diagnostic_result.v1",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
