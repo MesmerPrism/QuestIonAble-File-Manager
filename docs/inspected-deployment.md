@@ -19,6 +19,19 @@ is the already inspected package/version/signer identity projected as installed.
 ADB exit status alone is not confirmation. The receipt identifies the selected
 serial plus both expected and installed byte evidence.
 
+`apk deploy --serial <quest-serial> --file <path-to.apk>` composes the common
+single-base-APK agent loop without opening a generic execution surface. One
+immutable admission remains alive across install, exact installed-byte
+readback, launcher resolution/export proof, fixed component dispatch, and final
+runtime observation. Installed bytes are checked after Package Manager to gate
+launch, then checked again before final runtime probes. The command
+returns one `questionable.file_manager.apk_deploy_result.v1` JSON envelope; its
+result carries `questionable.file_manager.apk_deployment.v1` install, launch,
+and runtime evidence plus the overall mutation receipt. Sanitized failure
+envelopes conservatively report whether a device state change may have occurred.
+Callers still cannot provide package names, components, intents, extras, shell
+fragments, or generic ADB arguments.
+
 `apk launch --serial <quest-serial> --file <path-to.apk>` derives its package
 only from the inspected APK, requires matching installed identity, queries the
 installed base digest, and size before querying the fixed exported
@@ -54,7 +67,7 @@ digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings.
 
 `operator-actions --json` advertises the inspected-deployment, launch-result,
-launcher-export-proof, and runtime-observation contract revisions without
+deploy-result, launcher-export-proof, and runtime-observation contract revisions without
 selecting a device or performing a mutation. The consolidated
 `questionable.file_manager.inspected_deployment.v3` contract requires all of
 the behavior above: immutable artifact admission, exact installed-byte
@@ -70,3 +83,5 @@ app-owned effective-state attestation remain out of scope.
 
 The optional dedicated local API projects only these four inspected-deployment
 routes through retained typed commands. See `local-api.md`.
+The composite `apk deploy` convenience route is CLI-only in v1; local API
+clients retain the existing inspect/install/launch/observe primitives.

@@ -35,7 +35,8 @@ public enum OperatorCommandKind
     SetQuestKeepAwake,
     SetQuestPerformance,
     FleetInstallStatus,
-    FleetInstall
+    FleetInstall,
+    DeployInspectedApp
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -533,6 +534,28 @@ public static class OperatorCommands
 
         return new OperatorCommand(
             OperatorCommandKind.InstallApk,
+            arguments,
+            serial: serial,
+            localPath: fullApkPath,
+            installOptions: options);
+    }
+
+    public static OperatorCommand DeployInspectedApp(
+        string serial,
+        string apkPath,
+        ApkInstallOptions? options = null)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        options ??= new ApkInstallOptions();
+        var arguments = new List<string>
+        {
+            "apk", "deploy", "--serial", serial, "--file", fullApkPath
+        };
+        AddInstallOptionArguments(arguments, options);
+        return new OperatorCommand(
+            OperatorCommandKind.DeployInspectedApp,
             arguments,
             serial: serial,
             localPath: fullApkPath,
@@ -1076,7 +1099,8 @@ public sealed record OperatorExecutionResult(
     QuestConnectivityProfileStatusReceipt? ConnectivityProfileStatus = null,
     QuestConnectivityProfileListReceipt? ConnectivityProfileList = null,
     QuestConnectivityProfileMutationReceipt? ConnectivityProfileMutation = null,
-    OperatorMutationReceipt? MutationReceipt = null);
+    OperatorMutationReceipt? MutationReceipt = null,
+    InspectedApkDeploymentResult? InspectedApkDeploymentResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1281,6 +1305,23 @@ public sealed class OperatorCommandExecutor
                         CommandResult: install.CommandResult,
                         ApkArtifactInspection: install.Artifact,
                         InspectedApkInstallResult: install);
+                }
+
+            case OperatorCommandKind.DeployInspectedApp:
+                {
+                    var deployment = await client.DeployInspectedApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        command.InstallOptions,
+                        cancellationToken).ConfigureAwait(false);
+                    return new OperatorExecutionResult(
+                        command,
+                        CommandResult: deployment.Install.CommandResult,
+                        ApkArtifactInspection: deployment.Install.Artifact,
+                        InspectedApkInstallResult: deployment.Install,
+                        ResolvedAppLaunchResult: deployment.Launch,
+                        AppRuntimeObservation: deployment.Runtime,
+                        InspectedApkDeploymentResult: deployment);
                 }
 
             case OperatorCommandKind.LaunchInspectedApp:
@@ -1541,6 +1582,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.ListPackages => "Loading third-party packages…",
         OperatorCommandKind.ExportApk => "Exporting and hashing the installed APK…",
         OperatorCommandKind.InstallApk => "Installing the APK…",
+        OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",

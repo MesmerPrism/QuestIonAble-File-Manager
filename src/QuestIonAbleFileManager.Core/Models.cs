@@ -129,6 +129,15 @@ public sealed record AppRuntimeObservation(
     public bool ProcessAlive => ProcessIds.Count > 0;
 }
 
+public sealed record InspectedApkDeploymentResult(
+    InspectedApkInstallResult Install,
+    ResolvedAppLaunchResult Launch,
+    AppRuntimeObservation Runtime)
+{
+    public string DeploymentContract { get; init; } =
+        "questionable.file_manager.apk_deployment.v1";
+}
+
 public sealed record ApkExportResult(
     string PackageName,
     string SourcePath,

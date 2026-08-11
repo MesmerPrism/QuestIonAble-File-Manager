@@ -8,6 +8,7 @@ return await CliApplication.RunAsync(args);
 internal static class CliApplication
 {
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
+    private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v3";
     private const string LauncherExportProofContract =
@@ -59,6 +60,7 @@ internal static class CliApplication
                     contracts = new
                     {
                         inspectedDeployment = InspectedDeploymentContract,
+                        apkDeployResult = ApkDeployResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
@@ -78,6 +80,13 @@ internal static class CliApplication
             if (command == "connectivity-profile")
             {
                 return await RunConnectivityProfileAsync(arguments);
+            }
+            if (command == "apk" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "deploy", StringComparison.OrdinalIgnoreCase) &&
+                HasFlag(arguments, "--json"))
+            {
+                return await RunApkDeployJsonAsync(arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -1119,6 +1128,9 @@ internal static class CliApplication
                     return 0;
                 }
 
+            case "deploy":
+                return await RunApkDeployAsync(executor, arguments);
+
             case "launch":
                 return await RunApkLaunchAsync(executor, arguments);
 
@@ -1202,6 +1214,148 @@ internal static class CliApplication
                 throw new ArgumentException($"Unknown apk action: {action}");
         }
     }
+
+    private static async Task<int> RunApkDeployAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        var json = HasFlag(arguments, "--json");
+        try
+        {
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.DeployInspectedApp(
+                    RequireOption(arguments, "--serial"),
+                    RequireOption(arguments, "--file"),
+                    ReadInstallOptions(arguments)));
+            var result = execution.InspectedApkDeploymentResult ??
+                throw new InvalidOperationException("Inspected APK deployment returned no result.");
+            if (json)
+            {
+                WriteJson(new
+                {
+                    schema = ApkDeployResultSchema,
+                    succeeded = true,
+                    mutation = execution.MutationReceipt,
+                    result,
+                    failure = (object?)null
+                });
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"Installed {result.Install.Artifact.Identity.PackageName} " +
+                    $"sha256={result.Install.Artifact.Sha256}.");
+                Console.WriteLine(
+                    $"Launched {result.Launch.Component}; " +
+                    $"resumed={result.Launch.ComponentObservedResumed.ToString().ToLowerInvariant()}.");
+                Console.WriteLine(
+                    $"Runtime: process-alive={result.Runtime.ProcessAlive.ToString().ToLowerInvariant()}, " +
+                    $"foreground={result.Runtime.IsForeground.ToString().ToLowerInvariant()}, " +
+                    $"top-resumed={result.Runtime.IsTopResumed.ToString().ToLowerInvariant()}, " +
+                    $"blocking-system-components={result.Runtime.BlockingSystemComponents.Count}.");
+                WriteMutationReceipt(execution.MutationReceipt);
+            }
+            return 0;
+        }
+        catch (Exception exception) when (json)
+        {
+            return WriteApkDeployFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkDeployJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkDeployAsync(new OperatorCommandExecutor(client), arguments);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkDeployFailure(exception);
+        }
+    }
+
+    private static int WriteApkDeployFailure(Exception exception)
+    {
+        var failure = ClassifyApkDeployFailure(exception);
+        WriteJson(new
+        {
+            schema = ApkDeployResultSchema,
+            succeeded = false,
+            mutation = (object?)null,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = failure.StateChangePossible
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, bool StateChangePossible, int ExitCode)
+        ClassifyApkDeployFailure(Exception exception)
+    {
+        if (exception is ArgumentException or FileNotFoundException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The inspected APK deployment input could not be admitted.",
+                false,
+                2);
+        }
+        if (exception is AdbCommandException adbFailure && IsInstallCommand(adbFailure.Result))
+        {
+            return (
+                "install_failed",
+                "Android Package Manager did not complete the fixed inspected APK install.",
+                true,
+                1);
+        }
+        if (exception is AdbCommandException launchFailure && IsLauncherStartCommand(launchFailure.Result))
+        {
+            return (
+                "launch_dispatch_failed",
+                "The proven launcher component could not be started after installation.",
+                true,
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "proof_rejected",
+                "Artifact, installed-byte, or launcher safety proof was rejected.",
+                true,
+                1);
+        }
+        if (exception is IOException)
+        {
+            return (
+                "artifact_io_failed",
+                "The immutable APK or exact installed-byte readback could not be completed.",
+                true,
+                1);
+        }
+        if (exception is AdbCommandException)
+        {
+            return (
+                "device_command_failed",
+                "A fixed serial-scoped deployment or observation command failed.",
+                true,
+                1);
+        }
+        return (
+            "deploy_failed",
+            "The inspected APK deployment did not complete.",
+            true,
+            1);
+    }
+
+    private static bool IsInstallCommand(CommandResult result) =>
+        result.Arguments.Count >= 3 &&
+        string.Equals(result.Arguments[2], "install", StringComparison.Ordinal);
 
     private static async Task<int> RunApkLaunchAsync(
         OperatorCommandExecutor executor,
@@ -1855,6 +2009,7 @@ internal static class CliApplication
               questionable-file-manager apk inspect --file <file.apk> [--json]
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
+              questionable-file-manager apk deploy --serial <serial> --file <file.apk> [options] [--json]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]

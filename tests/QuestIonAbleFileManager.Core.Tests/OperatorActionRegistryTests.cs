@@ -513,6 +513,40 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void ApkDeployJsonWritesOneTypedSanitizedResultAndKeepsGenericAdbClosed()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var deployMethod = SourceMethod(
+            source,
+            "private static async Task<int> RunApkDeployAsync",
+            "private static async Task<int> RunApkDeployJsonAsync");
+
+        Assert.Contains("questionable.file_manager.apk_deploy_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("OperatorCommands.DeployInspectedApp", deployMethod, StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", deployMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", deployMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", deployMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(deployMethod, "WriteJson\\(").Cast<Match>());
+        Assert.Contains("WriteApkDeployFailure(exception)", deployMethod, StringComparison.Ordinal);
+
+        var failureMethod = SourceMethod(
+            source,
+            "private static int WriteApkDeployFailure",
+            "private static (string Code, string Message, bool StateChangePossible, int ExitCode)");
+        Assert.Contains("state_change_possible", failureMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
+        Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("apk shell", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("adb args", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void OperatorActionsAdvertisesConsolidatedInspectedDeploymentContracts()
     {
         var root = FindRepositoryRoot();
@@ -528,6 +562,10 @@ public sealed class OperatorActionRegistryTests
             StringComparison.Ordinal);
         Assert.Contains(
             "questionable.file_manager.apk_launch_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.apk_deploy_result.v1",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
