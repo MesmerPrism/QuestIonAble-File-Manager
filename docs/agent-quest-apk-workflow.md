@@ -20,7 +20,9 @@ and the choice of build output.
    immediate resolved-component readback; runtime fields report what was seen,
    not application-owned semantic readiness.
 6. Use `apk observe --serial <serial> --file <apk> --json` for later read-only
-   checks against the same artifact.
+   checks against the same artifact. When a durable evidence pack is useful,
+   use `apk diagnose --serial <serial> --file <apk> --output <new-folder>
+   --json` instead.
 
 For a release candidate, add the source repository's release gates before
 step 4. The QFM device boundary stays the same; validation depth is selected by
@@ -53,8 +55,11 @@ or claim app-owned semantics.
 
 The fixed `apk observe` result reports installed byte identity, processes,
 foreground components, top-resumed components, and known blocking Quest system
-components. A future diagnostic-bundle route may package additional fixed,
-bounded evidence such as recent package-scoped logs and device state. Until
-that contract lands, project-specific diagnostic interpretation belongs in the
-source repository's tracked agent instructions; this document is not authority
-to run arbitrary `adb shell` or unconstrained `logcat` commands.
+components. `apk diagnose` first proves those same installed bytes, then writes
+an atomic no-overwrite bundle containing that runtime result, fixed package and
+memory snapshots, four fixed build properties, and at most 400 recent lines for
+each of at most eight package-derived PIDs. It does not capture screenshots,
+bugreports, arbitrary tags, or unbounded logs. Project-specific interpretation
+and app-owned readiness markers still belong in the source repository's
+tracked agent instructions; this document is not authority to run arbitrary
+`adb shell` or unconstrained `logcat` commands.

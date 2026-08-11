@@ -138,6 +138,37 @@ public sealed record InspectedApkDeploymentResult(
         "questionable.file_manager.apk_deployment.v1";
 }
 
+public sealed record ApkDiagnosticBundleFile(
+    string CaptureKind,
+    string RelativePath,
+    long SizeBytes,
+    string Sha256,
+    int? CommandExitCode = null)
+{
+    public bool Succeeded => CommandExitCode is null or 0;
+}
+
+public sealed record ApkDiagnosticDeviceFacts(
+    string Model,
+    string AndroidRelease,
+    string ApiLevel,
+    string BuildFingerprint);
+
+public sealed record ApkDiagnosticBundleResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity Installed,
+    AppRuntimeObservation Runtime,
+    ApkDiagnosticDeviceFacts Device,
+    string OutputDirectory,
+    DateTimeOffset CapturedAt,
+    IReadOnlyList<ApkDiagnosticBundleFile> Files)
+{
+    public string DiagnosticContract { get; init; } =
+        "questionable.file_manager.apk_diagnostic_bundle.v1";
+
+    public int FailedCaptureCount => Files.Count(static file => !file.Succeeded);
+}
+
 public sealed record ApkExportResult(
     string PackageName,
     string SourcePath,

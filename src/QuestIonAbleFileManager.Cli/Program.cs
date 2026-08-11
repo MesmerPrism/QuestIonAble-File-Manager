@@ -9,6 +9,7 @@ internal static class CliApplication
 {
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
+    private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v3";
     private const string LauncherExportProofContract =
@@ -61,6 +62,7 @@ internal static class CliApplication
                     {
                         inspectedDeployment = InspectedDeploymentContract,
                         apkDeployResult = ApkDeployResultSchema,
+                        apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
@@ -80,6 +82,13 @@ internal static class CliApplication
             if (command == "connectivity-profile")
             {
                 return await RunConnectivityProfileAsync(arguments);
+            }
+            if (command == "apk" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "diagnose", StringComparison.OrdinalIgnoreCase) &&
+                HasFlag(arguments, "--json"))
+            {
+                return await RunApkDiagnoseJsonAsync(arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -1131,6 +1140,9 @@ internal static class CliApplication
             case "deploy":
                 return await RunApkDeployAsync(executor, arguments);
 
+            case "diagnose":
+                return await RunApkDiagnoseAsync(executor, arguments);
+
             case "launch":
                 return await RunApkLaunchAsync(executor, arguments);
 
@@ -1213,6 +1225,122 @@ internal static class CliApplication
             default:
                 throw new ArgumentException($"Unknown apk action: {action}");
         }
+    }
+
+    private static async Task<int> RunApkDiagnoseAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        var json = HasFlag(arguments, "--json");
+        try
+        {
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.DiagnoseInspectedApp(
+                    RequireOption(arguments, "--serial"),
+                    RequireOption(arguments, "--file"),
+                    RequireOption(arguments, "--output")));
+            var result = execution.ApkDiagnosticBundleResult ??
+                throw new InvalidOperationException("Inspected APK diagnostics returned no result.");
+            var complete = result.FailedCaptureCount == 0;
+            if (json)
+            {
+                WriteJson(new
+                {
+                    schema = ApkDiagnosticResultSchema,
+                    succeeded = true,
+                    complete,
+                    result,
+                    failure = (object?)null
+                });
+            }
+            else
+            {
+                Console.WriteLine($"Diagnostic bundle: {result.OutputDirectory}");
+                Console.WriteLine(
+                    $"Captured {result.Files.Count} files; failed fixed captures: {result.FailedCaptureCount}.");
+            }
+            return complete ? 0 : 3;
+        }
+        catch (Exception exception) when (json)
+        {
+            return WriteApkDiagnosticFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkDiagnoseJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkDiagnoseAsync(new OperatorCommandExecutor(client), arguments);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkDiagnosticFailure(exception);
+        }
+    }
+
+    private static int WriteApkDiagnosticFailure(Exception exception)
+    {
+        var failure = ClassifyApkDiagnosticFailure(exception);
+        WriteJson(new
+        {
+            schema = ApkDiagnosticResultSchema,
+            succeeded = false,
+            complete = false,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = false
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, int ExitCode)
+        ClassifyApkDiagnosticFailure(Exception exception)
+    {
+        if (exception is ArgumentException or FileNotFoundException or DirectoryNotFoundException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The inspected APK diagnostic input or new output directory could not be admitted.",
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "package_not_installed",
+                "The inspected APK is not installed on the selected headset.",
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "installed_proof_rejected",
+                "Installed identity or exact base-APK byte proof was rejected.",
+                1);
+        }
+        if (exception is AdbCommandException or TimeoutException)
+        {
+            return (
+                "device_read_failed",
+                "A fixed serial-scoped diagnostic readback did not complete.",
+                1);
+        }
+        if (exception is IOException or UnauthorizedAccessException)
+        {
+            return (
+                "artifact_or_output_io_failed",
+                "The immutable APK admission or private diagnostic bundle write could not be completed.",
+                1);
+        }
+        return (
+            "diagnostic_failed",
+            "The inspected APK diagnostic bundle did not complete.",
+            1);
     }
 
     private static async Task<int> RunApkDeployAsync(
@@ -2010,6 +2138,7 @@ internal static class CliApplication
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
               questionable-file-manager apk deploy --serial <serial> --file <file.apk> [options] [--json]
+              questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> [--json]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]

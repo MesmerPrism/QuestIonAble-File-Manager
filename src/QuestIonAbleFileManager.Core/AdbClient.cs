@@ -723,18 +723,26 @@ public sealed partial class AdbClient
         string serial,
         string reportedPath,
         ApkArtifactInspection artifact,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        InstalledApkIdentity? verifiedInstalled = null)
     {
-        InstalledApkIdentity? installed = null;
-        try
+        var installed = verifiedInstalled;
+        if (installed is null)
         {
-            installed = await ReadInstalledIdentityAsync(
-                serial, artifact, cancellationToken).ConfigureAwait(false);
-            EnsureSameArtifact(artifact, installed);
+            try
+            {
+                installed = await ReadInstalledIdentityAsync(
+                    serial, artifact, cancellationToken).ConfigureAwait(false);
+                EnsureSameArtifact(artifact, installed);
+            }
+            catch (PackageNotInstalledException)
+            {
+                // Absence is a structured observation, not an execution failure.
+            }
         }
-        catch (PackageNotInstalledException)
+        else
         {
-            // Absence is a structured observation, not an execution failure.
+            EnsureSameArtifact(artifact, installed);
         }
 
         var activities = await RunForDeviceAsync(

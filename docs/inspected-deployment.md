@@ -66,8 +66,16 @@ acceptance policy; File Manager does not infer OpenXR readiness. Identity,
 digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings.
 
+`apk diagnose --serial <quest-serial> --file <path-to.apk> --output
+<new-folder>` is a read-only durable projection of that same exact-artifact
+boundary. It refuses an existing output path, stages the complete result in a
+new sibling directory, and atomically publishes the directory only after its
+manifest is complete. The fixed capture set is documented in
+`apk-diagnostic-bundle.md`; callers cannot supply commands, tags, PIDs, log
+counts, or capture kinds.
+
 `operator-actions --json` advertises the inspected-deployment, launch-result,
-deploy-result, launcher-export-proof, and runtime-observation contract revisions without
+deploy-result, diagnostic-result, launcher-export-proof, and runtime-observation contract revisions without
 selecting a device or performing a mutation. The consolidated
 `questionable.file_manager.inspected_deployment.v3` contract requires all of
 the behavior above: immutable artifact admission, exact installed-byte
