@@ -359,10 +359,12 @@ package set. ADB rejects mixed package names, versions, signatures, or missing
 required splits. Pass `--adb <path>` to select a particular ADB executable
 without changing global ADB state.
 
-The single-APK `install`, `launch`, and `observe` routes inspect the local
+The single-APK `install`, `deploy`, `launch`, and `observe` routes inspect the local
 artifact with Android SDK Build Tools and bind package/version/signer plus
 base-APK digest/size readback to the exact selected serial. See
-`docs/inspected-deployment.md`.
+`docs/inspected-deployment.md`. Use `apk deploy` for the bounded agent fast path;
+repository-specific build and semantic diagnostic instructions remain owned by
+the source repository as described in `docs/agent-quest-apk-workflow.md`.
 
 The `--confirm-wifi-adb` flag records that an operator approved the exact
 Wi-Fi state change; agents must not add it without that approval. Parallel

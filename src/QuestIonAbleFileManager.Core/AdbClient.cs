@@ -491,13 +491,85 @@ public sealed partial class AdbClient
     {
         serial = AndroidInput.RequireSerial(serial);
         var reportedPath = Path.GetFullPath(apkPath);
+        if (!File.Exists(reportedPath))
+        {
+            throw new FileNotFoundException("The APK to install was not found.", reportedPath);
+        }
+        if (!string.Equals(Path.GetExtension(reportedPath), ".apk", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The install input must be an .apk file.", nameof(apkPath));
+        }
         using var admission = await ImmutableApkAdmission.CreateAsync(
             reportedPath,
             cancellationToken).ConfigureAwait(false);
         var inspector = CreateApkInspector();
         var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
         RejectSplitArtifact(artifact);
-        var current = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        return await InstallAdmittedApkAsync(
+            serial,
+            reportedPath,
+            admission.Path,
+            artifact,
+            inspector,
+            options,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<InspectedApkDeploymentResult> DeployInspectedApkAsync(
+        string serial,
+        string apkPath,
+        ApkInstallOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var reportedPath = Path.GetFullPath(apkPath);
+        if (!File.Exists(reportedPath))
+        {
+            throw new FileNotFoundException("The APK to deploy was not found.", reportedPath);
+        }
+        if (!string.Equals(Path.GetExtension(reportedPath), ".apk", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The deploy input must be an .apk file.", nameof(apkPath));
+        }
+        using var admission = await ImmutableApkAdmission.CreateAsync(
+            reportedPath,
+            cancellationToken).ConfigureAwait(false);
+        var inspector = CreateApkInspector();
+        var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        RejectSplitArtifact(artifact);
+        var install = await InstallAdmittedApkAsync(
+            serial,
+            reportedPath,
+            admission.Path,
+            artifact,
+            inspector,
+            options,
+            cancellationToken).ConfigureAwait(false);
+        EnsureSameArtifact(artifact, install.Installed);
+        var launch = await LaunchAdmittedAppAsync(
+            serial,
+            reportedPath,
+            artifact,
+            install.Installed,
+            cancellationToken).ConfigureAwait(false);
+        var runtime = await ObserveAdmittedAppAsync(
+            serial,
+            reportedPath,
+            artifact,
+            cancellationToken).ConfigureAwait(false);
+        return new InspectedApkDeploymentResult(install, launch, runtime);
+    }
+
+    private async Task<InspectedApkInstallResult> InstallAdmittedApkAsync(
+        string serial,
+        string reportedPath,
+        string admittedPath,
+        ApkArtifactInspection artifact,
+        ApkArtifactInspector inspector,
+        ApkInstallOptions? options,
+        CancellationToken cancellationToken)
+    {
+        var current = await inspector.InspectAsync(admittedPath, cancellationToken).ConfigureAwait(false);
         if (current.Sha256 != artifact.Sha256 || current.SizeBytes != artifact.SizeBytes ||
             current.Identity != artifact.Identity)
         {
@@ -505,10 +577,10 @@ public sealed partial class AdbClient
         }
 
         var arguments = CreateInstallArguments("install", options);
-        arguments.Add(admission.Path);
+        arguments.Add(admittedPath);
         var commandResult = await RunForDeviceAsync(
             serial, arguments, TransferTimeout, cancellationToken).ConfigureAwait(false);
-        commandResult.EnsureSuccess($"Install {Path.GetFileName(artifact.Path)}");
+        commandResult.EnsureSuccess($"Install {Path.GetFileName(reportedPath)}");
         var installed = await ReadInstalledIdentityAsync(
             serial, artifact, cancellationToken).ConfigureAwait(false);
         return new InspectedApkInstallResult(
@@ -565,6 +637,21 @@ public sealed partial class AdbClient
         var installed = await ReadInstalledIdentityAsync(
             serial, artifact, cancellationToken).ConfigureAwait(false);
         EnsureSameArtifact(artifact, installed);
+        return await LaunchAdmittedAppAsync(
+            serial,
+            reportedPath,
+            artifact,
+            installed,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ResolvedAppLaunchResult> LaunchAdmittedAppAsync(
+        string serial,
+        string reportedPath,
+        ApkArtifactInspection artifact,
+        InstalledApkIdentity installed,
+        CancellationToken cancellationToken)
+    {
         var query = await RunForDeviceAsync(
             serial,
             ["shell", "cmd", "package", "query-activities", "--brief", "--components",
@@ -625,6 +712,19 @@ public sealed partial class AdbClient
         var inspector = CreateApkInspector();
         var artifact = await inspector.InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
         RejectSplitArtifact(artifact);
+        return await ObserveAdmittedAppAsync(
+            serial,
+            reportedPath,
+            artifact,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AppRuntimeObservation> ObserveAdmittedAppAsync(
+        string serial,
+        string reportedPath,
+        ApkArtifactInspection artifact,
+        CancellationToken cancellationToken)
+    {
         InstalledApkIdentity? installed = null;
         try
         {

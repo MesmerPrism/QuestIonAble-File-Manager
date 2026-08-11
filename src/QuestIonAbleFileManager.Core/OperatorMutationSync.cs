@@ -172,6 +172,7 @@ internal static class OperatorMutations
     {
         OperatorCommandKind.PushFile or
         OperatorCommandKind.InstallApk or
+        OperatorCommandKind.DeployInspectedApp or
         OperatorCommandKind.LaunchInspectedApp or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
@@ -193,6 +194,8 @@ internal static class OperatorMutations
     {
         OperatorCommandKind.PushFile => $"file present at {command.RemotePath}",
         OperatorCommandKind.InstallApk => $"inspected APK installed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
+        OperatorCommandKind.DeployInspectedApp =>
+            $"inspected APK installed, resolved launcher started, and runtime observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
         OperatorCommandKind.EnableWifiAdb => $"Wi-Fi ADB enabled on port {command.WifiPort}",
@@ -236,6 +239,7 @@ internal static class OperatorMutations
             OperatorCommandKind.PushFile => OperatorMutationObservation.Confirmed(
                 "Remote file size matches the local source."),
             OperatorCommandKind.InstallApk => ObserveInspectedInstall(command, result),
+            OperatorCommandKind.DeployInspectedApp => ObserveInspectedDeployment(command, result),
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
             OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
@@ -258,6 +262,39 @@ internal static class OperatorMutations
             : OperatorMutationObservation.Pending(
                 $"Resolved component {launch.Component} was not observed resumed.",
                 "Launch was sent, but exact resumed-activity readback is still pending.");
+    }
+
+    private static OperatorMutationObservation ObserveInspectedDeployment(
+        OperatorCommand command,
+        OperatorExecutionResult result)
+    {
+        var install = ObserveInspectedInstall(command, result);
+        if (install.Stage != OperatorMutationStage.Confirmed)
+        {
+            return install;
+        }
+
+        var launch = ObserveResolvedLaunch(result);
+        if (launch.Stage != OperatorMutationStage.Confirmed)
+        {
+            return launch;
+        }
+
+        var runtime = result.AppRuntimeObservation ??
+            throw new InvalidOperationException("Inspected deployment returned no final runtime observation.");
+        if (runtime.Installed is null)
+        {
+            return OperatorMutationObservation.Pending(
+                "The final runtime observation no longer sees the inspected package installed.",
+                "Installation and launch completed, but final installed-byte readback is pending.");
+        }
+
+        return OperatorMutationObservation.Confirmed(
+            $"Exact installed bytes and resolved component {result.ResolvedAppLaunchResult!.Component} were confirmed; " +
+            $"final runtime reports process-alive={runtime.ProcessAlive.ToString().ToLowerInvariant()}, " +
+            $"foreground={runtime.IsForeground.ToString().ToLowerInvariant()}, " +
+            $"top-resumed={runtime.IsTopResumed.ToString().ToLowerInvariant()}, " +
+            $"blocking-system-components={runtime.BlockingSystemComponents.Count}.");
     }
 
     private static OperatorMutationObservation ObserveInspectedInstall(

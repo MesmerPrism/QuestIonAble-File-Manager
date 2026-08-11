@@ -298,6 +298,83 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Deploy_UsesOneAdmittedArtifactForInstallLaunchAndRuntimeEvidence()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities:
+                "mResumedActivity: ActivityRecord{1 com.example.app/.Main}\n" +
+                "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
+            probeInstallImmutability: true);
+        try
+        {
+            var executor = new OperatorCommandExecutor(
+                new AdbClient("adb", runner, new("aapt2", "apksigner")));
+
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.DeployInspectedApp("QUEST123", apk));
+            var deployment = Assert.IsType<InspectedApkDeploymentResult>(
+                execution.InspectedApkDeploymentResult);
+
+            Assert.Equal("questionable.file_manager.apk_deployment.v1", deployment.DeploymentContract);
+            Assert.Equal(Path.GetFullPath(apk), deployment.Install.Artifact.Path);
+            Assert.Equal(Path.GetFullPath(apk), deployment.Launch.Artifact.Path);
+            Assert.Equal(Path.GetFullPath(apk), deployment.Runtime.Artifact.Path);
+            Assert.Equal(deployment.Install.Artifact.Sha256, deployment.Launch.Artifact.Sha256);
+            Assert.Equal(deployment.Install.Artifact.Sha256, deployment.Runtime.Artifact.Sha256);
+            Assert.True(deployment.Launch.ComponentObservedResumed);
+            Assert.True(deployment.Runtime.ProcessAlive);
+            Assert.True(deployment.Runtime.IsForeground);
+            Assert.True(deployment.Runtime.IsTopResumed);
+            Assert.Equal(OperatorMutationStage.Confirmed, execution.MutationReceipt!.Stage);
+            Assert.Contains("process-alive=true", execution.MutationReceipt.ObservedState);
+
+            var install = Assert.Single(runner.Calls, call =>
+                call.Arguments.Count >= 4 && call.Arguments[2] == "install");
+            Assert.NotEqual(Path.GetFullPath(apk), install.Arguments[^1]);
+            Assert.Contains(
+                "QuestIonAbleFileManager.ApkAdmission",
+                install.Arguments[^1],
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(2, runner.Calls.Count(call => call.FileName == "aapt2"));
+            Assert.Equal(2, runner.Calls.Count(call => call.FileName == "apksigner"));
+            Assert.Equal(2, runner.Calls.Count(call =>
+                call.Arguments.Count >= 3 && call.Arguments[2] == "exec-out"));
+            Assert.Single(runner.Calls, call =>
+                call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" &&
+                call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Deploy_RejectsMissingOrNonApkInputBeforeDeviceCommands()
+    {
+        var runner = new FakeRunner((_, _) => Success("unexpected\n"));
+        var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
+        var missing = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.apk");
+        var wrongExtension = Path.Combine(Path.GetTempPath(), $"qfm-public-test-{Guid.NewGuid():N}.zip");
+        await File.WriteAllBytesAsync(wrongExtension, [0x50, 0x4b, 0x03, 0x04]);
+        try
+        {
+            await Assert.ThrowsAsync<FileNotFoundException>(() =>
+                client.DeployInspectedApkAsync("QUEST123", missing));
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                client.DeployInspectedApkAsync("QUEST123", wrongExtension));
+            Assert.Empty(runner.Calls);
+        }
+        finally
+        {
+            File.Delete(wrongExtension);
+        }
+    }
+
+    [Fact]
     public async Task Observe_StreamsExactOpenedApkWithoutAdvancingDescriptorBeforeCat()
     {
         var bytes = Enumerable.Range(0, 4096)

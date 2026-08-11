@@ -108,6 +108,10 @@ whitespace; File Manager does not normalize an app-defined identifier.
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
+The CLI-only `apk deploy` route composes inspected install, resolved launch,
+and final runtime observation for agents and automation. It is intentionally
+not a WPF parity claim and does not add a general ADB or shell command.
+
 The WPF **Disconnect** button clears its long-lived process-memory UI session.
 It is intentionally marked interactive-only: every CLI direct command is one
 atomic session and performs the equivalent cleanup before printing its single
@@ -122,6 +126,7 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' apk list --serial <quest-serial> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk export --serial <quest-serial> --package <package> --output <local-apk> --overwrite --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install --serial <quest-serial> --file <local-apk> --adb <path-to-adb>
+& '.\questionable-file-manager.exe' apk deploy --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-bundle --serial <quest-serial> --folder <apk-folder> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb --adb <path-to-adb>

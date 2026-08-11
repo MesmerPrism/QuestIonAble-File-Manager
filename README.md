@@ -150,6 +150,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk list --serial <quest
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk inspect --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk export --serial <quest-serial> --package com.example.app --output ./com.example.app.apk
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <quest-serial> --file ./example.apk
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
@@ -223,6 +224,12 @@ Wi-Fi state changes require an explicit confirmation in the WPF app or the
 `--confirm-wifi-adb` CLI flag. The app never resets the global ADB server.
 Kiosk setup/control and device settings use their own confirmation flags.
 Mutation JSON contains desired and observed state plus its transition history.
+`apk deploy` is the bounded agent-oriented fast path for a source-repository
+build output: it retains one immutable APK, installs and verifies its exact
+bytes, derives and launches the only proven exported launcher, then returns a
+final runtime observation. It does not accept package names, components,
+intents, shell fragments, or generic ADB arguments. See
+[Agent Quest APK workflow](docs/agent-quest-apk-workflow.md).
 A Meta permission prompt can legitimately remain pending until wearer response.
 The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact
@@ -416,6 +423,7 @@ while copying the same opened handle into PackageInstaller.
 - [Optional Rusty Fleet integration](docs/fleet-integration.md)
 - [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)
+- [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md)
 - [Dedicated local API](docs/local-api.md)
 - [Release workflow](docs/release-workflow.md)
 - [Branding and compatibility](docs/branding-and-compatibility.md)
