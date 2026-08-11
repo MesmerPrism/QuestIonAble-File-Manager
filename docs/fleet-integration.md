@@ -276,6 +276,9 @@ read-only status reports `recoveryRequired`; it separately reports
 or cleans a remote path automatically. Cancellation is available only through
 the injected-authority Core API, which revalidates the reservation's exact
 authority digest before writing the durable cancel marker.
+Readers retry only bounded Windows sharing/lock contention while a new journal
+entry is still held by its writer; invalid bytes, gaps, substitutions, and
+unsupported transitions continue to fail closed.
 
 ## Non-scope And Remaining Authority
 
