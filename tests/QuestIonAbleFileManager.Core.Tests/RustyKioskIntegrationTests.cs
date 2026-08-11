@@ -1037,6 +1037,26 @@ public sealed class RustyKioskIntegrationTests
     }
 
     [Fact]
+    public void CatalogFilterMatchesSeparatorTolerantTermsAcrossFields()
+    {
+        RustyKioskAppEntry[] entries =
+        [
+            new("motion", "Motion App", "com.example.motion", true, true, ["movement"]),
+            new("quiet", "Quiet App", "com.example.quiet", false, false, ["calm"])
+        ];
+
+        Assert.Equal("Motion App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "example-motion", null)).Name);
+        Assert.Equal("Quiet App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "quiet/calm", null)).Name);
+        Assert.Equal("Motion App", Assert.Single(
+            RustyKioskCatalogFilter.Apply(entries, "example/movement", "movement")).Name);
+        Assert.Empty(RustyKioskCatalogFilter.Apply(entries, "motion/calm", null));
+        Assert.Equal(["Motion App", "Quiet App"],
+            RustyKioskCatalogFilter.Apply(entries, "---", null).Select(static entry => entry.Name));
+    }
+
+    [Fact]
     public void WifiPermissionRequestStaysPendingUntilLaterHeadsetReadbackConfirmsIt()
     {
         var command = OperatorCommands.InvokeRustyKiosk(

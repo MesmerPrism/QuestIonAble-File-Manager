@@ -207,6 +207,37 @@ public sealed record RustyKioskAppEntry(
     public string DisplayLabel => $"{Name} — {StatusLabel}";
 }
 
+public static class RustyKioskCatalogFilter
+{
+    private static readonly Regex SearchTermSeparator = new(
+        @"[^\p{L}\p{N}]+",
+        RegexOptions.CultureInvariant);
+
+    public static IReadOnlyList<RustyKioskAppEntry> Apply(
+        IEnumerable<RustyKioskAppEntry> entries,
+        string? searchQuery,
+        string? selectedTag)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        var terms = SearchTermSeparator
+            .Split(searchQuery?.Trim() ?? string.Empty)
+            .Where(static term => term.Length > 0)
+            .ToArray();
+        var tag = selectedTag?.Trim();
+
+        return entries
+            .Where(entry => terms.All(term =>
+                entry.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (entry.PackageName?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                entry.Tags.Any(candidate => candidate.Contains(term, StringComparison.OrdinalIgnoreCase))))
+            .Where(entry => string.IsNullOrWhiteSpace(tag) ||
+                            entry.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(static entry => entry.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static entry => entry.PackageName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+}
+
 public sealed record RustyKioskLaunchOption(
     int SchemaVersion,
     string OptionId,
