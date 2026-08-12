@@ -10,16 +10,19 @@ and the choice of build output.
 1. Read the source repository's tracked agent instructions and use its owned
    build command. Do not make File Manager infer or reproduce that build.
 2. Select one explicit `.apk` output and one explicit Quest serial.
-3. Run `apk inspect --file <apk> --json` when a read-only admission check is
-   useful before any device change.
-4. Run `apk deploy --serial <serial> --file <apk> --json`. Installation options
+3. Run `apk inspect --file <apk> --json` when artifact-only admission is useful.
+4. Run `apk preflight --serial <serial> --file <apk> --json` for the read-only
+   artifact/device handoff. A ready result proves SDK compatibility and one
+   declared launcher; exact installed bytes additionally enable fixed launch
+   and diagnostic actions.
+5. Run `apk deploy --serial <serial> --file <apk> --json`. Installation options
    are limited to `--no-replace`, `--downgrade`,
    `--grant-runtime-permissions`, and `--test-only`.
-5. Treat the returned mutation receipt and install/launch/runtime evidence as
+6. Treat the returned mutation receipt and install/launch/runtime evidence as
    separate facts. A confirmed deploy proves exact installed bytes and the
    immediate resolved-component readback; runtime fields report what was seen,
    not application-owned semantic readiness.
-6. Use `apk observe --serial <serial> --file <apk> --json` for later read-only
+7. Use `apk observe --serial <serial> --file <apk> --json` for later read-only
    checks against the same artifact. When a durable evidence pack is useful,
    use `apk diagnose --serial <serial> --file <apk> --output <new-folder>
    --json` instead.
@@ -31,10 +34,10 @@ the source/release lane rather than by accepting broader ADB commands.
 ## Fixed QFM actions
 
 QFM provides typed routes for device discovery, file transfer, APK inspection,
-exact install, composite deploy, resolved launch, runtime observation, package
-export, bounded power/performance control, Wi-Fi ADB setup, and the documented
-Kiosk/Fleet integrations. Prefer those routes over reimplementing their ADB
-sequences.
+read-only APK/device preflight, exact install, composite deploy, resolved
+launch, runtime observation, package export, bounded power/performance control,
+Wi-Fi ADB setup, and the documented Kiosk/Fleet integrations. Prefer those
+routes over reimplementing their ADB sequences.
 
 ## Information that remains project-owned
 

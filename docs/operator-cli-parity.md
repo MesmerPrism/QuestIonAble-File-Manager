@@ -108,11 +108,13 @@ whitespace; File Manager does not normalize an app-defined identifier.
 | Optional Fleet capability/observation/list/pull/status | CLI-only `integration ... --json`; no WPF action in v1 |
 | Authority-injected Fleet no-overwrite push/cancel | Core API only; absent from the environment-created CLI and WPF |
 
-The CLI-only `apk deploy` route composes inspected install, resolved launch,
-and final runtime observation for agents and automation. The CLI-only
-`apk diagnose` route writes the fixed read-only evidence bundle described in
-`apk-diagnostic-bundle.md`. Neither is a WPF parity claim or a general ADB or
-shell command.
+The CLI-only `apk preflight` route returns the fixed read-only artifact/device
+readiness contract described in `apk-preflight.md`. `apk deploy` composes
+inspected install, resolved launch, and final runtime observation for agents and
+automation. `apk diagnose` writes the fixed read-only evidence bundle described
+in `apk-diagnostic-bundle.md`. These agent routes are advertised separately by
+`operator-actions --json`; none is a WPF parity claim or a general ADB or shell
+command.
 
 The WPF **Disconnect** button clears its long-lived process-memory UI session.
 It is intentionally marked interactive-only: every CLI direct command is one
@@ -128,6 +130,7 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' apk list --serial <quest-serial> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk export --serial <quest-serial> --package <package> --output <local-apk> --overwrite --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install --serial <quest-serial> --file <local-apk> --adb <path-to-adb>
+& '.\questionable-file-manager.exe' apk preflight --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk deploy --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk diagnose --serial <quest-serial> --file <local-apk> --output <new-private-folder> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk install-bundle --serial <quest-serial> --folder <apk-folder> --adb <path-to-adb>

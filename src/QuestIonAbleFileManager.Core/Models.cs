@@ -91,6 +91,48 @@ public sealed record ApkArtifactInspection(
     string Sha256,
     ApkArtifactIdentity Identity);
 
+public sealed record ApkArtifactManifestFacts(
+    int MinimumSdkVersion,
+    int? TargetSdkVersion,
+    IReadOnlyList<string> LauncherActivities);
+
+public enum InstalledApkMatch
+{
+    Absent,
+    Exact,
+    Different,
+    Unverified
+}
+
+public sealed record ApkPreflightCheck(
+    string Id,
+    bool Passed,
+    string Detail);
+
+public sealed record ApkPreflightNextCommand(
+    string Purpose,
+    IReadOnlyList<string> Arguments,
+    bool Ready);
+
+public sealed record ApkPreflightResult(
+    ApkArtifactInspection Artifact,
+    ApkArtifactManifestFacts Manifest,
+    string Serial,
+    QuestDevice? Device,
+    int? DeviceApiLevel,
+    InstalledApkMatch InstalledMatch,
+    InstalledApkIdentity? Installed,
+    string? LauncherComponent,
+    bool ReadyForDeploy,
+    bool ReadyForLaunch,
+    bool ReadyForDiagnose,
+    IReadOnlyList<ApkPreflightCheck> Checks,
+    IReadOnlyList<ApkPreflightNextCommand> NextCommands)
+{
+    public string PreflightContract { get; init; } =
+        "questionable.file_manager.apk_preflight.v1";
+}
+
 public sealed record InstalledApkIdentity(
     string Serial,
     ApkArtifactIdentity? Identity,

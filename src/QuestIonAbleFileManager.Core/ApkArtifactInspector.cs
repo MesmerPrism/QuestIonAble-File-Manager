@@ -64,6 +64,15 @@ internal sealed class ApkArtifactInspector(
     private static readonly Regex Attribute = new(
         "(?<key>[A-Za-z][A-Za-z0-9]*)='(?<value>[^']*)'",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SdkLine = new(
+        "^sdkVersion:'(?<value>[^']+)'$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TargetSdkLine = new(
+        "^targetSdkVersion:'(?<value>[^']+)'$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex LaunchableActivityLine = new(
+        "^launchable-activity:\\s+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SignerLine = new(
         "^(?:" +
         "Signer #[1-9][0-9]*|" +
@@ -80,6 +89,11 @@ internal sealed class ApkArtifactInspector(
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public async Task<ApkArtifactInspection> InspectAsync(
+        string apkPath,
+        CancellationToken cancellationToken = default) =>
+        (await InspectManifestAsync(apkPath, cancellationToken).ConfigureAwait(false)).Artifact;
+
+    public async Task<ApkArtifactManifestInspection> InspectManifestAsync(
         string apkPath,
         CancellationToken cancellationToken = default)
     {
@@ -112,9 +126,11 @@ internal sealed class ApkArtifactInspector(
         var badging = await runner.RunAsync(
             tools.Aapt2Path, ["dump", "badging", path], Timeout, cancellationToken).ConfigureAwait(false);
         badging.EnsureSuccess("Inspect APK manifest");
-        var packageLines = badging.StandardOutput.ReplaceLineEndings("\n")
+        var badgingLines = badging.StandardOutput.ReplaceLineEndings("\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(static line => line.Trim())
+            .ToArray();
+        var packageLines = badgingLines
             .Where(line => PackageLine.IsMatch(line))
             .ToArray();
         if (packageLines.Length != 1)
@@ -164,7 +180,27 @@ internal sealed class ApkArtifactInspector(
             throw new InvalidDataException("APK versionCode must be a positive integer.");
         }
         attributes.TryGetValue("split", out var split);
-        return new ApkArtifactInspection(
+        var minimumSdkVersion = ParseOptionalSingleSdkValue(badgingLines, SdkLine, "minimum SDK") ?? 1;
+        var targetSdkVersion = ParseOptionalSingleSdkValue(badgingLines, TargetSdkLine, "target SDK");
+        if (targetSdkVersion is not null && targetSdkVersion.Value < minimumSdkVersion)
+        {
+            throw new InvalidDataException("APK target SDK cannot be lower than its minimum SDK.");
+        }
+        var launcherActivities = badgingLines
+            .Where(line => LaunchableActivityLine.IsMatch(line))
+            .Select(line => Attribute.Matches(line)
+                .Cast<Match>()
+                .ToDictionary(
+                    match => match.Groups["key"].Value,
+                    match => match.Groups["value"].Value,
+                    StringComparer.Ordinal)
+                .GetValueOrDefault("name"))
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value!)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var artifact = new ApkArtifactInspection(
             path, info.Length, sha256,
             new ApkArtifactIdentity(
                 packageName,
@@ -172,5 +208,43 @@ internal sealed class ApkArtifactInspector(
                 attributes.GetValueOrDefault("versionName"),
                 signerDigests[0],
                 split));
+        return new ApkArtifactManifestInspection(
+            artifact,
+            new ApkArtifactManifestFacts(
+                minimumSdkVersion,
+                targetSdkVersion,
+                launcherActivities));
+    }
+
+    private static int? ParseOptionalSingleSdkValue(
+        IReadOnlyList<string> lines,
+        Regex pattern,
+        string label)
+    {
+        var matches = lines
+            .Select(line => pattern.Match(line))
+            .Where(static match => match.Success)
+            .ToArray();
+        if (matches.Length > 1)
+        {
+            throw new InvalidDataException($"APK manifest inspection produced multiple {label} values.");
+        }
+        if (matches.Length == 0)
+        {
+            return null;
+        }
+        if (!int.TryParse(
+                matches[0].Groups["value"].Value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value) || value < 1)
+        {
+            throw new InvalidDataException($"APK {label} must be a positive integer.");
+        }
+        return value;
     }
 }
+
+internal sealed record ApkArtifactManifestInspection(
+    ApkArtifactInspection Artifact,
+    ApkArtifactManifestFacts Manifest);

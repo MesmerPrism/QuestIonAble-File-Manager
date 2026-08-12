@@ -61,6 +61,8 @@ public sealed class OperatorCommandTests
                     apkPath,
                     new ApkInstallOptions(false, true, true, true)),
                 ["apk", "install", "--serial", "QUEST123", "--file", apkPath, "--no-replace", "--downgrade", "--grant-runtime-permissions", "--test-only"]),
+            (OperatorCommands.PreflightInspectedApp("QUEST123", apkPath),
+                ["apk", "preflight", "--serial", "QUEST123", "--file", apkPath]),
             (OperatorCommands.DeployInspectedApp(
                     "QUEST123",
                     apkPath,

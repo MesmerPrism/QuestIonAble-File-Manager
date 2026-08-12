@@ -203,6 +203,30 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task InspectManifest_RejectsUncomparableSdkCodename()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success(
+                "package: name='com.example.app' versionCode='42'\n" +
+                "sdkVersion:'PreviewCodename'\n")
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n"));
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner"))
+                    .InspectManifestAsync(apk));
+
+            Assert.Contains("minimum SDK", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
     public async Task Inspect_AcceptsCallerOwnedReadOnlyArtifact()
     {
         var testRoot = Path.Combine(
@@ -290,6 +314,91 @@ public sealed class InspectedDeploymentTests
                 call.Arguments.Count >= 3 && call.Arguments[2] == "exec-out");
             Assert.DoesNotContain(runner.Calls, call =>
                 call.Arguments.Count >= 3 && call.Arguments[2] == "pull");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_ProvesExactInstalledArtifactWithoutMutation()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(apk, installed: true, deviceApiLevel: 32);
+        try
+        {
+            var executor = new OperatorCommandExecutor(
+                new AdbClient("adb", runner, new("aapt2", "apksigner")));
+
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.PreflightInspectedApp("QUEST123", apk));
+            var result = Assert.IsType<ApkPreflightResult>(execution.ApkPreflightResult);
+
+            Assert.Equal("questionable.file_manager.apk_preflight.v1", result.PreflightContract);
+            Assert.Equal(23, result.Manifest.MinimumSdkVersion);
+            Assert.Equal(35, result.Manifest.TargetSdkVersion);
+            Assert.Equal(["com.example.app.Main"], result.Manifest.LauncherActivities);
+            Assert.Equal(32, result.DeviceApiLevel);
+            Assert.Equal(InstalledApkMatch.Exact, result.InstalledMatch);
+            Assert.Equal("com.example.app/.Main", result.LauncherComponent);
+            Assert.True(result.ReadyForDeploy);
+            Assert.True(result.ReadyForLaunch);
+            Assert.True(result.ReadyForDiagnose);
+            Assert.Null(execution.MutationReceipt);
+            Assert.All(result.NextCommands, command => Assert.True(command.Ready));
+            Assert.DoesNotContain(runner.Calls, call =>
+                call.Arguments.Contains("install") ||
+                call.Arguments.Contains("am") ||
+                call.Arguments.Contains("logcat"));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_TreatsAbsentInstallAsDeployReadyButNotLaunchOrDiagnoseReady()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(apk, installed: false, deviceApiLevel: 32);
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .PreflightInspectedApkAsync("QUEST123", apk);
+
+            Assert.Equal(InstalledApkMatch.Absent, result.InstalledMatch);
+            Assert.True(result.ReadyForDeploy);
+            Assert.False(result.ReadyForLaunch);
+            Assert.False(result.ReadyForDiagnose);
+            Assert.Null(result.LauncherComponent);
+            Assert.True(result.NextCommands.Single(command =>
+                command.Purpose == "install_launch_observe").Ready);
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("query-activities"));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("dumpsys"));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_ReportsApiIncompatibilityWithoutDeviceMutation()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(apk, installed: false, deviceApiLevel: 22);
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .PreflightInspectedApkAsync("QUEST123", apk);
+
+            Assert.False(result.ReadyForDeploy);
+            Assert.Contains(result.Checks, check =>
+                check.Id == "device.api_compatible" && !check.Passed);
+            Assert.DoesNotContain(runner.Calls, call =>
+                call.Arguments.Contains("install") || call.Arguments.Contains("start"));
         }
         finally
         {
@@ -1198,6 +1307,56 @@ public sealed class InspectedDeploymentTests
                 return Success("456 123\n");
             }
             return Success("Success\n");
+        }, File.ReadAllBytes(sourceApk));
+    }
+
+    private static FakeRunner CreatePreflightRunner(
+        string sourceApk,
+        bool installed,
+        int deviceApiLevel)
+    {
+        return new FakeRunner((file, arguments) =>
+        {
+            if (file == "aapt2")
+            {
+                return Success(
+                    "package: name='com.example.app' versionCode='42' versionName='1.2.3'\n" +
+                    "sdkVersion:'23'\n" +
+                    "targetSdkVersion:'35'\n" +
+                    "launchable-activity: name='com.example.app.Main' label='' icon=''\n");
+            }
+            if (file == "apksigner")
+            {
+                return Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n");
+            }
+            if (arguments.SequenceEqual(["devices", "-l"]))
+            {
+                return Success(
+                    "List of devices attached\n" +
+                    "QUEST123 device product:eureka model:Quest_3 transport_id:1\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "getprop", "ro.build.version.sdk"]))
+            {
+                return Success(deviceApiLevel.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "pm path 'com.example.app'"]))
+            {
+                return Success(installed ? "package:/data/app/example/base.apk\n" : "");
+            }
+            if (arguments.Contains("query-activities"))
+            {
+                return Success("com.example.app/.Main\n");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "package", "com.example.app"]))
+            {
+                return Success(
+                    "  Activity #0 ActivityInfo{abc com.example.app/.Main}\n" +
+                    "    exported=true\n");
+            }
+            return Success("unexpected\n");
         }, File.ReadAllBytes(sourceApk));
     }
 
