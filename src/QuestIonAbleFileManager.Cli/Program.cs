@@ -8,6 +8,7 @@ return await CliApplication.RunAsync(args);
 internal static class CliApplication
 {
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
+    private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v1";
     private const string InspectedDeploymentContract =
@@ -61,12 +62,14 @@ internal static class CliApplication
                     contracts = new
                     {
                         inspectedDeployment = InspectedDeploymentContract,
+                        apkPreflightResult = ApkPreflightResultSchema,
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
                     },
+                    agentRoutes = OperatorActionRegistry.AgentRoutes,
                     actions = OperatorActionRegistry.Actions
                 });
                 return 0;
@@ -82,6 +85,13 @@ internal static class CliApplication
             if (command == "connectivity-profile")
             {
                 return await RunConnectivityProfileAsync(arguments);
+            }
+            if (command == "apk" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "preflight", StringComparison.OrdinalIgnoreCase) &&
+                HasFlag(arguments, "--json"))
+            {
+                return await RunApkPreflightJsonAsync(arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -1140,6 +1150,9 @@ internal static class CliApplication
             case "deploy":
                 return await RunApkDeployAsync(executor, arguments);
 
+            case "preflight":
+                return await RunApkPreflightAsync(executor, arguments);
+
             case "diagnose":
                 return await RunApkDiagnoseAsync(executor, arguments);
 
@@ -1225,6 +1238,139 @@ internal static class CliApplication
             default:
                 throw new ArgumentException($"Unknown apk action: {action}");
         }
+    }
+
+    private static async Task<int> RunApkPreflightAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        var json = HasFlag(arguments, "--json");
+        try
+        {
+            var execution = await executor.ExecuteAsync(
+                OperatorCommands.PreflightInspectedApp(
+                    RequireOption(arguments, "--serial"),
+                    RequireOption(arguments, "--file")));
+            var result = execution.ApkPreflightResult ??
+                throw new InvalidOperationException("Inspected APK preflight returned no result.");
+            if (json)
+            {
+                WriteJson(new
+                {
+                    schema = ApkPreflightResultSchema,
+                    succeeded = true,
+                    complete = true,
+                    ready = result.ReadyForDeploy,
+                    result,
+                    failure = (object?)null
+                });
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"Artifact: {result.Artifact.Identity.PackageName} " +
+                    $"versionCode={result.Artifact.Identity.VersionCode} sha256={result.Artifact.Sha256}");
+                Console.WriteLine(
+                    $"Device: {result.Serial} state={result.Device?.State ?? "absent"} " +
+                    $"api={result.DeviceApiLevel?.ToString() ?? "unknown"}");
+                Console.WriteLine($"Installed match: {result.InstalledMatch}");
+                Console.WriteLine(
+                    $"Ready: deploy={result.ReadyForDeploy.ToString().ToLowerInvariant()}, " +
+                    $"launch={result.ReadyForLaunch.ToString().ToLowerInvariant()}, " +
+                    $"diagnose={result.ReadyForDiagnose.ToString().ToLowerInvariant()}");
+            }
+            return result.ReadyForDeploy ? 0 : 3;
+        }
+        catch (Exception exception) when (json)
+        {
+            return WriteApkPreflightFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkPreflightJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkPreflightAsync(new OperatorCommandExecutor(client), arguments);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkPreflightFailure(exception);
+        }
+    }
+
+    private static int WriteApkPreflightFailure(Exception exception)
+    {
+        var failure = ClassifyApkPreflightFailure(exception);
+        WriteJson(new
+        {
+            schema = ApkPreflightResultSchema,
+            succeeded = false,
+            complete = false,
+            ready = false,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = false
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, int ExitCode)
+        ClassifyApkPreflightFailure(Exception exception)
+    {
+        if (exception is FileNotFoundException missingFile &&
+            !string.IsNullOrWhiteSpace(missingFile.FileName) &&
+            string.Equals(Path.GetExtension(missingFile.FileName), ".apk", StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                "input_rejected",
+                "The inspected APK preflight input could not be admitted.",
+                2);
+        }
+        if (exception is ArgumentException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The inspected APK preflight input could not be admitted.",
+                2);
+        }
+        if (exception is AdbCommandException or TimeoutException)
+        {
+            return (
+                "device_read_failed",
+                "A fixed read-only ADB discovery or serial-scoped preflight command failed.",
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "proof_rejected",
+                "Artifact, device API, installed-byte, or launcher evidence was malformed.",
+                1);
+        }
+        if (exception is FileNotFoundException or InvalidOperationException)
+        {
+            return (
+                "tool_unavailable",
+                "Required Android Platform Tools, SDK Build Tools, Java, or exact-byte streaming support is unavailable.",
+                1);
+        }
+        if (exception is IOException or UnauthorizedAccessException)
+        {
+            return (
+                "artifact_io_failed",
+                "The immutable APK could not be admitted for read-only preflight.",
+                1);
+        }
+        return (
+            "preflight_failed",
+            "The inspected APK preflight did not complete.",
+            1);
     }
 
     private static async Task<int> RunApkDiagnoseAsync(
@@ -2137,6 +2283,7 @@ internal static class CliApplication
               questionable-file-manager apk inspect --file <file.apk> [--json]
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
+              questionable-file-manager apk preflight --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk deploy --serial <serial> --file <file.apk> [options] [--json]
               questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> [--json]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]

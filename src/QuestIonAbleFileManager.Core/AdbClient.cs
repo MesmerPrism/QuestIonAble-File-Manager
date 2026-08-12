@@ -652,30 +652,10 @@ public sealed partial class AdbClient
         InstalledApkIdentity installed,
         CancellationToken cancellationToken)
     {
-        var query = await RunForDeviceAsync(
+        var component = await ResolveExportedLauncherAsync(
             serial,
-            ["shell", "cmd", "package", "query-activities", "--brief", "--components",
-             "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
-             artifact.Identity.PackageName],
-            InspectionTimeout, cancellationToken).ConfigureAwait(false);
-        query.EnsureSuccess("Resolve exported launcher activity");
-        var component = RequireUniqueLauncherComponent(
-            query.StandardOutput,
-            artifact.Identity.PackageName);
-        var packageDump = await RunForDeviceAsync(
-            serial,
-            ["shell", "dumpsys", "package", artifact.Identity.PackageName],
-            InspectionTimeout,
+            artifact.Identity.PackageName,
             cancellationToken).ConfigureAwait(false);
-        packageDump.EnsureSuccess("Prove launcher activity export state");
-        if (!ProvesExportedActivity(
-                packageDump.StandardOutput,
-                component.Canonical,
-                artifact.Identity.PackageName))
-        {
-            throw new InvalidDataException(
-                "The resolved launcher activity was not proven exported before dispatch.");
-        }
 
         var start = await RunForDeviceAsync(
             serial, ["shell", "am", "start", "-n", component.Wire],
@@ -697,6 +677,37 @@ public sealed partial class AdbClient
             component.Wire,
             start,
             observed);
+    }
+
+    private async Task<ResolvedLauncherComponent> ResolveExportedLauncherAsync(
+        string serial,
+        string packageName,
+        CancellationToken cancellationToken)
+    {
+        var query = await RunForDeviceAsync(
+            serial,
+            ["shell", "cmd", "package", "query-activities", "--brief", "--components",
+             "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
+             packageName],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        query.EnsureSuccess("Resolve exported launcher activity");
+        var component = RequireUniqueLauncherComponent(
+            query.StandardOutput,
+            packageName);
+        var packageDump = await RunForDeviceAsync(
+            serial, ["shell", "dumpsys", "package", packageName],
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        packageDump.EnsureSuccess("Prove launcher activity export state");
+        if (!ProvesExportedActivity(
+                packageDump.StandardOutput,
+                component.Canonical,
+                packageName))
+        {
+            throw new InvalidDataException(
+                "The resolved launcher activity was not proven exported before dispatch.");
+        }
+        return component;
     }
 
     public async Task<AppRuntimeObservation> ObserveInspectedAppAsync(

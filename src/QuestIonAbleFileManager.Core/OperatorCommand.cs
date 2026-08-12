@@ -36,6 +36,7 @@ public enum OperatorCommandKind
     SetQuestPerformance,
     FleetInstallStatus,
     FleetInstall,
+    PreflightInspectedApp,
     DeployInspectedApp,
     DiagnoseInspectedApp
 }
@@ -543,6 +544,18 @@ public static class OperatorCommands
             serial: serial,
             localPath: fullApkPath,
             installOptions: options);
+    }
+
+    public static OperatorCommand PreflightInspectedApp(string serial, string apkPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.PreflightInspectedApp,
+            ["apk", "preflight", "--serial", serial, "--file", fullApkPath],
+            serial: serial,
+            localPath: fullApkPath);
     }
 
     public static OperatorCommand DeployInspectedApp(
@@ -1126,6 +1139,7 @@ public sealed record OperatorExecutionResult(
     QuestConnectivityProfileListReceipt? ConnectivityProfileList = null,
     QuestConnectivityProfileMutationReceipt? ConnectivityProfileMutation = null,
     OperatorMutationReceipt? MutationReceipt = null,
+    ApkPreflightResult? ApkPreflightResult = null,
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null);
 
@@ -1333,6 +1347,14 @@ public sealed class OperatorCommandExecutor
                         ApkArtifactInspection: install.Artifact,
                         InspectedApkInstallResult: install);
                 }
+
+            case OperatorCommandKind.PreflightInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkPreflightResult: await client.PreflightInspectedApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.DeployInspectedApp:
                 {
@@ -1618,6 +1640,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.ListPackages => "Loading third-party packages…",
         OperatorCommandKind.ExportApk => "Exporting and hashing the installed APK…",
         OperatorCommandKind.InstallApk => "Installing the APK…",
+        OperatorCommandKind.PreflightInspectedApp => "Checking APK and selected Quest readiness…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",

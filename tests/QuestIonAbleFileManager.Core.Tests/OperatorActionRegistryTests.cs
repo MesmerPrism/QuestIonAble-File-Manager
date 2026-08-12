@@ -513,6 +513,48 @@ public sealed class OperatorActionRegistryTests
     }
 
     [Fact]
+    public void ApkPreflightJsonWritesOneTypedReadOnlyResultAndKeepsGenericAdbClosed()
+    {
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var method = SourceMethod(
+            source,
+            "private static async Task<int> RunApkPreflightAsync",
+            "private static async Task<int> RunApkPreflightJsonAsync");
+
+        Assert.Contains("questionable.file_manager.apk_preflight_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("OperatorCommands.PreflightInspectedApp", method, StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", method, StringComparison.Ordinal);
+        Assert.Contains("complete = true", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", method, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(method, "WriteJson\\(").Cast<Match>());
+
+        var failureMethod = SourceMethod(
+            source,
+            "private static int WriteApkPreflightFailure",
+            "private static (string Code, string Message, int ExitCode)");
+        Assert.Contains("state_change_possible = false", failureMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
+        Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
+
+        var core = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Core",
+            "AdbClient.ApkPreflight.cs"));
+        Assert.Contains("GetDevicesAsync", core, StringComparison.Ordinal);
+        Assert.Contains("ReadInstalledIdentityAsync", core, StringComparison.Ordinal);
+        Assert.Contains("ResolveExportedLauncherAsync", core, StringComparison.Ordinal);
+        Assert.DoesNotContain("am start", core, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("logcat", core, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ApkDeployJsonWritesOneTypedSanitizedResultAndKeepsGenericAdbClosed()
     {
         var root = FindRepositoryRoot();
@@ -605,6 +647,10 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
+            "questionable.file_manager.apk_preflight_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "questionable.file_manager.apk_deploy_result.v1",
             source,
             StringComparison.Ordinal);
@@ -620,6 +666,11 @@ public sealed class OperatorActionRegistryTests
             "questionable.file_manager.app_runtime_observation.v2",
             source,
             StringComparison.Ordinal);
+        var preflight = Assert.Single(
+            OperatorActionRegistry.AgentRoutes,
+            route => route.Id == "apk_preflight");
+        Assert.Equal("OperatorCommands.PreflightInspectedApp", preflight.CoreOperation);
+        Assert.False(preflight.RequiresConfirmation);
     }
 
     [Fact]

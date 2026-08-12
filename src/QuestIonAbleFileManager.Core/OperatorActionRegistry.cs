@@ -29,6 +29,29 @@ public sealed record OperatorActionDescriptor(
 /// </summary>
 public static class OperatorActionRegistry
 {
+    public static IReadOnlyList<OperatorActionRouteDescriptor> AgentRoutes { get; } =
+        new ReadOnlyCollection<OperatorActionRouteDescriptor>(
+        [
+            new(
+                "apk_preflight",
+                "apk preflight --serial --file --json",
+                "OperatorCommands.PreflightInspectedApp",
+                false,
+                "immutable artifact identity, exact serial/API compatibility, installed-byte match, and exported-launcher readiness"),
+            new(
+                "apk_deploy",
+                "apk deploy --serial --file --json",
+                "OperatorCommands.DeployInspectedApp",
+                false,
+                "exact installed base-APK bytes, resolved exported launch, and runtime observation"),
+            new(
+                "apk_diagnose",
+                "apk diagnose --serial --file --output --json",
+                "OperatorCommands.DiagnoseInspectedApp",
+                false,
+                "exact installed base-APK bytes plus a fixed bounded private diagnostic bundle")
+        ]);
+
     public static IReadOnlyList<OperatorActionDescriptor> Actions { get; } =
         new ReadOnlyCollection<OperatorActionDescriptor>(
         [

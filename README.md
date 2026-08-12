@@ -150,6 +150,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk list --serial <quest
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk inspect --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk export --serial <quest-serial> --package com.example.app --output ./com.example.app.apk
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <quest-serial> --file ./example.apk
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk preflight --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <quest-serial> --file ./example.apk --output ./private-diagnostics --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
@@ -225,6 +226,11 @@ Wi-Fi state changes require an explicit confirmation in the WPF app or the
 `--confirm-wifi-adb` CLI flag. The app never resets the global ADB server.
 Kiosk setup/control and device settings use their own confirmation flags.
 Mutation JSON contains desired and observed state plus its transition history.
+`apk preflight` is the read-only agent handoff before deployment. It reports
+immutable artifact identity, manifest SDK/launcher facts, exact ADB serial and
+API compatibility, installed-byte match, and fixed deploy/launch/diagnose
+readiness. It does not build source, install, launch, capture logs, or accept a
+generic command. See [APK preflight](docs/apk-preflight.md).
 `apk deploy` is the bounded agent-oriented fast path for a source-repository
 build output: it retains one immutable APK, installs and verifies its exact
 bytes, derives and launches the only proven exported launcher, then returns a
