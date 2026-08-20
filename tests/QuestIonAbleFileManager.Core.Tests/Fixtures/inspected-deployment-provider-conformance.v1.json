@@ -1,0 +1,333 @@
+{
+  "schema": "questionable.file_manager.inspected_deployment_provider_conformance.v1",
+  "purpose": "Public host-only synthetic corpus for consumers of the File Manager inspected-deployment provider.",
+  "native_schema_ids": [
+    "questionable.file_manager.inspected_deployment.v3",
+    "questionable.file_manager.apk_launch_result.v1",
+    "questionable.file_manager.launcher_export_proof.v2",
+    "questionable.file_manager.app_runtime_observation.v2"
+  ],
+  "native_launch_envelope_invariant": {
+    "schema": "questionable.file_manager.apk_launch_result.v1",
+    "success": {
+      "succeeded": true,
+      "mutation": "non-null",
+      "result": "non-null",
+      "failure": "null"
+    },
+    "failure": {
+      "succeeded": false,
+      "mutation": "null",
+      "result": "null",
+      "failure": "non-null"
+    }
+  },
+  "runtime_observation_v2": {
+    "schema": "questionable.file_manager.app_runtime_observation.v2",
+    "proves": [
+      "android_installed_identity",
+      "android_foreground",
+      "android_top_resumed",
+      "android_process"
+    ],
+    "does_not_prove": [
+      "openxr_readiness",
+      "app_effect",
+      "wearer_visibility"
+    ]
+  },
+  "consumer_terminal_contract": {
+    "owner": "consumer",
+    "exactly_one_terminal_json_document": true,
+    "all_outcomes_publish_atomically": true,
+    "raw_streams_must_be_retained_and_digested": true,
+    "failure_classes": [
+      "invocation_failure",
+      "parse_failure",
+      "offline",
+      "timeout",
+      "cancelled",
+      "provider_failure",
+      "internal_failure"
+    ],
+    "note": "This corpus constrains a consumer wrapper; it does not add or replace a File Manager native result schema."
+  },
+  "cases": [
+    {
+      "id": "success",
+      "raw_streams": {
+        "stdout_utf8": "{\"schema\":\"questionable.file_manager.apk_launch_result.v1\",\"succeeded\":true,\"mutation\":{},\"result\":{},\"failure\":null}\n",
+        "stdout_sha256": "7c09f09c43631bb3b73eae7b5c6331da9c44b83bc96ebdd546fe9366477179b3",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": {
+        "schema": "questionable.file_manager.apk_launch_result.v1",
+        "succeeded": true,
+        "mutation": {},
+        "result": {},
+        "failure": null
+      },
+      "expected": {
+        "provider_json_documents": 1,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "invocation_failure",
+      "raw_streams": {
+        "stdout_utf8": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_utf8": "executable was not found\n",
+        "stderr_sha256": "ab389173990a54f7f083a669b670f7c318421de30593a4cae24b8cc3c70d3e2e"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "parse_failure",
+      "raw_streams": {
+        "stdout_utf8": "{\"schema\":\"questionable.file_manager.apk_launch_result.v1\",\"succeeded\":true}\n",
+        "stdout_sha256": "e9613dc585751c8530eb61e20cc7365f4502f478d985c5d659e92bfebf19927c",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 1,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "offline",
+      "raw_streams": {
+        "stdout_utf8": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_utf8": "device offline\n",
+        "stderr_sha256": "5a811eb2d02e4d5fc9540a0c1a1a217f88537167b2a8458c132cacc0e48756f8"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "timeout",
+      "raw_streams": {
+        "stdout_utf8": "partial diagnostic output",
+        "stdout_sha256": "e45d3a444b993f65dadb6dd68c8cc0cacf2eb29d6afbb177b0a1c8e23fea1d15",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic",
+        "process_tree_must_be_cancelled": true
+      }
+    },
+    {
+      "id": "cancelled",
+      "raw_streams": {
+        "stdout_utf8": "partial output before cancellation",
+        "stdout_sha256": "4aab804f557a34bc38459c1ef7c109769ccd2ad0b52d3a164198ab4eaa831406",
+        "stderr_utf8": "cancelled\n",
+        "stderr_sha256": "36a7ecb1512963a9044ff7d91b2cd9e784faa61e9639d5f8ebddabc2a933a5f0"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic",
+        "process_tree_must_be_cancelled": true
+      }
+    },
+    {
+      "id": "provider_failure",
+      "raw_streams": {
+        "stdout_utf8": "{\"schema\":\"questionable.file_manager.apk_launch_result.v1\",\"succeeded\":false,\"mutation\":null,\"result\":null,\"failure\":{\"code\":\"offline\"}}\n",
+        "stdout_sha256": "ae84d3bf9b232c8729cd84fd63a3a8ae46e5b82e284bdfcf4a15d6b3a735dd0f",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": {
+        "schema": "questionable.file_manager.apk_launch_result.v1",
+        "succeeded": false,
+        "mutation": null,
+        "result": null,
+        "failure": {
+          "code": "offline"
+        }
+      },
+      "expected": {
+        "provider_json_documents": 1,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "internal_failure",
+      "raw_streams": {
+        "stdout_utf8": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_utf8": "unhandled wrapper exception\n",
+        "stderr_sha256": "7e451bfaec70ef26c4442279db3d57cf9d8e74466805f1b4d23e389fcf1583e3"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "zero_stdout",
+      "raw_streams": {
+        "stdout_utf8": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "truncated_stdout",
+      "raw_streams": {
+        "stdout_utf8": "{\"schema\":\"questionable.file_manager.apk_launch_result.v1\"",
+        "stdout_sha256": "7284b6ca10f5407787b226efa5562f6090e3c0f1db8e33d82d91b8110f111b5f",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "malformed_stdout",
+      "raw_streams": {
+        "stdout_utf8": "not json\n",
+        "stdout_sha256": "3c48773b404d850071dff4006d4ef0d7302d1343aefc58fbc84d730753de8831",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "stderr_only",
+      "raw_streams": {
+        "stdout_utf8": "",
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_utf8": "provider emitted only stderr\n",
+        "stderr_sha256": "4bead6846e37dfc04b31f285ceb7f0107cc123a860eaba93162e0d35a542cf5d"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "atomic_final_file",
+      "raw_streams": {
+        "stdout_utf8": "final document is staged before publication\n",
+        "stdout_sha256": "6c6391e5e1684517089247d186a3503475210338c59ed3e71ecbbf55467b2e50",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "raw_stream_retention_and_digest",
+      "raw_streams": {
+        "stdout_utf8": "raw stdout bytes are retained\n",
+        "stdout_sha256": "8c05a2a3899c4dfb05ad1b73809fde5de043fac67b19e2fc740dd32453fc61f6",
+        "stderr_utf8": "raw stderr bytes are retained\n",
+        "stderr_sha256": "11215ab811d7009827a0f0fb52172c93f95cac2f57ef1df06291579bb2f2cc77"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic"
+      }
+    },
+    {
+      "id": "process_tree_cancellation",
+      "raw_streams": {
+        "stdout_utf8": "child process still had a pipe open\n",
+        "stdout_sha256": "356d3df11c12f0d023574ba20af78717ad1b4c1564a03a73ed19be6fa50f7316",
+        "stderr_utf8": "timeout\n",
+        "stderr_sha256": "7ed6120912d915f6ba8ef82ba3ec0b703265a0979bc0a243e0144580ad0c0b6b"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic",
+        "process_tree_must_be_cancelled": true
+      }
+    },
+    {
+      "id": "windows_quoting_and_locale",
+      "raw_streams": {
+        "stdout_utf8": "C:\\Program Files\\QFM\\qfm.exe --label \"Grüße\"\n",
+        "stdout_sha256": "4040c0ff62b323daf5b896b7c1879df771d0314e1a5021f090567a7bce0fb18b",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic",
+        "host": "windows",
+        "locale": "de-DE",
+        "argument_transport": "ProcessStartInfo.ArgumentList"
+      }
+    },
+    {
+      "id": "automatic_variable_name_hazards",
+      "raw_streams": {
+        "stdout_utf8": "input names: input, args, _, PSItem\n",
+        "stdout_sha256": "f073c5d5f3be3d5329400562feda90dd8d3bbaa6601ebfc23de3e7cd74e18757",
+        "stderr_utf8": "",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "native_launch_envelope": null,
+      "expected": {
+        "provider_json_documents": 0,
+        "consumer_terminal_json_documents": 1,
+        "final_file_publication": "atomic",
+        "automatic_variable_names_must_not_control_provider_arguments": true
+      }
+    }
+  ]
+}

@@ -150,7 +150,14 @@ public sealed record ResolvedAppLaunchResult(
     InstalledApkIdentity Installed,
     string Component,
     CommandResult CommandResult,
-    bool ComponentObservedResumed);
+    bool ComponentObservedResumed)
+{
+    // These are additive proof facts. Component remains the exact component
+    // dispatched to Android; an alias target is never substituted for it.
+    public bool LauncherIsActivityAlias { get; init; }
+
+    public string? LauncherTargetActivity { get; init; }
+}
 
 public sealed record AppRuntimeObservation(
     ApkArtifactInspection Artifact,

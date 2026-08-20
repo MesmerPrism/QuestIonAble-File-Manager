@@ -46,18 +46,27 @@ fragments, or generic ADB arguments.
 only from the inspected APK, requires matching installed identity, queries the
 installed base digest, and size before querying the fixed exported
 `MAIN`/`LAUNCHER` surface. It requires exactly one safe component and starts
-that result only after a same-package export proof. A matching
+that exact queried result only after a same-package export proof. A matching
 `ActivityInfo`/`Activity` detail record is authoritative and must contain
 exactly one `exported=true` value. When current Quest package dumps omit those
 detail records, the fallback accepts only the exact queried component appearing
 exactly once beneath `Activity Resolver Table` -> `Non-Data Actions` ->
 `android.intent.action.MAIN`, with that same filter declaring both the exact
 `MAIN` action and `LAUNCHER` category. Shorthand and full same-package class
-names normalize to one component. Cross-package, alias/substitution, ambiguous,
-explicitly unexported, malformed, or incomplete evidence fails before dispatch.
-Callers cannot supply components, actions, categories, intents,
-extras, paths, shell fragments, or generic ADB arguments. Confirmation requires
-exact resumed-component readback.
+names normalize to one component. An activity alias is allowed only when that
+single queried component has one of those export proofs and the same proof
+retains both `isAlias=true` and one syntactically safe `targetActivity`; the
+CLI still dispatches the queried alias, never the target. The launch result
+adds `launcherIsActivityAlias` and canonical `launcherTargetActivity` facts so
+consumers can distinguish that case. Those are additive launch-result properties:
+they do not rename, remove, or reinterpret an existing launch field or any
+advertised v2 contract ID, so existing tolerant v2 readers continue to consume
+their contracted facts. Cross-package, alias/substitution without both facts,
+ambiguous, explicitly unexported, malformed, or incomplete evidence fails before
+dispatch. Callers cannot supply components, actions, categories,
+intents, extras, paths, shell fragments, or generic ADB arguments. Confirmation
+requires exact canonical resumed-component readback for the dispatched alias or
+its retained alias target.
 
 `apk launch ... --json` writes exactly one
 `questionable.file_manager.apk_launch_result.v1` document to standard output on
@@ -74,7 +83,8 @@ alive without appearing in the legacy foreground projection, while Guardian or
 sensor-lock UI is simultaneously visible. Consumers choose their own 2D or XR
 acceptance policy; File Manager does not infer OpenXR readiness. Identity,
 digest, and size must match before runtime probes execute. It does not claim
-effective in-app settings.
+effective in-app settings, app effect, or wearer-visible state. Process IDs and
+legacy resumed text prove neither XR readiness nor an app effect.
 
 `apk diagnose --serial <quest-serial> --file <path-to.apk> --output
 <new-folder>` is a read-only durable projection of that same exact-artifact
@@ -95,6 +105,16 @@ Quest resolver-table fallback, and runtime observation v2. Provider resolvers
 should require these exact revisions before a run so an older hash-pinned CLI
 cannot silently reintroduce empty launch JSON or reject the known Quest VR
 launcher projection.
+
+`tests/QuestIonAbleFileManager.Core.Tests/Fixtures/inspected-deployment-provider-conformance.v1.json`
+is the public synthetic corpus for host consumers. Its
+`questionable.file_manager.inspected_deployment_provider_conformance.v1`
+metadata fixes the four native schema IDs, the launch-envelope nullability
+invariant, transport adversarial cases, and the runtime-v2 proof boundary. It
+states explicitly that runtime observation v2 proves Android installed,
+foreground, top-resumed, and process dimensions only—not OpenXR readiness, app
+effect, or wearer visibility. A consumer owns its terminal envelope and final
+file behavior; this corpus does not replace a native File Manager schema.
 
 This slice requires Android Platform Tools and Android SDK Build Tools. It is
 single-device and single-base-APK only. Split-set inspected deployment and

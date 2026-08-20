@@ -666,17 +666,26 @@ public sealed partial class AdbClient
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         activities.EnsureSuccess("Read back launched activity");
         var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
-            .Any(line => (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
-                          line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
-                         (line.Contains(component.Wire, StringComparison.Ordinal) ||
-                          line.Contains(component.Canonical, StringComparison.Ordinal) ||
-                          line.Contains(component.Shorthand, StringComparison.Ordinal)));
+            .Any(line =>
+                (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
+                 line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
+                TryReadRuntimeComponent(line, out var observedComponent) &&
+                (string.Equals(observedComponent, component.Canonical, StringComparison.Ordinal) ||
+                 (component.IsActivityAlias &&
+                  string.Equals(
+                      observedComponent,
+                      component.TargetActivity,
+                      StringComparison.Ordinal))));
         return new ResolvedAppLaunchResult(
             artifact with { Path = reportedPath },
             installed,
             component.Wire,
             start,
-            observed);
+            observed)
+        {
+            LauncherIsActivityAlias = component.IsActivityAlias,
+            LauncherTargetActivity = component.TargetActivity
+        };
     }
 
     private async Task<ResolvedLauncherComponent> ResolveExportedLauncherAsync(
@@ -699,15 +708,20 @@ public sealed partial class AdbClient
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         packageDump.EnsureSuccess("Prove launcher activity export state");
-        if (!ProvesExportedActivity(
+        if (!TryProveExportedActivity(
                 packageDump.StandardOutput,
                 component.Canonical,
-                packageName))
+                packageName,
+                out var aliasEvidence))
         {
             throw new InvalidDataException(
                 "The resolved launcher activity was not proven exported before dispatch.");
         }
-        return component;
+        return component with
+        {
+            IsActivityAlias = aliasEvidence.IsActivityAlias,
+            TargetActivity = aliasEvidence.TargetActivity
+        };
     }
 
     public async Task<AppRuntimeObservation> ObserveInspectedAppAsync(
@@ -921,11 +935,13 @@ public sealed partial class AdbClient
         return true;
     }
 
-    private static bool ProvesExportedActivity(
+    private static bool TryProveExportedActivity(
         string packageDump,
         string canonicalComponent,
-        string packageName)
+        string packageName,
+        out LauncherAliasEvidence aliasEvidence)
     {
+        aliasEvidence = LauncherAliasEvidence.NotAlias;
         var lines = packageDump.ReplaceLineEndings("\n").Split('\n');
         var matchingDetails = new List<ActivityExportEvidence>();
         for (var index = 0; index < lines.Length; index++)
@@ -942,9 +958,16 @@ public sealed partial class AdbClient
             }
             var activityIndent = lines[index].TakeWhile(char.IsWhiteSpace).Count();
             bool? exported = null;
-            var alias = false;
+            bool? isAlias = null;
+            string? targetActivity = null;
             var malformed = false;
-            AccumulateActivityFields(lines[index], ref exported, ref alias, ref malformed);
+            AccumulateActivityFields(
+                lines[index],
+                packageName,
+                ref exported,
+                ref isAlias,
+                ref targetActivity,
+                ref malformed);
             for (var detail = index + 1; detail < lines.Length; detail++)
             {
                 var value = lines[detail].Trim();
@@ -958,9 +981,19 @@ public sealed partial class AdbClient
                 {
                     break;
                 }
-                AccumulateActivityFields(value, ref exported, ref alias, ref malformed);
+                AccumulateActivityFields(
+                    value,
+                    packageName,
+                    ref exported,
+                    ref isAlias,
+                    ref targetActivity,
+                    ref malformed);
             }
-            matchingDetails.Add(new ActivityExportEvidence(exported, alias, malformed));
+            matchingDetails.Add(new ActivityExportEvidence(
+                exported,
+                isAlias,
+                targetActivity,
+                malformed));
         }
 
         if (matchingDetails.Count > 1)
@@ -970,10 +1003,18 @@ public sealed partial class AdbClient
         if (matchingDetails.Count == 1)
         {
             var detail = matchingDetails[0];
-            return !detail.Alias && !detail.Malformed && detail.Exported == true;
+            return detail.Exported == true && TryCreateLauncherAliasEvidence(
+                detail.IsAlias,
+                detail.TargetActivity,
+                detail.Malformed,
+                out aliasEvidence);
         }
 
-        return ProvesLauncherResolverFilter(lines, canonicalComponent, packageName);
+        return TryProveLauncherResolverFilter(
+            lines,
+            canonicalComponent,
+            packageName,
+            out aliasEvidence);
     }
 
     private static Match MatchActivityDetailHeader(string line)
@@ -994,17 +1035,12 @@ public sealed partial class AdbClient
 
     private static void AccumulateActivityFields(
         string value,
+        string packageName,
         ref bool? exported,
-        ref bool alias,
+        ref bool? isAlias,
+        ref string? targetActivity,
         ref bool malformed)
     {
-        if (Regex.IsMatch(
-                value,
-                @"(?:^|\s)(?:targetActivity=[^\s]+|isAlias=true)(?=\s|$)",
-                RegexOptions.CultureInvariant))
-        {
-            alias = true;
-        }
         var exportedFields = Regex.Matches(
             value,
             @"(?:^|\s)exported=(?<value>true|false)(?=\s|$)",
@@ -1020,13 +1056,107 @@ public sealed partial class AdbClient
                 "true",
                 StringComparison.Ordinal);
         }
+
+        var aliasFields = Regex.Matches(
+            value,
+            @"(?:^|\s)isAlias=(?<value>true|false)(?=\s|\}|$)",
+            RegexOptions.CultureInvariant);
+        if (aliasFields.Count > 1 || (aliasFields.Count == 1 && isAlias is not null))
+        {
+            malformed = true;
+        }
+        else if (aliasFields.Count == 1)
+        {
+            isAlias = string.Equals(
+                aliasFields[0].Groups["value"].Value,
+                "true",
+                StringComparison.Ordinal);
+        }
+
+        var targetFields = Regex.Matches(
+            value,
+            @"(?:^|\s)targetActivity=(?<value>[^\s}]+)(?=\s|\}|$)",
+            RegexOptions.CultureInvariant);
+        if (targetFields.Count > 1 || (targetFields.Count == 1 && targetActivity is not null))
+        {
+            malformed = true;
+        }
+        else if (targetFields.Count == 1)
+        {
+            var target = targetFields[0].Groups["value"].Value;
+            if (!TryNormalizeTargetActivity(target, packageName, out var canonicalTarget))
+            {
+                malformed = true;
+            }
+            else
+            {
+                targetActivity = canonicalTarget;
+            }
+        }
     }
 
-    private static bool ProvesLauncherResolverFilter(
+    private static bool TryNormalizeTargetActivity(
+        string targetActivity,
+        string packageName,
+        out string canonical)
+    {
+        canonical = string.Empty;
+        if (targetActivity.IndexOf('/') >= 0)
+        {
+            return TryNormalizeComponent(targetActivity, packageName, out canonical);
+        }
+
+        var fullActivity = targetActivity.StartsWith(".", StringComparison.Ordinal)
+            ? packageName + targetActivity
+            : targetActivity;
+        if (!Regex.IsMatch(
+                fullActivity,
+                @"^[A-Za-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+$",
+                RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        canonical = packageName + "/" + fullActivity;
+        return true;
+    }
+
+    private static bool TryCreateLauncherAliasEvidence(
+        bool? isAlias,
+        string? targetActivity,
+        bool malformed,
+        out LauncherAliasEvidence aliasEvidence)
+    {
+        aliasEvidence = LauncherAliasEvidence.NotAlias;
+        if (malformed)
+        {
+            return false;
+        }
+
+        if (targetActivity is null && isAlias is not true)
+        {
+            return true;
+        }
+
+        // A launcher alias needs both independent package-dump facts. A target
+        // without the alias flag, or an alias flag without a target, is not a
+        // safe substitute for a component proof.
+        if (isAlias != true || string.IsNullOrWhiteSpace(targetActivity))
+        {
+            return false;
+        }
+
+        aliasEvidence = new LauncherAliasEvidence(true, targetActivity);
+        return true;
+    }
+
+    private static bool TryProveLauncherResolverFilter(
         IReadOnlyList<string> lines,
         string canonicalComponent,
-        string packageName)
+        string packageName,
+        out LauncherAliasEvidence aliasEvidence)
     {
+        aliasEvidence = LauncherAliasEvidence.NotAlias;
         var matches = 0;
         var inResolverTable = false;
         var resolverIndent = -1;
@@ -1112,7 +1242,9 @@ public sealed partial class AdbClient
             var entryIndent = indent;
             var hasMain = false;
             var hasLauncher = false;
-            var alias = false;
+            bool? isAlias = null;
+            string? targetActivity = null;
+            var malformed = false;
             for (var detail = index + 1; detail < lines.Count; detail++)
             {
                 var detailRaw = lines[detail];
@@ -1133,14 +1265,31 @@ public sealed partial class AdbClient
                     detailValue,
                     "Category: \"android.intent.category.LAUNCHER\"",
                     StringComparison.Ordinal);
-                alias |= detailValue.Contains("targetActivity=", StringComparison.Ordinal) ||
-                    string.Equals(detailValue, "isAlias=true", StringComparison.Ordinal);
+                bool? ignoredExported = null;
+                AccumulateActivityFields(
+                    detailValue,
+                    packageName,
+                    ref ignoredExported,
+                    ref isAlias,
+                    ref targetActivity,
+                    ref malformed);
             }
-            if (alias || !hasMain || !hasLauncher)
+            if (!hasMain ||
+                !hasLauncher ||
+                !TryCreateLauncherAliasEvidence(
+                    isAlias,
+                    targetActivity,
+                    malformed,
+                    out var entryAliasEvidence))
+            {
+                return false;
+            }
+            if (matches == 1)
             {
                 return false;
             }
             matches++;
+            aliasEvidence = entryAliasEvidence;
         }
         return matches == 1;
     }
@@ -1148,14 +1297,25 @@ public sealed partial class AdbClient
     private sealed record ResolvedLauncherComponent(
         string Wire,
         string Canonical,
-        string Shorthand);
+        string Shorthand,
+        bool IsActivityAlias = false,
+        string? TargetActivity = null);
 
     private sealed record ActivityRuntimeFacts(
         IReadOnlyList<string> ForegroundComponents,
         IReadOnlyList<string> TopResumedComponents,
         IReadOnlyList<string> BlockingSystemComponents);
 
-    private sealed record ActivityExportEvidence(bool? Exported, bool Alias, bool Malformed);
+    private sealed record ActivityExportEvidence(
+        bool? Exported,
+        bool? IsAlias,
+        string? TargetActivity,
+        bool Malformed);
+
+    private sealed record LauncherAliasEvidence(bool IsActivityAlias, string? TargetActivity)
+    {
+        public static LauncherAliasEvidence NotAlias { get; } = new(false, null);
+    }
 
     public async Task<ApkBundleInstallResult> InstallApkBundleAsync(
         string serial,
