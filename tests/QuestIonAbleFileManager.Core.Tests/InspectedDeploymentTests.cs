@@ -725,8 +725,119 @@ public sealed class InspectedDeploymentTests
 
             Assert.Equal($"{packageName}/{activityName}", result.Component);
             Assert.True(result.ComponentObservedResumed);
+            Assert.False(result.LauncherIsActivityAlias);
+            Assert.Null(result.LauncherTargetActivity);
             Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
                 ["-s", "QUEST123", "shell", "am", "start", "-n", $"{packageName}/{activityName}"]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_AcceptsUniquelyProvenExportedAliasAndDispatchesTheAlias()
+    {
+        var apk = await CreateApkAsync();
+        const string aliasComponent = "com.example.app/.LaunchAlias";
+        const string targetComponent = "com.example.app/com.example.app.RealMain";
+        var runner = CreateDeploymentRunner(
+            apk,
+            launcherOutput: aliasComponent + "\n",
+            activities:
+                "topResumedActivity=ActivityRecord{abc u0 com.example.app/.RealMain t1}\n",
+            packageDump:
+                "  Activity #0 ActivityInfo{abc com.example.app/.LaunchAlias}\n" +
+                "    exported=true\n" +
+                "    isAlias=true\n" +
+                "    targetActivity=.RealMain\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal(aliasComponent, result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.True(result.LauncherIsActivityAlias);
+            Assert.Equal(targetComponent, result.LauncherTargetActivity);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", aliasComponent]));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", targetComponent]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_AcceptsUniquelyProvenExportedAliasFromResolverFallback()
+    {
+        var apk = await CreateApkAsync();
+        const string aliasComponent = "com.example.app/.LaunchAlias";
+        var runner = CreateDeploymentRunner(
+            apk,
+            launcherOutput: aliasComponent + "\n",
+            activities:
+                "mResumedActivity: ActivityRecord{abc u0 com.example.app/.RealMain t1}\n",
+            packageDump:
+                "Activity Resolver Table:\n" +
+                "  Non-Data Actions:\n" +
+                "      android.intent.action.MAIN:\n" +
+                "        2c9cd07 com.example.app/.LaunchAlias filter 6ce9e34\n" +
+                "          Action: \"android.intent.action.MAIN\"\n" +
+                "          Category: \"android.intent.category.LAUNCHER\"\n" +
+                "          isAlias=true\n" +
+                "          targetActivity=.RealMain\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal(aliasComponent, result.Component);
+            Assert.True(result.ComponentObservedResumed);
+            Assert.True(result.LauncherIsActivityAlias);
+            Assert.Equal("com.example.app/com.example.app.RealMain", result.LauncherTargetActivity);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "am", "start", "-n", aliasComponent]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Theory]
+    [InlineData(
+        "  Activity #0 ActivityInfo{abc com.example.app/.LaunchAlias}\n" +
+        "    exported=true\n" +
+        "    targetActivity=.RealMain\n")]
+    [InlineData(
+        "  Activity #0 ActivityInfo{abc com.example.app/.LaunchAlias}\n" +
+        "    exported=true\n" +
+        "    isAlias=true\n")]
+    [InlineData(
+        "  Activity #0 ActivityInfo{abc com.example.app/.LaunchAlias}\n" +
+        "    exported=true\n" +
+        "    isAlias=true\n" +
+        "    targetActivity=other.package/.RealMain\n")]
+    public async Task Launch_RejectsAliasWithoutCompleteSamePackageProofBeforeDispatch(
+        string packageDump)
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            launcherOutput: "com.example.app/.LaunchAlias\n",
+            packageDump: packageDump);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Count >= 6 &&
+                call.Arguments[3] == "am" && call.Arguments[4] == "start");
         }
         finally
         {
@@ -742,13 +853,15 @@ public sealed class InspectedDeploymentTests
             apk,
             packageDump:
                 "  Activity{abc com.example.app/com.example.app.Main}:\n" +
-                "    enabled=true exported=true directBootAware=false\n");
+                "    enabled=true exported=true isAlias=false directBootAware=false\n");
         try
         {
             var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
                 .LaunchInspectedAppAsync("QUEST123", apk);
 
             Assert.Equal("com.example.app/.Main", result.Component);
+            Assert.False(result.LauncherIsActivityAlias);
+            Assert.Null(result.LauncherTargetActivity);
             Assert.Contains(runner.Calls, call => call.Arguments.Count >= 6 &&
                 call.Arguments[3] == "am" && call.Arguments[4] == "start");
         }
@@ -779,6 +892,27 @@ public sealed class InspectedDeploymentTests
                     "-s", "QUEST123", "shell", "am", "start", "-n",
                     "com.example.app/com.example.app.Main"
                 ]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Launch_DoesNotTreatAComponentPrefixAsExactResumedReadback()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities:
+                "mResumedActivity: ActivityRecord{abc u0 com.example.app/.MainOther t1}\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchInspectedAppAsync("QUEST123", apk);
+
+            Assert.False(result.ComponentObservedResumed);
         }
         finally
         {
