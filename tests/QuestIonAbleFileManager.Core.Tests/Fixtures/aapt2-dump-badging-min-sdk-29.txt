@@ -1,0 +1,4 @@
+package: name='com.example.aapt2' versionCode='1' versionName='0.1.0' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'
+minSdkVersion:'29'
+targetSdkVersion:'35'
+launchable-activity: name='android.app.NativeActivity' label='' icon=''

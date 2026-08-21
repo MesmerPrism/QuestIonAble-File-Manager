@@ -27,7 +27,9 @@ as absent, exact, different, or unverified. Only exact installed bytes trigger
 the existing read-only unique/exported launcher proof. The result separately
 reports readiness for fixed deploy, launch, and diagnostic routes and returns
 their argument arrays. It never installs, starts an activity, captures logs, or
-invokes a project build.
+invokes a project build. Its manifest inspection requires exactly one positive
+numeric minimum-SDK Build Tools fact; missing, malformed, duplicated, or
+conflicting values fail preflight rather than becoming a default.
 
 `apk deploy --serial <quest-serial> --file <path-to.apk>` composes the common
 single-base-APK agent loop without opening a generic execution surface. One

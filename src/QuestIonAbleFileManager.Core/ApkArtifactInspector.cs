@@ -67,6 +67,9 @@ internal sealed class ApkArtifactInspector(
     private static readonly Regex SdkLine = new(
         "^sdkVersion:'(?<value>[^']+)'$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex MinimumSdkLine = new(
+        "^minSdkVersion:'(?<value>[^']+)'$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TargetSdkLine = new(
         "^targetSdkVersion:'(?<value>[^']+)'$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -91,11 +94,46 @@ internal sealed class ApkArtifactInspector(
     public async Task<ApkArtifactInspection> InspectAsync(
         string apkPath,
         CancellationToken cancellationToken = default) =>
-        (await InspectManifestAsync(apkPath, cancellationToken).ConfigureAwait(false)).Artifact;
+        (await InspectBadgingAsync(apkPath, cancellationToken).ConfigureAwait(false)).Artifact;
 
     public async Task<ApkArtifactManifestInspection> InspectManifestAsync(
         string apkPath,
         CancellationToken cancellationToken = default)
+    {
+        var inspected = await InspectBadgingAsync(apkPath, cancellationToken).ConfigureAwait(false);
+        var minimumSdkVersion = ParseRequiredSingleSdkValue(
+            inspected.BadgingLines, "minimum SDK", SdkLine, MinimumSdkLine);
+        var targetSdkVersion = ParseOptionalSingleSdkValue(
+            inspected.BadgingLines, TargetSdkLine, "target SDK");
+        if (targetSdkVersion is not null && targetSdkVersion.Value < minimumSdkVersion)
+        {
+            throw new InvalidDataException("APK target SDK cannot be lower than its minimum SDK.");
+        }
+        var launcherActivities = inspected.BadgingLines
+            .Where(line => LaunchableActivityLine.IsMatch(line))
+            .Select(line => Attribute.Matches(line)
+                .Cast<Match>()
+                .ToDictionary(
+                    match => match.Groups["key"].Value,
+                    match => match.Groups["value"].Value,
+                    StringComparer.Ordinal)
+                .GetValueOrDefault("name"))
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Select(static value => value!)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        return new ApkArtifactManifestInspection(
+            inspected.Artifact,
+            new ApkArtifactManifestFacts(
+                minimumSdkVersion,
+                targetSdkVersion,
+                launcherActivities));
+    }
+
+    private async Task<ApkArtifactBadgingInspection> InspectBadgingAsync(
+        string apkPath,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
         var path = Path.GetFullPath(apkPath);
@@ -180,26 +218,6 @@ internal sealed class ApkArtifactInspector(
             throw new InvalidDataException("APK versionCode must be a positive integer.");
         }
         attributes.TryGetValue("split", out var split);
-        var minimumSdkVersion = ParseOptionalSingleSdkValue(badgingLines, SdkLine, "minimum SDK") ?? 1;
-        var targetSdkVersion = ParseOptionalSingleSdkValue(badgingLines, TargetSdkLine, "target SDK");
-        if (targetSdkVersion is not null && targetSdkVersion.Value < minimumSdkVersion)
-        {
-            throw new InvalidDataException("APK target SDK cannot be lower than its minimum SDK.");
-        }
-        var launcherActivities = badgingLines
-            .Where(line => LaunchableActivityLine.IsMatch(line))
-            .Select(line => Attribute.Matches(line)
-                .Cast<Match>()
-                .ToDictionary(
-                    match => match.Groups["key"].Value,
-                    match => match.Groups["value"].Value,
-                    StringComparer.Ordinal)
-                .GetValueOrDefault("name"))
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Select(static value => value!)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
         var artifact = new ApkArtifactInspection(
             path, info.Length, sha256,
             new ApkArtifactIdentity(
@@ -208,13 +226,12 @@ internal sealed class ApkArtifactInspector(
                 attributes.GetValueOrDefault("versionName"),
                 signerDigests[0],
                 split));
-        return new ApkArtifactManifestInspection(
-            artifact,
-            new ApkArtifactManifestFacts(
-                minimumSdkVersion,
-                targetSdkVersion,
-                launcherActivities));
+        return new ApkArtifactBadgingInspection(artifact, badgingLines);
     }
+
+    private sealed record ApkArtifactBadgingInspection(
+        ApkArtifactInspection Artifact,
+        IReadOnlyList<string> BadgingLines);
 
     private static int? ParseOptionalSingleSdkValue(
         IReadOnlyList<string> lines,
@@ -233,6 +250,35 @@ internal sealed class ApkArtifactInspector(
         {
             return null;
         }
+        if (!int.TryParse(
+                matches[0].Groups["value"].Value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var value) || value < 1)
+        {
+            throw new InvalidDataException($"APK {label} must be a positive integer.");
+        }
+        return value;
+    }
+
+    private static int ParseRequiredSingleSdkValue(
+        IReadOnlyList<string> lines,
+        string label,
+        params Regex[] patterns)
+    {
+        var matches = patterns
+            .SelectMany(pattern => lines.Select(line => pattern.Match(line)))
+            .Where(static match => match.Success)
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            throw new InvalidDataException($"APK manifest inspection did not produce a {label} value.");
+        }
+        if (matches.Length > 1)
+        {
+            throw new InvalidDataException($"APK manifest inspection produced multiple {label} values.");
+        }
+
         if (!int.TryParse(
                 matches[0].Groups["value"].Value,
                 NumberStyles.None,
