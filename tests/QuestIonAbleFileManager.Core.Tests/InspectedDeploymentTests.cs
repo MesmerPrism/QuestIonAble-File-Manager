@@ -226,6 +226,116 @@ public sealed class InspectedDeploymentTests
         }
     }
 
+    [Theory]
+    [InlineData("sdkVersion:'29'", 29)]
+    [InlineData("minSdkVersion:'29'", 29)]
+    public async Task InspectManifest_AcceptsOneNumericMinimumSdkBuildToolsSpelling(
+        string minimumSdkLine,
+        int expectedMinimumSdk)
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success(
+                "package: name='com.example.app' versionCode='42'\n" +
+                minimumSdkLine + "\n")
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n"));
+        try
+        {
+            var result = await new ApkArtifactInspector(
+                runner, new AndroidBuildToolPaths("aapt2", "apksigner"))
+                .InspectManifestAsync(apk);
+
+            Assert.Equal(expectedMinimumSdk, result.Manifest.MinimumSdkVersion);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task InspectManifest_AcceptsAapt2MinimumSdkRegressionFixture()
+    {
+        var apk = await CreateApkAsync();
+        var badging = await File.ReadAllTextAsync(Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures",
+            "aapt2-dump-badging-min-sdk-29.txt"));
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success(badging)
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n"));
+        try
+        {
+            var result = await new ApkArtifactInspector(
+                runner, new AndroidBuildToolPaths("aapt2", "apksigner"))
+                .InspectManifestAsync(apk);
+
+            Assert.Equal(29, result.Manifest.MinimumSdkVersion);
+            Assert.Equal(35, result.Manifest.TargetSdkVersion);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("minSdkVersion:'2")]
+    [InlineData("minSdkVersion:'0'")]
+    [InlineData("minSdkVersion:'@integer/min_sdk'")]
+    [InlineData("minSdkVersion:'PreviewCodename'")]
+    [InlineData("minSdkVersion:'29'\nminSdkVersion:'29'")]
+    [InlineData("sdkVersion:'29'\nminSdkVersion:'29'")]
+    [InlineData("sdkVersion:'28'\nminSdkVersion:'29'")]
+    public async Task InspectManifest_RejectsMissingMalformedOrAmbiguousMinimumSdkOutput(
+        string minimumSdkLines)
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? Success(
+                "package: name='com.example.app' versionCode='42'\n" +
+                minimumSdkLines + "\n")
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n"));
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner"))
+                    .InspectManifestAsync(apk));
+
+            Assert.Contains("minimum SDK", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task InspectManifest_RejectsFailedAapt2BeforeApplyingAnyMinimumSdkFallback()
+    {
+        var apk = await CreateApkAsync();
+        var runner = new FakeRunner((file, _) => file == "aapt2"
+            ? new CommandResult("", [], 1, "package: name='com.example.app' versionCode='42'\n", "tool failed\n", TimeSpan.Zero)
+            : Success("Signer #1 certificate SHA-256 digest: " + new string('a', 64) + "\n"));
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new ApkArtifactInspector(
+                    runner, new AndroidBuildToolPaths("aapt2", "apksigner"))
+                    .InspectManifestAsync(apk));
+
+            Assert.DoesNotContain(runner.Calls, call => call.FileName == "apksigner");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
     [Fact]
     public async Task Inspect_AcceptsCallerOwnedReadOnlyArtifact()
     {
@@ -1586,7 +1696,7 @@ public sealed class InspectedDeploymentTests
             {
                 return Success(
                     "package: name='com.example.app' versionCode='42' versionName='1.2.3'\n" +
-                    "sdkVersion:'23'\n" +
+                    "minSdkVersion:'23'\n" +
                     "targetSdkVersion:'35'\n" +
                     "launchable-activity: name='com.example.app.Main' label='' icon=''\n");
             }
