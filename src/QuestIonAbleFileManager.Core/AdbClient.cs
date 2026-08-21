@@ -373,6 +373,14 @@ public sealed partial class AdbClient
             new[] { "shell", $"pm path {AndroidInput.ShellQuote(packageName)}" },
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
+        if (await IsConfirmedSilentPackageAbsenceAsync(
+                serial,
+                packageName,
+                result,
+                cancellationToken).ConfigureAwait(false))
+        {
+            throw new PackageNotInstalledException(serial, packageName);
+        }
         result.EnsureSuccess($"Inspect package {packageName}");
 
         var lines = result.StandardOutput.ReplaceLineEndings("\n")
@@ -396,6 +404,29 @@ public sealed partial class AdbClient
         }
 
         return new QuestPackage(packageName, paths);
+    }
+
+    private async Task<bool> IsConfirmedSilentPackageAbsenceAsync(
+        string serial,
+        string packageName,
+        CommandResult packagePath,
+        CancellationToken cancellationToken)
+    {
+        if (packagePath.ExitCode != 1 ||
+            !string.IsNullOrWhiteSpace(packagePath.StandardOutput) ||
+            !string.IsNullOrWhiteSpace(packagePath.StandardError))
+        {
+            return false;
+        }
+
+        var packageList = await RunForDeviceAsync(
+            serial,
+            new[] { "shell", $"pm list packages {AndroidInput.ShellQuote(packageName)}" },
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        packageList.EnsureSuccess($"Confirm package {packageName} absence");
+        return string.IsNullOrWhiteSpace(packageList.StandardOutput) &&
+            string.IsNullOrWhiteSpace(packageList.StandardError);
     }
 
     public async Task<CommandResult> PullFileAsync(

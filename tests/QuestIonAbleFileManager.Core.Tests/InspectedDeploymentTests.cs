@@ -385,6 +385,135 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Preflight_TreatsConfirmedSilentPmPathAbsenceAsDeployReady()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(
+            apk,
+            installed: false,
+            deviceApiLevel: 32,
+            packagePathResult: SilentFailure());
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .PreflightInspectedApkAsync("QUEST123", apk);
+
+            Assert.Equal(InstalledApkMatch.Absent, result.InstalledMatch);
+            Assert.True(result.ReadyForDeploy);
+            Assert.False(result.ReadyForLaunch);
+            Assert.False(result.ReadyForDiagnose);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm path 'com.example.app'"]));
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("install"));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_PropagatesSilentPmPathFailureWhenAbsenceCannotBeConfirmed()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(
+            apk,
+            installed: false,
+            deviceApiLevel: 32,
+            packagePathResult: SilentFailure(),
+            packageListResult: SilentFailure());
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .PreflightInspectedApkAsync("QUEST123", apk));
+
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]));
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("install"));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_DoesNotConfirmNonSilentPmPathFailureAsAbsence()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(
+            apk,
+            installed: false,
+            deviceApiLevel: 32,
+            packagePathResult: new CommandResult("", [], 1, "", "unexpected package error\n", TimeSpan.Zero));
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .PreflightInspectedApkAsync("QUEST123", apk));
+
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_DoesNotConfirmNonOnePmPathFailureAsAbsence()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(
+            apk,
+            installed: false,
+            deviceApiLevel: 32,
+            packagePathResult: new CommandResult("", [], 2, "", "", TimeSpan.Zero));
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .PreflightInspectedApkAsync("QUEST123", apk));
+
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_DoesNotTreatNonEmptyPackageListAsAbsence()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreatePreflightRunner(
+            apk,
+            installed: false,
+            deviceApiLevel: 32,
+            packagePathResult: SilentFailure(),
+            packageListResult: Success("package:com.example.app\n"));
+        try
+        {
+            await Assert.ThrowsAsync<AdbCommandException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .PreflightInspectedApkAsync("QUEST123", apk));
+
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
     public async Task Preflight_ReportsApiIncompatibilityWithoutDeviceMutation()
     {
         var apk = await CreateApkAsync();
@@ -1447,7 +1576,9 @@ public sealed class InspectedDeploymentTests
     private static FakeRunner CreatePreflightRunner(
         string sourceApk,
         bool installed,
-        int deviceApiLevel)
+        int deviceApiLevel,
+        CommandResult? packagePathResult = null,
+        CommandResult? packageListResult = null)
     {
         return new FakeRunner((file, arguments) =>
         {
@@ -1477,7 +1608,13 @@ public sealed class InspectedDeploymentTests
             if (arguments.SequenceEqual(
                     ["-s", "QUEST123", "shell", "pm path 'com.example.app'"]))
             {
-                return Success(installed ? "package:/data/app/example/base.apk\n" : "");
+                return packagePathResult ??
+                    Success(installed ? "package:/data/app/example/base.apk\n" : "");
+            }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]))
+            {
+                return packageListResult ?? Success("");
             }
             if (arguments.Contains("query-activities"))
             {
@@ -1517,6 +1654,9 @@ public sealed class InspectedDeploymentTests
 
     private static CommandResult Success(string output) =>
         new("", [], 0, output, "", TimeSpan.Zero);
+
+    private static CommandResult SilentFailure() =>
+        new("", [], 1, "", "", TimeSpan.Zero);
 
     private sealed class FakeRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler,
