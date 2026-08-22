@@ -109,11 +109,18 @@ ADB is located in this order:
 ## Build
 
 ```powershell
+pwsh -NoProfile -File ./tools/Build-QfmCli.ps1
 dotnet build QuestIonAbleFileManager.slnx
 dotnet test QuestIonAbleFileManager.slnx
 dotnet run --project src/QuestIonAbleFileManager.App
 pwsh -NoProfile -ExecutionPolicy Bypass -File ./tools/Test-ProviderCapabilityDiscovery.ps1 -ContractRoot <meta-quest-agent-workflow-root>
 ```
+
+`Build-QfmCli.ps1` is the deterministic source-build entrypoint: it reads the
+exact `global.json` pin, uses an exact local SDK or verifies Microsoft's
+portable installer before caching it, and emits a content-addressed CLI build
+receipt. It never chooses a .NET SDK from ambient `PATH`. See [Pinned SDK
+bootstrap](docs/pinned-sdk-bootstrap.md).
 
 ## Install
 

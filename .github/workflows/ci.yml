@@ -50,6 +50,10 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/Test-PublicBoundary.ps1
 
+      - name: Pinned SDK bootstrap contract
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/Test-PinnedSdkBootstrap.ps1
+
       - name: Branding and compatibility contract
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/Test-BrandingContract.ps1
