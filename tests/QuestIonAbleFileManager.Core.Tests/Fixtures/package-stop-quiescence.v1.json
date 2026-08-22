@@ -1,0 +1,93 @@
+{
+  "schema": "questionable.file_manager.package_stop_quiescence_fixture.v1",
+  "package": "com.example.app",
+  "cases": [
+    {
+      "id": "quiescent",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "" },
+      "expected": "quiescent"
+    },
+    {
+      "id": "process-present",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 0, "stdout": "345 345\n", "stderr": "" },
+      "expected": "pending"
+    },
+    {
+      "id": "foreground-target",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.app/.Main t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "" },
+      "expected": "pending"
+    },
+    {
+      "id": "top-resumed-target",
+      "activities": "topResumedActivity=ActivityRecord{1 u0 com.example.app/.Main t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "" },
+      "expected": "pending"
+    },
+    {
+      "id": "target-after-unrelated-component",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main com.example.app/.Second t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "" },
+      "expected": "pending"
+    },
+    {
+      "id": "damaged-target-component",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.app/ t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "" },
+      "expected": "readback-rejected"
+    },
+    {
+      "id": "stderr-only-pidof-failure",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "", "stderr": "pidof damaged" },
+      "expected": "readback-rejected"
+    },
+    {
+      "id": "empty-success-pidof",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 0, "stdout": "", "stderr": "" },
+      "expected": "readback-rejected"
+    },
+    {
+      "id": "malformed-success-pidof",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 0, "stdout": "not-a-pid\n", "stderr": "" },
+      "expected": "readback-rejected"
+    },
+    {
+      "id": "stdout-on-absent-pidof",
+      "activities": "mResumedActivity: ActivityRecord{1 u0 com.example.other/.Main t1}\n",
+      "pidof": { "exitCode": 1, "stdout": "damaged\n", "stderr": "" },
+      "expected": "readback-rejected"
+    }
+  ],
+  "currentUserPackageProofCases": [
+    {
+      "id": "other-user-install-cannot-satisfy-pre-dispatch-proof",
+      "currentUserPackagePaths": [
+        { "exitCode": 1, "stdout": "", "stderr": "" }
+      ],
+      "currentUserPackageLists": [
+        { "exitCode": 0, "stdout": "", "stderr": "" }
+      ],
+      "unscopedOtherUserPackagePath": { "exitCode": 0, "stdout": "package:/data/app/~~other-user/base.apk\n", "stderr": "" },
+      "unscopedOtherUserPackageList": { "exitCode": 0, "stdout": "package:com.example.app\n", "stderr": "" },
+      "expected": "pre-dispatch-absent"
+    },
+    {
+      "id": "other-user-install-cannot-satisfy-post-dispatch-proof",
+      "currentUserPackagePaths": [
+        { "exitCode": 0, "stdout": "package:/data/app/~~current-user/base.apk\n", "stderr": "" },
+        { "exitCode": 1, "stdout": "", "stderr": "" }
+      ],
+      "currentUserPackageLists": [
+        { "exitCode": 0, "stdout": "", "stderr": "" }
+      ],
+      "unscopedOtherUserPackagePath": { "exitCode": 0, "stdout": "package:/data/app/~~other-user/base.apk\n", "stderr": "" },
+      "unscopedOtherUserPackageList": { "exitCode": 0, "stdout": "package:com.example.app\n", "stderr": "" },
+      "expected": "post-dispatch-readback-rejected"
+    }
+  ]
+}

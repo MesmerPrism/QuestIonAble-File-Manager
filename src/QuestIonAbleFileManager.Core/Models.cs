@@ -178,6 +178,30 @@ public sealed record AppRuntimeObservation(
     public bool ProcessAlive => ProcessIds.Count > 0;
 }
 
+/// <summary>
+/// Exact-package readback after a fixed current-user force-stop request. These
+/// are Android process/activity facts only; they do not establish application,
+/// OpenXR, or wearer-visible behavior.
+/// </summary>
+public sealed record PackageStopQuiescence(
+    IReadOnlyList<int> ProcessIds,
+    IReadOnlyList<string> ForegroundComponents,
+    IReadOnlyList<string> TopResumedComponents)
+{
+    public bool IsQuiescent =>
+        ProcessIds.Count == 0 &&
+        ForegroundComponents.Count == 0 &&
+        TopResumedComponents.Count == 0;
+}
+
+public sealed record PackageStopResult(
+    string Serial,
+    string PackageName,
+    bool PackagePresentBeforeDispatch,
+    bool PackagePresentAfterDispatch,
+    CommandResult StopCommand,
+    PackageStopQuiescence Quiescence);
+
 public sealed record InspectedApkDeploymentResult(
     InspectedApkInstallResult Install,
     ResolvedAppLaunchResult Launch,
@@ -319,6 +343,12 @@ public sealed class PackageNotInstalledException(string serial, string packageNa
     public string Serial { get; } = serial;
     public string PackageName { get; } = packageName;
 }
+
+public sealed class PackageStopDispatchException(Exception innerException)
+    : InvalidOperationException("The fixed package-stop dispatch did not complete.", innerException);
+
+public sealed class PackageStopReadbackException(Exception innerException)
+    : InvalidOperationException("Package-stop readback did not complete.", innerException);
 
 public sealed class FleetTransferLimitException : InvalidOperationException
 {

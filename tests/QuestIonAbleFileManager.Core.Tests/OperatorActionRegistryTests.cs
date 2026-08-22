@@ -659,6 +659,10 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
+            "questionable.file_manager.apk_stop_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "questionable.file_manager.launcher_export_proof.v2",
             source,
             StringComparison.Ordinal);
@@ -671,6 +675,57 @@ public sealed class OperatorActionRegistryTests
             route => route.Id == "apk_preflight");
         Assert.Equal("OperatorCommands.PreflightInspectedApp", preflight.CoreOperation);
         Assert.False(preflight.RequiresConfirmation);
+    }
+
+    [Fact]
+    public void ApkStopIsAnAdditiveAgentOnlyRouteWithOneSanitizedNativeEnvelope()
+    {
+        var route = Assert.Single(
+            OperatorActionRegistry.AgentRoutes,
+            route => route.Id == "apk_stop");
+        Assert.Equal("apk stop --serial --package --confirm-package-stop --json", route.CliRoute);
+        Assert.Equal("OperatorCommands.StopPackage", route.CoreOperation);
+        Assert.True(route.RequiresConfirmation);
+        Assert.Contains("--user current", route.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("quiescence", route.ReadbackContract, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not prove", route.ReadbackContract, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(OperatorActionRegistry.Actions, action => action.Id == "apk.stop");
+
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var stopMethod = SourceMethod(
+            source,
+            "private static async Task<int> RunApkStopJsonAsync",
+            "private static int WriteApkStopFailure");
+        Assert.Contains("OperatorCommands.ParsePackageStopCliArguments(arguments)", stopMethod, StringComparison.Ordinal);
+        Assert.Contains("questionable.file_manager.apk_stop_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", stopMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", stopMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", stopMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(stopMethod, "WriteJson\\(").Cast<Match>());
+
+        var failure = SourceMethod(
+            source,
+            "private static int WriteApkStopFailure",
+            "ClassifyApkStopFailure(Exception exception)");
+        Assert.Contains("succeeded = false", failure, StringComparison.Ordinal);
+        Assert.Contains("state_change_possible", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", failure, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failure, "WriteJson\\(").Cast<Match>());
+
+        var classifier = SourceMethod(
+            source,
+            "ClassifyApkStopFailure(Exception exception)",
+            "private static async Task<int> RunWifiAsync");
+        Assert.Contains("pre_stop_package_absent", classifier, StringComparison.Ordinal);
+        Assert.Contains("stop_dispatch_failed", classifier, StringComparison.Ordinal);
+        Assert.Contains("post_stop_readback_failed", classifier, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", classifier, StringComparison.Ordinal);
     }
 
     [Fact]

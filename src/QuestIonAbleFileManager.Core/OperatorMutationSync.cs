@@ -174,6 +174,7 @@ internal static class OperatorMutations
         OperatorCommandKind.InstallApk or
         OperatorCommandKind.DeployInspectedApp or
         OperatorCommandKind.LaunchInspectedApp or
+        OperatorCommandKind.StopPackage or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
         OperatorCommandKind.DisconnectWifiAdb or
@@ -197,6 +198,8 @@ internal static class OperatorMutations
         OperatorCommandKind.DeployInspectedApp =>
             $"inspected APK installed, resolved launcher started, and runtime observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
+        OperatorCommandKind.StopPackage =>
+            $"exact package {command.PackageName} quiescent for the current Android user on {command.Serial}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
         OperatorCommandKind.EnableWifiAdb => $"Wi-Fi ADB enabled on port {command.WifiPort}",
         OperatorCommandKind.DisconnectWifiAdb => "Wi-Fi ADB endpoint disconnected from this PC",
@@ -241,6 +244,7 @@ internal static class OperatorMutations
             OperatorCommandKind.InstallApk => ObserveInspectedInstall(command, result),
             OperatorCommandKind.DeployInspectedApp => ObserveInspectedDeployment(command, result),
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
+            OperatorCommandKind.StopPackage => ObservePackageStop(result),
             OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
                     "Android Package Manager completed the install and the installed-package inventory was read back."),
@@ -262,6 +266,21 @@ internal static class OperatorMutations
             : OperatorMutationObservation.Pending(
                 $"Resolved component {launch.Component} was not observed resumed.",
                 "Launch was sent, but exact resumed-activity readback is still pending.");
+    }
+
+    private static OperatorMutationObservation ObservePackageStop(OperatorExecutionResult result)
+    {
+        var stop = result.PackageStopResult ??
+            throw new InvalidOperationException("Exact-package stop returned no structured readback.");
+        var quiescence = stop.Quiescence;
+        return quiescence.IsQuiescent
+            ? OperatorMutationObservation.Confirmed(
+                $"{stop.PackageName} remains installed and has no observed process, foreground component, or top-resumed component.")
+            : OperatorMutationObservation.Pending(
+                $"{stop.PackageName}: process-count={quiescence.ProcessIds.Count}; " +
+                $"foreground-count={quiescence.ForegroundComponents.Count}; " +
+                $"top-resumed-count={quiescence.TopResumedComponents.Count}.",
+                "The force-stop was sent, but exact-package quiescence has not appeared in Android readback.");
     }
 
     private static OperatorMutationObservation ObserveInspectedDeployment(

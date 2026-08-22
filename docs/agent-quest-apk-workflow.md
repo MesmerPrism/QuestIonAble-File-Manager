@@ -26,6 +26,13 @@ and the choice of build output.
    checks against the same artifact. When a durable evidence pack is useful,
    use `apk diagnose --serial <serial> --file <apk> --output <new-folder>
    --json` instead.
+8. When one exact installed package must be made quiescent after a QFM-managed
+   run, use `apk stop --serial <serial> --package <package>
+   --confirm-package-stop --json`. It is a fixed current-user request, not a
+   raw shell adapter: QFM checks the package before and after dispatch and
+   confirms only the absence of that package's PIDs, foreground components,
+   and top-resumed components. Quiescence does not prove app readiness, OpenXR
+   readiness, a semantic app effect, or wearer visibility.
 
 For a release candidate, add the source repository's release gates before
 step 4. The QFM device boundary stays the same; validation depth is selected by

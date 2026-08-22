@@ -38,7 +38,8 @@ public enum OperatorCommandKind
     FleetInstall,
     PreflightInspectedApp,
     DeployInspectedApp,
-    DiagnoseInspectedApp
+    DiagnoseInspectedApp,
+    StopPackage
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -601,6 +602,46 @@ public static class OperatorCommands
             outputPath: fullOutputDirectory);
     }
 
+    public static OperatorCommand StopPackage(
+        string serial,
+        string packageName,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(operatorConfirmed, "Exact-package current-user stop");
+        serial = AndroidInput.RequireSerial(serial);
+        packageName = AndroidInput.RequirePackageName(packageName);
+        return new OperatorCommand(
+            OperatorCommandKind.StopPackage,
+            [
+                "apk", "stop", "--serial", serial, "--package", packageName,
+                "--confirm-package-stop"
+            ],
+            serial: serial,
+            packageName: packageName,
+            operatorConfirmed: true);
+    }
+
+    public static OperatorCommand ParsePackageStopCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 8 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "stop", "--serial", arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--package", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--confirm-package-stop", "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk stop --serial <quest-serial> --package <package> --confirm-package-stop --json.",
+                nameof(arguments));
+        }
+
+        return StopPackage(arguments[3], arguments[5], operatorConfirmed: true);
+    }
+
     public static OperatorCommand InspectApk(string apkPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
@@ -1141,7 +1182,8 @@ public sealed record OperatorExecutionResult(
     OperatorMutationReceipt? MutationReceipt = null,
     ApkPreflightResult? ApkPreflightResult = null,
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
-    ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null);
+    ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
+    PackageStopResult? PackageStopResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1380,6 +1422,19 @@ public sealed class OperatorCommandExecutor
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         Require(command.OutputPath, nameof(command.OutputPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.StopPackage:
+                if (!command.OperatorConfirmed)
+                {
+                    throw new InvalidOperationException(
+                        "Exact-package current-user stop requires explicit operator confirmation.");
+                }
+                return new OperatorExecutionResult(
+                    command,
+                    PackageStopResult: await client.StopPackageAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.PackageName, nameof(command.PackageName)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.LaunchInspectedApp:
@@ -1643,6 +1698,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.PreflightInspectedApp => "Checking APK and selected Quest readiness…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
+        OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",
