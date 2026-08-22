@@ -58,6 +58,78 @@ public static class AdbOutputParser
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
+    /// <summary>
+    /// Parses the process-wide <c>adb forward --list</c> projection and
+    /// returns only records whose serial exactly matches the requested value.
+    /// A damaged foreign record rejects the complete shared snapshot instead
+    /// of allowing a partial inventory to be reported as authoritative.
+    /// </summary>
+    public static IReadOnlyList<AdbForwardMapping> ParseForwardInventory(
+        string output,
+        string requestedSerial)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        requestedSerial = AndroidInput.RequireSerial(requestedSerial);
+
+        var mappings = new List<AdbForwardMapping>();
+        var mappingBySerialAndLocalEndpoint = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in Lines(output))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            var values = line.Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (values.Length != 3)
+            {
+                throw new InvalidDataException(
+                    "ADB forward inventory contained a record without exactly serial, local, and remote fields.");
+            }
+
+            string recordSerial;
+            try
+            {
+                recordSerial = AndroidInput.RequireSerial(values[0]);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidDataException(
+                    "ADB forward inventory contained an invalid record serial.", exception);
+            }
+
+            if (!IsForwardEndpoint(values[1]) || !IsForwardEndpoint(values[2]))
+            {
+                throw new InvalidDataException(
+                    "ADB forward inventory contained an invalid forwarding endpoint.");
+            }
+
+            // ADB's complete shared inventory may contain records for other
+            // serials, but any duplicate or conflicting serial/local mapping
+            // damages the snapshot before an exact-serial projection is safe.
+            var mappingKey = recordSerial + "\0" + values[1];
+            if (!mappingBySerialAndLocalEndpoint.TryAdd(mappingKey, values[2]))
+            {
+                throw new InvalidDataException(
+                    "ADB forward inventory repeated or conflicted on a serial/local forwarding record.");
+            }
+
+            if (!string.Equals(recordSerial, requestedSerial, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            mappings.Add(new AdbForwardMapping(values[1], values[2]));
+        }
+
+        return mappings
+            .OrderBy(static mapping => mapping.LocalEndpoint, StringComparer.Ordinal)
+            .ThenBy(static mapping => mapping.RemoteEndpoint, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public static string ParseWifiIpv4Address(string output)
     {
         foreach (var line in Lines(output))
@@ -129,6 +201,21 @@ public static class AdbOutputParser
 
     private static IEnumerable<string> Lines(string output) =>
         output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
+
+    private static bool IsForwardEndpoint(string value)
+    {
+        var separator = value.IndexOf(':');
+        if (separator <= 0 || separator == value.Length - 1)
+        {
+            return false;
+        }
+
+        var kind = value[..separator];
+        return kind.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) || character is '_' or '-') &&
+            value[(separator + 1)..].All(static character =>
+                character is >= '!' and <= '~');
+    }
 
     private static string? ValueAfterColon(string? value)
     {

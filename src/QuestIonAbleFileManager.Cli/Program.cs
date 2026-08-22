@@ -12,6 +12,7 @@ internal static class CliApplication
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v1";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
+    private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v3";
     private const string LauncherExportProofContract =
@@ -67,6 +68,7 @@ internal static class CliApplication
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
+                        adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
@@ -93,6 +95,12 @@ internal static class CliApplication
                 string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
             {
                 return await RunApkStopJsonAsync(arguments);
+            }
+            if (command == "adb" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "forwards", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunAdbForwardInventoryJsonAsync(arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -1864,6 +1872,78 @@ internal static class CliApplication
             1);
     }
 
+    private static async Task<int> RunAdbForwardInventoryJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseAdbForwardInventoryCliArguments(arguments);
+            var client = AdbClient.CreateDefault();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var result = execution.AdbForwardInventoryResult ??
+                throw new InvalidOperationException("ADB forward inventory returned no result.");
+            WriteJson(new
+            {
+                schema = AdbForwardInventoryResultSchema,
+                succeeded = true,
+                result,
+                failure = (object?)null
+            });
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            return WriteAdbForwardInventoryFailure(exception);
+        }
+    }
+
+    private static int WriteAdbForwardInventoryFailure(Exception exception)
+    {
+        var failure = ClassifyAdbForwardInventoryFailure(exception);
+        WriteJson(new
+        {
+            schema = AdbForwardInventoryResultSchema,
+            succeeded = false,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = false
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, int ExitCode)
+        ClassifyAdbForwardInventoryFailure(Exception exception)
+    {
+        if (exception is ArgumentException)
+        {
+            return (
+                "input_rejected",
+                "The typed ADB forward inventory input was rejected before observation.",
+                2);
+        }
+        if (exception is OperationCanceledException)
+        {
+            return (
+                "forward_inventory_cancelled",
+                "The shared ADB forward inventory did not complete.",
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "forward_inventory_output_rejected",
+                "The shared ADB forward inventory output was malformed or incomplete.",
+                1);
+        }
+        return (
+            "forward_inventory_failed",
+            "The shared ADB forward inventory did not complete.",
+            1);
+    }
+
     private static async Task<int> RunWifiAsync(
         OperatorCommandExecutor executor,
         string[] arguments)
@@ -2394,6 +2474,7 @@ internal static class CliApplication
 
             Usage:
               questionable-file-manager devices [--json] [--adb <path>]
+              questionable-file-manager adb forwards --serial <serial> --json
               questionable-file-manager files list --serial <serial> [--path /sdcard] [--json]
               questionable-file-manager files pull --serial <serial> --remote <path> --output <path>
               questionable-file-manager files push --serial <serial> --file <path> --remote <path>

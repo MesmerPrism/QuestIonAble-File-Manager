@@ -55,7 +55,13 @@ public static class OperatorActionRegistry
                 "apk stop --serial --package --confirm-package-stop --json",
                 "OperatorCommands.StopPackage",
                 true,
-                "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility")
+                "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility"),
+            new(
+                "adb_forward_inventory",
+                "adb forwards --serial --json",
+                "OperatorCommands.InventoryAdbForwards",
+                false,
+                "shared ADB forward --list observation filtered to the requested exact serial; it does not select a serial-scoped transport or prove device health, ownership, reachability, application state, or any forwarding effect")
         ]);
 
     public static IReadOnlyList<OperatorActionDescriptor> Actions { get; } =

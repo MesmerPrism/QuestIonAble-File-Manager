@@ -202,6 +202,28 @@ public sealed record PackageStopResult(
     CommandResult StopCommand,
     PackageStopQuiescence Quiescence);
 
+/// <summary>
+/// One forwarding record observed in a shared ADB daemon inventory. It is not
+/// a transport, device-health, ownership, reachability, or application-state
+/// assertion.
+/// </summary>
+public sealed record AdbForwardMapping(
+    string LocalEndpoint,
+    string RemoteEndpoint);
+
+/// <summary>
+/// A filtered projection of the process-wide <c>adb forward --list</c>
+/// snapshot. The fixed observation is intentionally not serial-scoped at the
+/// ADB command layer; <see cref="RequestedSerial"/> filters its output only.
+/// </summary>
+public sealed record AdbForwardInventoryResult(
+    string RequestedSerial,
+    IReadOnlyList<AdbForwardMapping> Forwards)
+{
+    public string ObservationScope { get; init; } =
+        "shared-adb-forward-list filtered to requested exact serial";
+}
+
 public sealed record InspectedApkDeploymentResult(
     InspectedApkInstallResult Install,
     ResolvedAppLaunchResult Launch,

@@ -663,6 +663,10 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
+            "questionable.file_manager.adb_forward_inventory_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "questionable.file_manager.launcher_export_proof.v2",
             source,
             StringComparison.Ordinal);
@@ -725,6 +729,61 @@ public sealed class OperatorActionRegistryTests
         Assert.Contains("pre_stop_package_absent", classifier, StringComparison.Ordinal);
         Assert.Contains("stop_dispatch_failed", classifier, StringComparison.Ordinal);
         Assert.Contains("post_stop_readback_failed", classifier, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", classifier, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdbForwardInventoryIsAnAdditiveAgentOnlySharedObservation()
+    {
+        var route = Assert.Single(
+            OperatorActionRegistry.AgentRoutes,
+            route => route.Id == "adb_forward_inventory");
+        Assert.Equal("adb forwards --serial --json", route.CliRoute);
+        Assert.Equal("OperatorCommands.InventoryAdbForwards", route.CoreOperation);
+        Assert.False(route.RequiresConfirmation);
+        Assert.Contains("shared ADB forward --list", route.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("does not", route.ReadbackContract, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(OperatorActionRegistry.Actions, action => action.Id == "adb.forwards");
+
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var inventoryMethod = SourceMethod(
+            source,
+            "private static async Task<int> RunAdbForwardInventoryJsonAsync",
+            "private static int WriteAdbForwardInventoryFailure");
+        Assert.Contains(
+            "OperatorCommands.ParseAdbForwardInventoryCliArguments(arguments)",
+            inventoryMethod,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "questionable.file_manager.adb_forward_inventory_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains("succeeded = true", inventoryMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", inventoryMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", inventoryMethod, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(inventoryMethod, "WriteJson\\(").Cast<Match>());
+
+        var failure = SourceMethod(
+            source,
+            "private static int WriteAdbForwardInventoryFailure",
+            "ClassifyAdbForwardInventoryFailure(Exception exception)");
+        Assert.Contains("succeeded = false", failure, StringComparison.Ordinal);
+        Assert.Contains("state_change_possible = false", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", failure, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(failure, "WriteJson\\(").Cast<Match>());
+
+        var classifier = SourceMethod(
+            source,
+            "ClassifyAdbForwardInventoryFailure(Exception exception)",
+            "private static async Task<int> RunWifiAsync");
+        Assert.Contains("forward_inventory_output_rejected", classifier, StringComparison.Ordinal);
+        Assert.Contains("forward_inventory_cancelled", classifier, StringComparison.Ordinal);
         Assert.DoesNotContain("exception.Message", classifier, StringComparison.Ordinal);
     }
 

@@ -1,0 +1,69 @@
+{
+  "schema": "questionable.file_manager.adb_forward_inventory_fixture.v1",
+  "requestedSerial": "QUEST123",
+  "cases": [
+    {
+      "id": "empty-shared-inventory",
+      "stdout": "",
+      "expected": "accepted",
+      "forwards": []
+    },
+    {
+      "id": "exact-serial-filter-with-foreign-rows",
+      "stdout": "OTHER456 tcp:6100 tcp:7100\nQUEST123 tcp:7101 localabstract:sample\nQUEST123 localfilesystem:/data/local/tmp/socket tcp:7102\n",
+      "expected": "accepted",
+      "forwards": [
+        { "localEndpoint": "localfilesystem:/data/local/tmp/socket", "remoteEndpoint": "tcp:7102" },
+        { "localEndpoint": "tcp:7101", "remoteEndpoint": "localabstract:sample" }
+      ]
+    },
+    {
+      "id": "exact-match-does-not-admit-serial-prefix",
+      "stdout": "QUEST1234 tcp:6100 tcp:7100\n",
+      "expected": "accepted",
+      "forwards": []
+    },
+    {
+      "id": "duplicate-exact-record",
+      "stdout": "QUEST123 tcp:6100 tcp:7100\nQUEST123 tcp:6100 tcp:7100\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "conflicting-exact-local-endpoint",
+      "stdout": "QUEST123 tcp:6100 tcp:7100\nQUEST123 tcp:6100 tcp:7101\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "duplicate-foreign-record-rejects-complete-snapshot",
+      "stdout": "OTHER456 tcp:6100 tcp:7100\nOTHER456 tcp:6100 tcp:7100\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "conflicting-foreign-local-endpoint-rejects-complete-snapshot",
+      "stdout": "OTHER456 tcp:6100 tcp:7100\nOTHER456 tcp:6100 tcp:7101\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "missing-remote-field",
+      "stdout": "QUEST123 tcp:6100\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "malformed-foreign-record-rejects-partial-snapshot",
+      "stdout": "QUEST123 tcp:6100 tcp:7100\nOTHER456 malformed-endpoint tcp:7101\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "endpoint-with-control-character",
+      "stdout": "QUEST123 tcp:6100 localabstract:bad\u0001value\n",
+      "expected": "rejected",
+      "forwards": []
+    }
+  ]
+}
