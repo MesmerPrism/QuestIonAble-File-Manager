@@ -62,5 +62,32 @@
       "pidof": { "exitCode": 1, "stdout": "damaged\n", "stderr": "" },
       "expected": "readback-rejected"
     }
+  ],
+  "currentUserPackageProofCases": [
+    {
+      "id": "other-user-install-cannot-satisfy-pre-dispatch-proof",
+      "currentUserPackagePaths": [
+        { "exitCode": 1, "stdout": "", "stderr": "" }
+      ],
+      "currentUserPackageLists": [
+        { "exitCode": 0, "stdout": "", "stderr": "" }
+      ],
+      "unscopedOtherUserPackagePath": { "exitCode": 0, "stdout": "package:/data/app/~~other-user/base.apk\n", "stderr": "" },
+      "unscopedOtherUserPackageList": { "exitCode": 0, "stdout": "package:com.example.app\n", "stderr": "" },
+      "expected": "pre-dispatch-absent"
+    },
+    {
+      "id": "other-user-install-cannot-satisfy-post-dispatch-proof",
+      "currentUserPackagePaths": [
+        { "exitCode": 0, "stdout": "package:/data/app/~~current-user/base.apk\n", "stderr": "" },
+        { "exitCode": 1, "stdout": "", "stderr": "" }
+      ],
+      "currentUserPackageLists": [
+        { "exitCode": 0, "stdout": "", "stderr": "" }
+      ],
+      "unscopedOtherUserPackagePath": { "exitCode": 0, "stdout": "package:/data/app/~~other-user/base.apk\n", "stderr": "" },
+      "unscopedOtherUserPackageList": { "exitCode": 0, "stdout": "package:com.example.app\n", "stderr": "" },
+      "expected": "post-dispatch-readback-rejected"
+    }
   ]
 }

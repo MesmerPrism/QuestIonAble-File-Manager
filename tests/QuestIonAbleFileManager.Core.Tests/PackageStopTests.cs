@@ -58,9 +58,9 @@ public sealed class PackageStopTests
         Assert.True(result.Quiescence.IsQuiescent);
         Assert.Equal(
             [
-                ["-s", Serial, "shell", "pm path 'com.example.app'"],
+                ["-s", Serial, "shell", "pm path --user current 'com.example.app'"],
                 ["-s", Serial, "shell", "am", "force-stop", "--user", "current", Package],
-                ["-s", Serial, "shell", "pm path 'com.example.app'"],
+                ["-s", Serial, "shell", "pm path --user current 'com.example.app'"],
                 ["-s", Serial, "shell", "dumpsys", "activity", "activities"],
                 ["-s", Serial, "shell", "pidof", Package]
             ],
@@ -116,9 +116,9 @@ public sealed class PackageStopTests
     public async Task StopPackage_RejectsAbsentPackageBeforeDispatch()
     {
         var runner = new RecordingCommandRunner((_, arguments) =>
-            arguments.SequenceEqual(["-s", Serial, "shell", "pm path 'com.example.app'"])
+            arguments.SequenceEqual(["-s", Serial, "shell", "pm path --user current 'com.example.app'"])
                 ? Result(1)
-                : arguments.SequenceEqual(["-s", Serial, "shell", "pm list packages 'com.example.app'"])
+                : arguments.SequenceEqual(["-s", Serial, "shell", "pm list packages --user current 'com.example.app'"])
                     ? Success()
                     : Failure(arguments));
         var client = new AdbClient("adb-test", runner);
@@ -131,13 +131,84 @@ public sealed class PackageStopTests
     public async Task StopPackage_RejectsDamagedPreStopPackageOutputBeforeDispatch()
     {
         var runner = new RecordingCommandRunner((_, arguments) =>
-            arguments.SequenceEqual(["-s", Serial, "shell", "pm path 'com.example.app'"])
+            arguments.SequenceEqual(["-s", Serial, "shell", "pm path --user current 'com.example.app'"])
                 ? Result(0, "package:/data/app/example/base.apk\n", "unexpected warning")
                 : Failure(arguments));
         var client = new AdbClient("adb-test", runner);
 
         await Assert.ThrowsAsync<InvalidDataException>(() => client.StopPackageAsync(Serial, Package));
         Assert.DoesNotContain(runner.Calls, static call => call.Arguments.Contains("force-stop"));
+    }
+
+    [Fact]
+    public async Task StopPackage_RejectsOtherUserPackageEvidenceForBothProofs()
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures",
+            "package-stop-quiescence.v1.json")));
+
+        foreach (var testCase in fixture.RootElement
+                     .GetProperty("currentUserPackageProofCases")
+                     .EnumerateArray())
+        {
+            var id = testCase.GetProperty("id").GetString()!;
+            var currentUserPaths = testCase.GetProperty("currentUserPackagePaths")
+                .EnumerateArray().Select(Result).ToArray();
+            var currentUserLists = testCase.GetProperty("currentUserPackageLists")
+                .EnumerateArray().Select(Result).ToArray();
+            var otherUserPath = Result(testCase.GetProperty("unscopedOtherUserPackagePath"));
+            var otherUserList = Result(testCase.GetProperty("unscopedOtherUserPackageList"));
+            var pathCalls = 0;
+            var listCalls = 0;
+            var runner = new RecordingCommandRunner((_, arguments) =>
+            {
+                if (arguments.SequenceEqual(
+                        ["-s", Serial, "shell", "pm path --user current 'com.example.app'"]))
+                {
+                    return currentUserPaths[pathCalls++];
+                }
+                if (arguments.SequenceEqual(
+                        ["-s", Serial, "shell", "pm list packages --user current 'com.example.app'"]))
+                {
+                    return currentUserLists[listCalls++];
+                }
+                // These emulate an install in a different Android user. The
+                // route must never consult them as proof for --user current.
+                if (arguments.SequenceEqual(["-s", Serial, "shell", "pm path 'com.example.app'"]))
+                    return otherUserPath;
+                if (arguments.SequenceEqual(["-s", Serial, "shell", "pm list packages 'com.example.app'"]))
+                    return otherUserList;
+                if (arguments.Contains("force-stop")) return Success();
+                if (arguments.SequenceEqual(["-s", Serial, "shell", "dumpsys", "activity", "activities"])) return Success();
+                if (arguments.SequenceEqual(["-s", Serial, "shell", "pidof", Package])) return Result(1);
+                return Failure(arguments);
+            });
+            var client = new AdbClient("adb-test", runner);
+
+            if (testCase.GetProperty("expected").GetString() == "pre-dispatch-absent")
+            {
+                await Assert.ThrowsAsync<PackageNotInstalledException>(
+                    () => client.StopPackageAsync(Serial, Package));
+                Assert.DoesNotContain(runner.Calls, static call => call.Arguments.Contains("force-stop"));
+            }
+            else
+            {
+                await Assert.ThrowsAsync<PackageStopReadbackException>(
+                    () => client.StopPackageAsync(Serial, Package));
+                Assert.Contains(runner.Calls, static call => call.Arguments.Contains("force-stop"));
+            }
+
+            Assert.False(
+                runner.Calls.Any(static call =>
+                    call.Arguments.SequenceEqual(
+                        ["-s", Serial, "shell", "pm path 'com.example.app'"]) ||
+                    call.Arguments.SequenceEqual(
+                        ["-s", Serial, "shell", "pm list packages 'com.example.app'"])),
+                $"{id} consulted unscoped package evidence.");
+        }
     }
 
     [Fact]
@@ -151,13 +222,13 @@ public sealed class PackageStopTests
         var postAbsent = new AdbClient("adb-test", new RecordingCommandRunner((_, arguments) =>
         {
             if (arguments.Contains("force-stop")) return Success();
-            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm path 'com.example.app'"]))
+            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm path --user current 'com.example.app'"]))
             {
                 return ++postPackagePathCalls == 1
                     ? Success("package:/data/app/example/base.apk\n")
                     : Result(1);
             }
-            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm list packages 'com.example.app'"])) return Success();
+            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm list packages --user current 'com.example.app'"])) return Success();
             return Failure(arguments);
         }));
         await Assert.ThrowsAsync<PackageStopReadbackException>(() => postAbsent.StopPackageAsync(Serial, Package));
@@ -202,7 +273,7 @@ public sealed class PackageStopTests
     private static RecordingCommandRunner StopRunner(string activities, CommandResult pidof) =>
         new((_, arguments) =>
         {
-            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm path 'com.example.app'"]))
+            if (arguments.SequenceEqual(["-s", Serial, "shell", "pm path --user current 'com.example.app'"]))
                 return Success("package:/data/app/example/base.apk\n");
             if (arguments.SequenceEqual(
                     ["-s", Serial, "shell", "am", "force-stop", "--user", "current", Package]))
@@ -218,6 +289,12 @@ public sealed class PackageStopTests
 
     private static CommandResult Result(int exitCode, string output = "", string stderr = "") =>
         new("adb-test", [], exitCode, output, stderr, TimeSpan.Zero);
+
+    private static CommandResult Result(JsonElement result) =>
+        Result(
+            result.GetProperty("exitCode").GetInt32(),
+            result.GetProperty("stdout").GetString()!,
+            result.GetProperty("stderr").GetString()!);
 
     private static CommandResult Failure(IReadOnlyList<string> arguments) =>
         Result(1, stderr: "unexpected command: " + string.Join(" ", arguments));

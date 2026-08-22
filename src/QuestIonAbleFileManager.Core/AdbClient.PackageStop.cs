@@ -134,10 +134,10 @@ public sealed partial class AdbClient
     {
         var result = await RunForDeviceAsync(
             serial,
-            ["shell", $"pm path {AndroidInput.ShellQuote(packageName)}"],
+            ["shell", $"pm path --user current {AndroidInput.ShellQuote(packageName)}"],
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
-        if (await IsConfirmedSilentPackageAbsenceAsync(
+        if (await IsConfirmedSilentCurrentUserPackageAbsenceForStopAsync(
                 serial,
                 packageName,
                 result,
@@ -159,6 +159,32 @@ public sealed partial class AdbClient
             throw new InvalidDataException(
                 "Package-stop package check did not return a valid installed APK path.");
         }
+    }
+
+    // This route dispatches only to the current Android user. Keep its
+    // absence proof on that same user; the legacy unscoped deployment check
+    // intentionally retains its established cross-user compatibility.
+    private async Task<bool> IsConfirmedSilentCurrentUserPackageAbsenceForStopAsync(
+        string serial,
+        string packageName,
+        CommandResult packagePath,
+        CancellationToken cancellationToken)
+    {
+        if (packagePath.ExitCode != 1 ||
+            !string.IsNullOrWhiteSpace(packagePath.StandardOutput) ||
+            !string.IsNullOrWhiteSpace(packagePath.StandardError))
+        {
+            return false;
+        }
+
+        var packageList = await RunForDeviceAsync(
+            serial,
+            ["shell", $"pm list packages --user current {AndroidInput.ShellQuote(packageName)}"],
+            InspectionTimeout,
+            cancellationToken).ConfigureAwait(false);
+        packageList.EnsureSuccess($"Confirm current-user package {packageName} absence");
+        return string.IsNullOrWhiteSpace(packageList.StandardOutput) &&
+            string.IsNullOrWhiteSpace(packageList.StandardError);
     }
 
     private static IReadOnlyList<int> ReadPackageProcessIds(CommandResult result)
