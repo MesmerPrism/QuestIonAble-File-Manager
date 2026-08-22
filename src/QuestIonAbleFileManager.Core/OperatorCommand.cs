@@ -39,7 +39,8 @@ public enum OperatorCommandKind
     PreflightInspectedApp,
     DeployInspectedApp,
     DiagnoseInspectedApp,
-    StopPackage
+    StopPackage,
+    InventoryAdbForwards
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -642,6 +643,36 @@ public static class OperatorCommands
         return StopPackage(arguments[3], arguments[5], operatorConfirmed: true);
     }
 
+    public static OperatorCommand InventoryAdbForwards(string serial)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        return new OperatorCommand(
+            OperatorCommandKind.InventoryAdbForwards,
+            ["adb", "forwards", "--serial", serial],
+            serial: serial);
+    }
+
+    public static OperatorCommand ParseAdbForwardInventoryCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 5 ||
+            !arguments.SequenceEqual(
+                [
+                    "adb", "forwards", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly adb forwards --serial <quest-serial> --json.",
+                nameof(arguments));
+        }
+
+        return InventoryAdbForwards(arguments[3]);
+    }
+
     public static OperatorCommand InspectApk(string apkPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
@@ -1183,7 +1214,8 @@ public sealed record OperatorExecutionResult(
     ApkPreflightResult? ApkPreflightResult = null,
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
-    PackageStopResult? PackageStopResult = null);
+    PackageStopResult? PackageStopResult = null,
+    AdbForwardInventoryResult? AdbForwardInventoryResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1435,6 +1467,13 @@ public sealed class OperatorCommandExecutor
                     PackageStopResult: await client.StopPackageAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.InventoryAdbForwards:
+                return new OperatorExecutionResult(
+                    command,
+                    AdbForwardInventoryResult: await client.GetForwardInventoryAsync(
+                        Require(command.Serial, nameof(command.Serial)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.LaunchInspectedApp:
@@ -1699,6 +1738,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
+        OperatorCommandKind.InventoryAdbForwards => "Reading the shared ADB forwarding inventory…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",

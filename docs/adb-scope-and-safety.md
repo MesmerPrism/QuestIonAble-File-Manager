@@ -50,8 +50,15 @@ partial per-file install loop.
 
 ## Multiple Devices
 
-Every operation is sent with `adb -s <quest-serial>`. The app does not rely on
-ADB's implicit single-device selection.
+Every device-targeting operation is sent with `adb -s <quest-serial>`. The app
+does not rely on ADB's implicit single-device selection.
+
+The agent-only `adb forwards --serial <quest-serial> --json` route is the
+deliberate inventory exception. It invokes the shared daemon command `adb
+forward --list` without `-s`, validates the complete snapshot, then returns
+only rows with an exact matching serial. It cannot create, remove, replace, or
+test a forwarding record. A matching row is not a device-health, ownership,
+reachability, application, or headset-effect claim.
 
 Parallel installation is not an exception to serial scope. The app validates
 at least two distinct Wi-Fi ADB serials, bounds concurrent work, and launches

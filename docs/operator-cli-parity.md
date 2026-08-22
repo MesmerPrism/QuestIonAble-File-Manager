@@ -124,6 +124,16 @@ user, component, activity, shell fragment, or raw-ADB input. These agent routes
 are advertised separately by `operator-actions --json`; none is a WPF parity
 claim or a general ADB or shell command.
 
+`adb forwards --serial <quest-serial> --json` is a distinct agent-only,
+read-only route with the
+`questionable.file_manager.adb_forward_inventory_result.v1` envelope. It runs
+only the shared daemon inventory command `adb forward --list`, validates the
+complete result, and returns only records whose serial exactly equals the
+requested serial. It deliberately does not use a serial-scoped transport and
+cannot create, remove, replace, or test a forward. A returned record does not
+prove device health, ownership, reachability, application state, or any
+headset effect.
+
 The WPF **Disconnect** button clears its long-lived process-memory UI session.
 It is intentionally marked interactive-only: every CLI direct command is one
 atomic session and performs the equivalent cleanup before printing its single
@@ -133,6 +143,7 @@ Example shapes use placeholders rather than live device or local identities:
 
 ```powershell
 & '.\questionable-file-manager.exe' files list --serial <quest-serial> --path /sdcard --adb <path-to-adb>
+& '.\questionable-file-manager.exe' adb forwards --serial <quest-serial> --json
 & '.\questionable-file-manager.exe' files pull --serial <quest-serial> --remote /sdcard/Download/example.txt --output <local-path> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' files push --serial <quest-serial> --file <local-path> --remote /sdcard/Download/example.txt --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk list --serial <quest-serial> --adb <path-to-adb>
