@@ -11,6 +11,7 @@ internal static class CliApplication
     private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v1";
+    private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v3";
     private const string LauncherExportProofContract =
@@ -65,6 +66,7 @@ internal static class CliApplication
                         apkPreflightResult = ApkPreflightResultSchema,
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
+                        apkStopResult = ApkStopResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
@@ -85,6 +87,12 @@ internal static class CliApplication
             if (command == "connectivity-profile")
             {
                 return await RunConnectivityProfileAsync(arguments);
+            }
+            if (command == "apk" &&
+                arguments.Length > 1 &&
+                string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunApkStopJsonAsync(arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -1745,6 +1753,116 @@ internal static class CliApplication
         string.Equals(result.Arguments[2], "shell", StringComparison.Ordinal) &&
         string.Equals(result.Arguments[3], "am", StringComparison.Ordinal) &&
         string.Equals(result.Arguments[4], "start", StringComparison.Ordinal);
+
+    private static async Task<int> RunApkStopJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParsePackageStopCliArguments(arguments);
+            var client = AdbClient.CreateDefault();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var result = execution.PackageStopResult ??
+                throw new InvalidOperationException("Exact-package stop returned no result.");
+            WriteJson(new
+            {
+                schema = ApkStopResultSchema,
+                succeeded = true,
+                mutation = execution.MutationReceipt,
+                result,
+                failure = (object?)null
+            });
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            return WriteApkStopFailure(exception);
+        }
+    }
+
+    private static int WriteApkStopFailure(Exception exception)
+    {
+        var failure = ClassifyApkStopFailure(exception);
+        WriteJson(new
+        {
+            schema = ApkStopResultSchema,
+            succeeded = false,
+            mutation = (object?)null,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = failure.StateChangePossible
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, bool StateChangePossible, int ExitCode)
+        ClassifyApkStopFailure(Exception exception)
+    {
+        if (exception is ArgumentException)
+        {
+            return (
+                "input_rejected",
+                "The exact-package stop input was rejected before device dispatch.",
+                false,
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "pre_stop_package_absent",
+                "The exact package was not installed on the selected serial before dispatch.",
+                false,
+                1);
+        }
+        if (exception is PackageStopDispatchException)
+        {
+            return (
+                "stop_dispatch_failed",
+                "The fixed current-user package-stop command may have changed Android state but did not complete.",
+                true,
+                1);
+        }
+        if (exception is PackageStopReadbackException)
+        {
+            return (
+                "post_stop_readback_failed",
+                "The fixed package-stop command was sent, but exact-package readback did not complete.",
+                true,
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_stop_proof_rejected",
+                "Exact-package pre-stop readback was malformed or incomplete.",
+                false,
+                1);
+        }
+        if (exception is AdbCommandException)
+        {
+            return (
+                "pre_stop_read_failed",
+                "A fixed serial-scoped pre-stop package readback command failed.",
+                false,
+                1);
+        }
+        if (exception is OperationCanceledException)
+        {
+            return (
+                "pre_stop_cancelled",
+                "The exact-package stop was cancelled before dispatch began.",
+                false,
+                1);
+        }
+        return (
+            "stop_failed",
+            "The exact-package stop did not complete before dispatch was proven.",
+            false,
+            1);
+    }
 
     private static async Task<int> RunWifiAsync(
         OperatorCommandExecutor executor,

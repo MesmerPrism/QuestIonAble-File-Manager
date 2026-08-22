@@ -49,7 +49,13 @@ public static class OperatorActionRegistry
                 "apk diagnose --serial --file --output --json",
                 "OperatorCommands.DiagnoseInspectedApp",
                 false,
-                "exact installed base-APK bytes plus a fixed bounded private diagnostic bundle")
+                "exact installed base-APK bytes plus a fixed bounded private diagnostic bundle"),
+            new(
+                "apk_stop",
+                "apk stop --serial --package --confirm-package-stop --json",
+                "OperatorCommands.StopPackage",
+                true,
+                "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility")
         ]);
 
     public static IReadOnlyList<OperatorActionDescriptor> Actions { get; } =

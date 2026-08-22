@@ -112,9 +112,17 @@ The CLI-only `apk preflight` route returns the fixed read-only artifact/device
 readiness contract described in `apk-preflight.md`. `apk deploy` composes
 inspected install, resolved launch, and final runtime observation for agents and
 automation. `apk diagnose` writes the fixed read-only evidence bundle described
-in `apk-diagnostic-bundle.md`. These agent routes are advertised separately by
-`operator-actions --json`; none is a WPF parity claim or a general ADB or shell
-command.
+in `apk-diagnostic-bundle.md`. `apk stop --serial <quest-serial> --package
+<package> --confirm-package-stop --json` is a separate agent-only mutating
+route. It always dispatches only `am force-stop --user current <package>` after
+an exact pre-stop package check, then performs a second package check and reads
+only exact-package PIDs, foreground components, and top-resumed components.
+Its `questionable.file_manager.apk_stop_result.v1` envelope reports a confirmed
+or pending quiescence receipt; it never claims application readiness, OpenXR
+readiness, app effect, or wearer visibility. It accepts no caller-selected
+user, component, activity, shell fragment, or raw-ADB input. These agent routes
+are advertised separately by `operator-actions --json`; none is a WPF parity
+claim or a general ADB or shell command.
 
 The WPF **Disconnect** button clears its long-lived process-memory UI session.
 It is intentionally marked interactive-only: every CLI direct command is one
