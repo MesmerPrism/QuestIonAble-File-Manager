@@ -30,6 +30,24 @@
       "forwards": []
     },
     {
+      "id": "conflicting-exact-local-endpoint",
+      "stdout": "QUEST123 tcp:6100 tcp:7100\nQUEST123 tcp:6100 tcp:7101\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "duplicate-foreign-record-rejects-complete-snapshot",
+      "stdout": "OTHER456 tcp:6100 tcp:7100\nOTHER456 tcp:6100 tcp:7100\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
+      "id": "conflicting-foreign-local-endpoint-rejects-complete-snapshot",
+      "stdout": "OTHER456 tcp:6100 tcp:7100\nOTHER456 tcp:6100 tcp:7101\n",
+      "expected": "rejected",
+      "forwards": []
+    },
+    {
       "id": "missing-remote-field",
       "stdout": "QUEST123 tcp:6100\n",
       "expected": "rejected",

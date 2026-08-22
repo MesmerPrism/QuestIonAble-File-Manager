@@ -72,7 +72,7 @@ public static class AdbOutputParser
         requestedSerial = AndroidInput.RequireSerial(requestedSerial);
 
         var mappings = new List<AdbForwardMapping>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var mappingBySerialAndLocalEndpoint = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var line in Lines(output))
         {
             if (string.IsNullOrWhiteSpace(line))
@@ -106,17 +106,21 @@ public static class AdbOutputParser
                     "ADB forward inventory contained an invalid forwarding endpoint.");
             }
 
+            // ADB's complete shared inventory may contain records for other
+            // serials, but any duplicate or conflicting serial/local mapping
+            // damages the snapshot before an exact-serial projection is safe.
+            var mappingKey = recordSerial + "\0" + values[1];
+            if (!mappingBySerialAndLocalEndpoint.TryAdd(mappingKey, values[2]))
+            {
+                throw new InvalidDataException(
+                    "ADB forward inventory repeated or conflicted on a serial/local forwarding record.");
+            }
+
             if (!string.Equals(recordSerial, requestedSerial, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            var key = values[1] + "\0" + values[2];
-            if (!seen.Add(key))
-            {
-                throw new InvalidDataException(
-                    "ADB forward inventory repeated an exact-serial forwarding record.");
-            }
             mappings.Add(new AdbForwardMapping(values[1], values[2]));
         }
 
