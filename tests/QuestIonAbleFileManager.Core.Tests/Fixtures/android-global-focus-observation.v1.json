@@ -1,53 +1,206 @@
 {
   "schema": "questionable.file_manager.android_global_focus_observation_fixture.v1",
-  "purpose": "Synthetic fixed dumpsys window windows excerpts for host-only parser coverage.",
+  "runtime_contract": "questionable.file_manager.app_runtime_observation.v5",
+  "global_focus_contract": "questionable.file_manager.android_global_focus_observation.v1",
+  "source_command": ["shell", "dumpsys", "window", "windows"],
   "cases": [
     {
-      "id": "exact_target_focus",
-      "window_dump": "mCurrentFocus=Window{123 u0 com.example.app/.Main}\nmFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n",
+      "id": "exact-target-focus",
+      "activities": "mResumedActivity: ActivityRecord{1 com.example.app/.Main}\ntopResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=Window{a1 u0 com.example.app/.Main}\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "observed", "component": "com.example.app/com.example.app.Main" },
-        "focused_app": { "state": "observed", "component": "com.example.app/com.example.app.Main" }
+        "current_focus_state": "Reported",
+        "current_focus_record_count": 1,
+        "current_focus_components": ["com.example.app/com.example.app.Main"],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
       }
     },
     {
-      "id": "focus_placeholder_takeover",
-      "window_dump": "mCurrentFocus=Window{123 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{456 u0 com.oculus.vrshell/.FocusPlaceholderActivity t7}\n",
+      "id": "focus-placeholder-takeover",
+      "activities": "topResumedActivity=ActivityRecord{3 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=Window{a1 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{b2 u0 com.oculus.vrshell/.FocusPlaceholderActivity t24}\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "observed", "component": "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity" },
-        "focused_app": { "state": "observed", "component": "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity" }
+        "current_focus_state": "Reported",
+        "current_focus_record_count": 1,
+        "current_focus_components": ["com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity"],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity"],
+        "process_quality": "PidofReportedProcesses"
       }
     },
     {
-      "id": "multiple_and_stale_current_focus",
-      "window_dump": "mCurrentFocus=Window{123 u0 com.example.app/.Main}\nmCurrentFocus=Window{124 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n",
+      "id": "multiple-current-focus-records",
+      "activities": "mResumedActivity: ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=Window{a1 u0 com.example.app/.Main}\nmCurrentFocus=Window{a2 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "multiple", "component": null },
-        "focused_app": { "state": "observed", "component": "com.example.app/com.example.app.Main" }
+        "current_focus_state": "Reported",
+        "current_focus_record_count": 2,
+        "current_focus_components": ["com.example.app/com.example.app.Main", "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity"],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
       }
     },
     {
-      "id": "malformed_focus_records",
-      "window_dump": "mCurrentFocus=Window{123 u0 missing-component}\nmFocusedApp=ActivityRecord{456 u0 also-missing t7}\n",
+      "id": "missing-focus-records",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "WINDOW MANAGER WINDOWS (dumpsys window windows)\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "malformed", "component": null },
-        "focused_app": { "state": "malformed", "component": null }
+        "current_focus_state": "Absent",
+        "current_focus_record_count": 0,
+        "current_focus_components": [],
+        "focused_app_state": "Absent",
+        "focused_app_record_count": 0,
+        "focused_app_components": [],
+        "process_quality": "PidofReportedProcesses"
       }
     },
     {
-      "id": "malformed_record_envelopes_with_components",
-      "window_dump": "mCurrentFocus=not-a-window-record com.example.app/.Main\nmFocusedApp=not-an-activity-record com.example.app/.Main\n",
+      "id": "empty-stale-looking-focus-records",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=null\nmFocusedApp=null\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "malformed", "component": null },
-        "focused_app": { "state": "malformed", "component": null }
+        "current_focus_state": "Empty",
+        "current_focus_record_count": 1,
+        "current_focus_components": [],
+        "focused_app_state": "Empty",
+        "focused_app_record_count": 1,
+        "focused_app_components": [],
+        "process_quality": "PidofReportedProcesses"
       }
     },
     {
-      "id": "absent_focus_records",
-      "window_dump": "Window manager state unavailable in this excerpt\n",
+      "id": "multiple-empty-current-focus-records",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=null\nmCurrentFocus=null\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "456\n",
       "expected": {
-        "current_focus": { "state": "absent", "component": null },
-        "focused_app": { "state": "absent", "component": null }
+        "current_focus_state": "Empty",
+        "current_focus_record_count": 2,
+        "current_focus_components": [],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "component-without-focus-envelope",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=com.example.app/.Main\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Malformed",
+        "current_focus_record_count": 1,
+        "current_focus_components": [],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "valid-and-malformed-current-focus-records",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=Window{a1 u0 com.example.app/.Main}\nmCurrentFocus=Window{a2 no-component}\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Malformed",
+        "current_focus_record_count": 2,
+        "current_focus_components": ["com.example.app/com.example.app.Main"],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "malformed-focus-records",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "mCurrentFocus=Window{a1 no-component}\nmFocusedApp=not-a-component\n",
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Malformed",
+        "current_focus_record_count": 1,
+        "current_focus_components": [],
+        "focused_app_state": "Malformed",
+        "focused_app_record_count": 1,
+        "focused_app_components": [],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "oversized-focus-record",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "",
+      "oversized_current_focus_value_characters": 2049,
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Malformed",
+        "current_focus_record_count": 1,
+        "current_focus_components": [],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "source-line-bound-exceeded",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "",
+      "unrelated_line_count": 4097,
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Unknown",
+        "current_focus_record_count": 0,
+        "current_focus_components": [],
+        "focused_app_state": "Unknown",
+        "focused_app_record_count": 0,
+        "focused_app_components": [],
+        "process_quality": "PidofReportedProcesses"
+      }
+    },
+    {
+      "id": "target-focus-pidof-absent",
+      "activities": "mResumedActivity: ActivityRecord{1 com.oculus.vrshell/.FocusPlaceholderActivity}\ntopResumedActivity=ActivityRecord{2 com.oculus.vrshell/.FocusPlaceholderActivity}\n",
+      "window": "mCurrentFocus=Window{a1 u0 com.example.app/.Main private-token=not-public}\nmFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n",
+      "pidof": "",
+      "expected": {
+        "current_focus_state": "Reported",
+        "current_focus_record_count": 1,
+        "current_focus_components": ["com.example.app/com.example.app.Main"],
+        "focused_app_state": "Reported",
+        "focused_app_record_count": 1,
+        "focused_app_components": ["com.example.app/com.example.app.Main"],
+        "process_quality": "PidofReportedNoProcesses"
+      },
+      "must_not_publish_raw_fragment": "private-token=not-public"
+    },
+    {
+      "id": "global-focus-command-failure",
+      "activities": "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+      "window": "",
+      "window_exit_code": 1,
+      "pidof": "456\n",
+      "expected": {
+        "current_focus_state": "Unavailable",
+        "current_focus_record_count": 0,
+        "current_focus_components": [],
+        "focused_app_state": "Unavailable",
+        "focused_app_record_count": 0,
+        "focused_app_components": [],
+        "process_quality": "PidofReportedProcesses"
       }
     }
   ]

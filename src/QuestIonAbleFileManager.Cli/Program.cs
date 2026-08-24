@@ -10,15 +10,15 @@ internal static class CliApplication
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
     private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
-    private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v2";
+    private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v3";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
-        "questionable.file_manager.inspected_deployment.v4";
+        "questionable.file_manager.inspected_deployment.v5";
     private const string LauncherExportProofContract =
         "questionable.file_manager.launcher_export_proof.v2";
     private const string RuntimeObservationContract =
-        "questionable.file_manager.app_runtime_observation.v4";
+        "questionable.file_manager.app_runtime_observation.v5";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -1228,6 +1228,8 @@ internal static class CliApplication
                         Console.WriteLine($"Top resumed: {observation.IsTopResumed}");
                         Console.WriteLine($"Foreground components: {string.Join(", ", observation.ForegroundComponents)}");
                         Console.WriteLine($"Top-resumed components: {string.Join(", ", observation.TopResumedComponents)}");
+                        Console.WriteLine($"Global mCurrentFocus: {observation.GlobalFocus.CurrentFocus.State} ({observation.GlobalFocus.CurrentFocus.RecordCount} records)");
+                        Console.WriteLine($"Global mFocusedApp: {observation.GlobalFocus.FocusedApp.State} ({observation.GlobalFocus.FocusedApp.RecordCount} records)");
                         Console.WriteLine($"Blocking system components: {string.Join(", ", observation.BlockingSystemComponents)}");
                         Console.WriteLine($"Processes: {string.Join(", ", observation.ProcessIds)}");
                     }
@@ -1501,6 +1503,11 @@ internal static class CliApplication
         capturedAt = result.CapturedAt,
         fileCount = result.Files.Count,
         failedCaptureCount = result.FailedCaptureCount,
+        runtime = new
+        {
+            observationContract = result.Runtime.ObservationContract,
+            globalFocus = CreateSanitizedGlobalFocus(result.Runtime.GlobalFocus)
+        },
         captures = result.Files.Select(file => new
         {
             captureKind = file.CaptureKind,
@@ -1517,8 +1524,30 @@ internal static class CliApplication
             applicationReadinessAuthority = false,
             openXrReadiness = "unknown",
             openXrReadinessAuthority = false,
-            wearerVisibility = "unknown"
+            wearerVisibility = "unknown",
+            panelPausedState = "unknown",
+            focusedOrSubmittedFrameStability = "unknown",
+            appOwnedHandoffMarkers = "unknown"
         }
+    };
+
+    private static object CreateSanitizedGlobalFocus(AndroidGlobalFocusObservation focus) => new
+    {
+        observationContract = focus.ObservationContract,
+        currentFocus = CreateSanitizedGlobalFocusFact(focus.CurrentFocus),
+        focusedApp = CreateSanitizedGlobalFocusFact(focus.FocusedApp)
+    };
+
+    private static object CreateSanitizedGlobalFocusFact(AndroidGlobalFocusRecord fact) => new
+    {
+        state = fact.State,
+        recordCount = fact.RecordCount,
+        components = fact.Components,
+        emptyRecordCount = fact.EmptyRecordCount,
+        malformedRecordCount = fact.MalformedRecordCount,
+        recordsTruncated = fact.RecordsTruncated,
+        observationSource = fact.ObservationSource,
+        sourceExitCode = fact.SourceExitCode
     };
 
     private static (string Code, string Message, int ExitCode)
@@ -1602,6 +1631,8 @@ internal static class CliApplication
                     $"Runtime: process-alive={result.Runtime.ProcessAlive.ToString().ToLowerInvariant()}, " +
                     $"foreground={result.Runtime.IsForeground.ToString().ToLowerInvariant()}, " +
                     $"top-resumed={result.Runtime.IsTopResumed.ToString().ToLowerInvariant()}, " +
+                    $"global-current-focus={result.Runtime.GlobalFocus.CurrentFocus.State.ToString().ToLowerInvariant()}, " +
+                    $"global-focused-app={result.Runtime.GlobalFocus.FocusedApp.State.ToString().ToLowerInvariant()}, " +
                     $"blocking-system-components={result.Runtime.BlockingSystemComponents.Count}.");
                 WriteMutationReceipt(execution.MutationReceipt);
             }

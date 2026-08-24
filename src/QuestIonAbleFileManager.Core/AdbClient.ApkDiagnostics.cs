@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
@@ -16,7 +17,8 @@ public sealed partial class AdbClient
     private static readonly JsonSerializerOptions DiagnosticJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
     public async Task<ApkDiagnosticBundleResult> CaptureInspectedApkDiagnosticsAsync(
@@ -95,8 +97,8 @@ public sealed partial class AdbClient
             {
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "runtime", "runtime.json", runtime, cancellationToken,
-                    observationSource: "fixed package/activity/window/pid observation",
-                    commandSemantic: "fixed serial-scoped runtime observation; it has no application or OpenXR readiness authority").ConfigureAwait(false),
+                    observationSource: "fixed package/activity/global-focus/pid observation",
+                    commandSemantic: "fixed serial-scoped runtime and WindowManager focus observation; it has no application or OpenXR readiness authority").ConfigureAwait(false),
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "device", "device.json",
                     new
@@ -144,8 +146,8 @@ public sealed partial class AdbClient
             var normalizedArtifact = artifact with { Path = reportedPath };
             var manifest = new
             {
-                schema = "questionable.file_manager.apk_diagnostic_manifest.v2",
-                diagnosticContract = "questionable.file_manager.apk_diagnostic_bundle.v2",
+                schema = "questionable.file_manager.apk_diagnostic_manifest.v3",
+                diagnosticContract = "questionable.file_manager.apk_diagnostic_bundle.v3",
                 capturedAt,
                 artifact = normalizedArtifact,
                 installed = installedAfterCapture,
@@ -159,11 +161,12 @@ public sealed partial class AdbClient
                     runtime.ActivityObservationSource,
                     runtime.ProcessObservationSource,
                     runtime.ProcessObservationQuality,
-                    runtime.CurrentFocus,
-                    runtime.FocusedApp,
                     runtime.ForegroundComponents,
                     runtime.TopResumedComponents,
                     runtime.BlockingSystemComponents,
+                    runtime.CurrentFocus,
+                    runtime.FocusedApp,
+                    runtime.GlobalFocus,
                     runtime.ApplicationReadiness,
                     runtime.ApplicationReadinessAuthority,
                     runtime.OpenXrReadiness,
@@ -190,7 +193,10 @@ public sealed partial class AdbClient
                     applicationReadinessAuthority = false,
                     openXrReadiness = "unknown",
                     openXrReadinessAuthority = false,
-                    wearerVisibility = "unknown"
+                    wearerVisibility = "unknown",
+                    panelPausedState = "unknown",
+                    focusedOrSubmittedFrameStability = "unknown",
+                    appOwnedHandoffMarkers = "unknown"
                 }
             };
             files.Add(await WriteDiagnosticJsonAsync(

@@ -322,8 +322,8 @@ internal static class OperatorMutations
             $"Runtime facts remain separate: pidof-quality={boundary.ProcessObservationQuality}, " +
             $"foreground={boundary.IsForeground.ToString().ToLowerInvariant()}, " +
             $"top-resumed={boundary.IsTopResumed.ToString().ToLowerInvariant()}, " +
-            $"current-focus={boundary.CurrentFocus.State}, " +
-            $"focused-app={boundary.FocusedApp.State}, " +
+            $"current-focus={deployment.Runtime.GlobalFocus.CurrentFocus.State}, " +
+            $"focused-app={deployment.Runtime.GlobalFocus.FocusedApp.State}, " +
             $"blocking-system-components={boundary.BlockingSystemComponents.Count}.");
     }
 

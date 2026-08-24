@@ -64,8 +64,14 @@ or claim app-owned semantics.
 ## Diagnostic boundary
 
 The fixed `apk observe` result reports installed byte identity, processes,
-foreground components, top-resumed components, and known blocking Quest system
-components. `apk diagnose` first proves those same installed bytes, then writes
+foreground components, top-resumed components, known blocking Quest system
+components, and separately parsed global Android `mCurrentFocus` and
+`mFocusedApp` facts from one fixed WindowManager readback. QFM first applies a
+fixed byte limit, then each focus field retains a bounded list of parsed
+components plus its reported/absent/empty/malformed/unknown/unavailable source
+state; it never exposes the raw dump. A
+FocusPlaceholderActivity record is an observed system component, not a universal
+failure verdict. `apk diagnose` first proves those same installed bytes, then writes
 an atomic no-overwrite bundle containing that runtime result, fixed package and
 memory snapshots, four fixed build properties, and a fixed current-user UID
 log window derived from the inspected package. It may add at most 400 recent
@@ -73,7 +79,12 @@ lines for each of at most eight package-derived PIDs as corroboration; empty
 or unusable `pidof` output is not an admission gate. Each captured text file is
 bounded to 256 KiB.
 It does not capture screenshots, bugreports, arbitrary tags, or unbounded logs.
-Project-specific interpretation, app-owned readiness markers, profile-property
-control, hotload fencing, and OpenXR refresh/effective-readback remain in the
-source repository's tracked instructions; this document is not authority to run
-arbitrary `adb shell` or unconstrained `logcat` commands.
+A separately attended, privacy-reviewed screenshot witness contract would be
+required before any future screenshot feature. QFM reports Android focus
+observations only. The application owns panel-paused state, advancing focused
+and submitted frames, the >=750 ms stability window, app-owned handoff markers,
+OpenXR readiness, and all interpretation. Project-specific interpretation,
+app-owned readiness markers, profile-property control, hotload fencing, and
+OpenXR refresh/effective-readback remain in the source repository's tracked
+instructions; this document is not authority to run arbitrary `adb shell` or
+unconstrained `logcat` commands.
