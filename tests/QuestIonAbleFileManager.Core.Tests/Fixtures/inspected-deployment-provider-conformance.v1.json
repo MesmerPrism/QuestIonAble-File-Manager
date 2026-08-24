@@ -2,10 +2,10 @@
   "schema": "questionable.file_manager.inspected_deployment_provider_conformance.v1",
   "purpose": "Public host-only synthetic corpus for consumers of the File Manager inspected-deployment provider.",
   "native_schema_ids": [
-    "questionable.file_manager.inspected_deployment.v3",
+    "questionable.file_manager.inspected_deployment.v4",
     "questionable.file_manager.apk_launch_result.v1",
     "questionable.file_manager.launcher_export_proof.v2",
-    "questionable.file_manager.app_runtime_observation.v2"
+    "questionable.file_manager.app_runtime_observation.v3"
   ],
   "native_launch_envelope_invariant": {
     "schema": "questionable.file_manager.apk_launch_result.v1",
@@ -22,8 +22,8 @@
       "failure": "non-null"
     }
   },
-  "runtime_observation_v2": {
-    "schema": "questionable.file_manager.app_runtime_observation.v2",
+  "runtime_observation_v3": {
+    "schema": "questionable.file_manager.app_runtime_observation.v3",
     "proves": [
       "android_installed_identity",
       "android_foreground",
@@ -34,7 +34,9 @@
       "openxr_readiness",
       "app_effect",
       "wearer_visibility"
-    ]
+    ],
+    "process_observation_source": "pidof",
+    "empty_pidof_meaning": "not-readiness-failure"
   },
   "consumer_terminal_contract": {
     "owner": "consumer",

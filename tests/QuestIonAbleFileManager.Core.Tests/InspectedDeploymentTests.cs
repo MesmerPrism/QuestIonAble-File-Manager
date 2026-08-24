@@ -665,7 +665,7 @@ public sealed class InspectedDeploymentTests
             var deployment = Assert.IsType<InspectedApkDeploymentResult>(
                 execution.InspectedApkDeploymentResult);
 
-            Assert.Equal("questionable.file_manager.apk_deployment.v1", deployment.DeploymentContract);
+            Assert.Equal("questionable.file_manager.apk_deployment.v2", deployment.DeploymentContract);
             Assert.Equal(Path.GetFullPath(apk), deployment.Install.Artifact.Path);
             Assert.Equal(Path.GetFullPath(apk), deployment.Launch.Artifact.Path);
             Assert.Equal(Path.GetFullPath(apk), deployment.Runtime.Artifact.Path);
@@ -676,7 +676,13 @@ public sealed class InspectedDeploymentTests
             Assert.True(deployment.Runtime.IsForeground);
             Assert.True(deployment.Runtime.IsTopResumed);
             Assert.Equal(OperatorMutationStage.Confirmed, execution.MutationReceipt!.Stage);
-            Assert.Contains("process-alive=true", execution.MutationReceipt.ObservedState);
+            Assert.Contains("QFM-owned effect confirmed", execution.MutationReceipt.ObservedState,
+                StringComparison.Ordinal);
+            Assert.True(deployment.ClaimBoundary.QfmOwnedInstallLaunchEffectConfirmed);
+            Assert.Equal("unknown", deployment.ClaimBoundary.ApplicationReadiness);
+            Assert.False(deployment.ClaimBoundary.ApplicationReadinessAuthority);
+            Assert.Equal("unknown", deployment.ClaimBoundary.OpenXrReadiness);
+            Assert.False(deployment.ClaimBoundary.OpenXrReadinessAuthority);
 
             var install = Assert.Single(runner.Calls, call =>
                 call.Arguments.Count >= 4 && call.Arguments[2] == "install");
@@ -693,6 +699,103 @@ public sealed class InspectedDeploymentTests
                 call.Arguments.Count >= 6 &&
                 call.Arguments[3] == "am" &&
                 call.Arguments[4] == "start");
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Deploy_ConfirmsOnlyInstallLaunchEffectWhenPidofIsEmptyButComponentIsResumed()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities: "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
+            pidofOutput: "");
+        try
+        {
+            var execution = await new OperatorCommandExecutor(
+                new AdbClient("adb", runner, new("aapt2", "apksigner")))
+                .ExecuteAsync(OperatorCommands.DeployInspectedApp("QUEST123", apk));
+            var deployment = Assert.IsType<InspectedApkDeploymentResult>(execution.InspectedApkDeploymentResult);
+
+            Assert.Equal(OperatorMutationStage.Confirmed, execution.MutationReceipt!.Stage);
+            Assert.True(deployment.ClaimBoundary.ExactInstalledBytesConfirmed);
+            Assert.True(deployment.ClaimBoundary.ResolvedComponentObserved);
+            Assert.True(deployment.ClaimBoundary.QfmOwnedInstallLaunchEffectConfirmed);
+            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses,
+                deployment.ClaimBoundary.ProcessObservationQuality);
+            Assert.Equal("unknown", deployment.ClaimBoundary.ApplicationReadiness);
+            Assert.Equal("unknown", deployment.ClaimBoundary.OpenXrReadiness);
+            Assert.Contains("QFM-owned effect confirmed", execution.MutationReceipt.ObservedState,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Deploy_PreservesBlockingAndContradictoryRuntimeFactsWithoutReadinessClaim()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities:
+                "mResumedActivity: ActivityRecord{1 com.oculus.systemux/.guardian.GuardianDialogActivity}\n" +
+                "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n" +
+                "topResumedActivity=ActivityRecord{3 com.oculus.systemux/.sensor.SensorLockActivity}\n",
+            pidofOutput: "456\n");
+        try
+        {
+            var execution = await new OperatorCommandExecutor(
+                new AdbClient("adb", runner, new("aapt2", "apksigner")))
+                .ExecuteAsync(OperatorCommands.DeployInspectedApp("QUEST123", apk));
+            var deployment = Assert.IsType<InspectedApkDeploymentResult>(execution.InspectedApkDeploymentResult);
+            var boundary = deployment.ClaimBoundary;
+
+            Assert.Equal(OperatorMutationStage.Confirmed, execution.MutationReceipt!.Stage);
+            Assert.True(boundary.ExactInstalledBytesConfirmed);
+            Assert.True(boundary.ResolvedComponentObserved);
+            Assert.True(boundary.QfmOwnedInstallLaunchEffectConfirmed);
+            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedProcesses,
+                boundary.ProcessObservationQuality);
+            Assert.False(boundary.IsForeground);
+            Assert.True(boundary.IsTopResumed);
+            Assert.Equal(2, boundary.BlockingSystemComponents.Count);
+            Assert.Equal("unknown", boundary.ApplicationReadiness);
+            Assert.False(boundary.ApplicationReadinessAuthority);
+            Assert.Equal("unknown", boundary.OpenXrReadiness);
+            Assert.False(boundary.OpenXrReadinessAuthority);
+            Assert.Contains("blocking-system-components=2", execution.MutationReceipt.ObservedState,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Deploy_LeavesInstallLaunchReceiptPendingWhenResolvedComponentIsAbsent()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(apk, activities: "");
+        try
+        {
+            var execution = await new OperatorCommandExecutor(
+                new AdbClient("adb", runner, new("aapt2", "apksigner")))
+                .ExecuteAsync(OperatorCommands.DeployInspectedApp("QUEST123", apk));
+            var deployment = Assert.IsType<InspectedApkDeploymentResult>(execution.InspectedApkDeploymentResult);
+
+            Assert.Equal(OperatorMutationStage.Pending, execution.MutationReceipt!.Stage);
+            Assert.True(deployment.ClaimBoundary.ExactInstalledBytesConfirmed);
+            Assert.False(deployment.ClaimBoundary.ResolvedComponentObserved);
+            Assert.False(deployment.ClaimBoundary.QfmOwnedInstallLaunchEffectConfirmed);
+            Assert.Equal("unknown", deployment.ClaimBoundary.ApplicationReadiness);
         }
         finally
         {
@@ -743,12 +846,12 @@ public sealed class InspectedDeploymentTests
                 apk,
                 output);
 
-            Assert.Equal("questionable.file_manager.apk_diagnostic_bundle.v1", result.DiagnosticContract);
+            Assert.Equal("questionable.file_manager.apk_diagnostic_bundle.v2", result.DiagnosticContract);
             Assert.Equal(Path.GetFullPath(output), result.OutputDirectory);
             Assert.Equal(Path.GetFullPath(apk), result.Artifact.Path);
             Assert.Equal(result.Artifact.Sha256, result.Installed.BaseApkSha256);
             Assert.Equal(0, result.FailedCaptureCount);
-            Assert.Equal(7, result.Files.Count);
+            Assert.Equal(8, result.Files.Count);
             Assert.All(result.Files, file =>
             {
                 Assert.True(File.Exists(Path.Combine(output, file.RelativePath)));
@@ -757,7 +860,7 @@ public sealed class InspectedDeploymentTests
             using var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(
                 Path.Combine(output, "diagnostic-manifest.json")));
             Assert.Equal(
-                "questionable.file_manager.apk_diagnostic_manifest.v1",
+                "questionable.file_manager.apk_diagnostic_manifest.v2",
                 manifest.RootElement.GetProperty("schema").GetString());
             Assert.Equal(
                 "com.example.app",
@@ -767,14 +870,22 @@ public sealed class InspectedDeploymentTests
                     .GetString());
             Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
                 ["-s", "QUEST123", "shell", "dumpsys", "meminfo", "com.example.app"]));
-            Assert.Equal(2, runner.Calls.Count(call =>
-                call.Arguments.Count == 8 &&
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "pm", "list", "packages", "--user", "current", "-U", "com.example.app"]));
+            Assert.Equal(3, runner.Calls.Count(call =>
+                call.Arguments.Count == 10 &&
                 call.Arguments[2] == "shell" &&
                 call.Arguments[3] == "logcat" &&
                 call.Arguments[4] == "-d" &&
-                call.Arguments[5] == "-t" &&
-                call.Arguments[6] == "400" &&
-                call.Arguments[7].StartsWith("--pid=", StringComparison.Ordinal)));
+                call.Arguments[5] == "-v" &&
+                call.Arguments[6] == "threadtime" &&
+                call.Arguments[7] == "-t" &&
+                call.Arguments[8] == "400" &&
+                (call.Arguments[9] == "--uid=10234" ||
+                 call.Arguments[9].StartsWith("--pid=", StringComparison.Ordinal))));
+            var uidCapture = Assert.Single(result.Files, file => file.CaptureKind == "logcat_uid");
+            Assert.Equal("current-user package UID", uidCapture.ObservationSource);
+            Assert.False(uidCapture.Truncated);
             Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("install"));
             Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("am"));
 
@@ -823,6 +934,286 @@ public sealed class InspectedDeploymentTests
         finally
         {
             File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_CapturesUidEvidenceWhenPidofReturnsNoProcesses()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-empty-pid-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities: "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
+            pidofOutput: "");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output);
+
+            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses,
+                result.Runtime.ProcessObservationQuality);
+            Assert.Contains(result.Files, file => file.CaptureKind == "logcat_uid");
+            Assert.DoesNotContain(result.Files, file => file.CaptureKind == "logcat_pid");
+            Assert.Equal("unknown", result.Runtime.ApplicationReadiness);
+            Assert.False(result.Runtime.ApplicationReadinessAuthority);
+            Assert.Equal("unknown", result.Runtime.OpenXrReadiness);
+            Assert.False(result.Runtime.OpenXrReadinessAuthority);
+            Assert.Contains(runner.Calls, call => call.Arguments.Contains("--uid=10234"));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_PublishesCompleteEmptyUidEvidenceWhenNoProcessOrLogsExist()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-no-log-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            uidLogcatResult: Success(""));
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output);
+
+            Assert.Equal(0, result.FailedCaptureCount);
+            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses,
+                result.Runtime.ProcessObservationQuality);
+            var uidCapture = Assert.Single(result.Files, file => file.CaptureKind == "logcat_uid");
+            var content = await File.ReadAllTextAsync(Path.Combine(output, uidCapture.RelativePath));
+            Assert.Contains("[stdout]\n\n[stderr]", content, StringComparison.Ordinal);
+            Assert.Equal("unknown", result.Runtime.ApplicationReadiness);
+            Assert.Equal("unknown", result.Runtime.OpenXrReadiness);
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_RejectsMalformedCurrentUserUidBeforeLogcatOrOutputPublication()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-malformed-uid-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            packageUidResult: Success("package:com.other.app uid:10234\n"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("logcat"));
+            Assert.False(Directory.Exists(output));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_BoundsUidLogOutputAtTheFixedPrivateByteLimit()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-truncate-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            uidLogcatResult: new CommandResult(
+                "", [], 0, new string('x', 300_000), "fixed stderr witness\n", TimeSpan.Zero));
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output);
+
+            var uidCapture = Assert.Single(result.Files, file => file.CaptureKind == "logcat_uid");
+            Assert.True(uidCapture.Truncated);
+            Assert.True(uidCapture.SizeBytes <= 256 * 1024);
+            Assert.Equal(64, uidCapture.Sha256.Length);
+            var content = await File.ReadAllTextAsync(Path.Combine(output, uidCapture.RelativePath));
+            Assert.Contains("[diagnostic capture truncated at fixed byte limit]", content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_PublishesPartialBundleForNonzeroUidLogcatWithoutReadinessInference()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-partial-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            uidLogcatResult: new CommandResult("", [], 1, "", "logcat unavailable\n", TimeSpan.Zero));
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output);
+
+            Assert.Equal(1, result.FailedCaptureCount);
+            Assert.True(Directory.Exists(output));
+            var uidCapture = Assert.Single(result.Files, file => file.CaptureKind == "logcat_uid");
+            Assert.Equal(1, uidCapture.CommandExitCode);
+            var content = await File.ReadAllTextAsync(Path.Combine(output, uidCapture.RelativePath));
+            Assert.Contains("[stderr]\nlogcat unavailable", content, StringComparison.Ordinal);
+            Assert.Equal("unknown", result.Runtime.ApplicationReadiness);
+            Assert.Equal("unknown", result.Runtime.OpenXrReadiness);
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_DoesNotPublishOutputWhenFixedCaptureTimesOut()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-timeout-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            commandFailure: (_, arguments) => arguments.Contains("logcat")
+                ? new TimeoutException("synthetic fixed logcat timeout")
+                : null);
+        try
+        {
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.False(Directory.Exists(output));
+            Assert.Empty(Directory.EnumerateDirectories(parent));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_DoesNotPublishOutputWhenFixedCaptureIsCancelled()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-cancel-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            commandFailure: (_, arguments) => arguments.Contains("logcat")
+                ? new OperationCanceledException("synthetic fixed logcat cancellation")
+                : null);
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.False(Directory.Exists(output));
+            Assert.Empty(Directory.EnumerateDirectories(parent));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_RejectsFinalPackageDriftBeforeOutputPublication()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-package-drift-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            finalPackagePathResult: Success(""));
+        try
+        {
+            await Assert.ThrowsAsync<PackageNotInstalledException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.False(Directory.Exists(output));
+            Assert.Empty(Directory.EnumerateDirectories(parent));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnose_RemovesStagingWhenAtomicPublicationFindsTheOutputPathOccupied()
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-atomic-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture");
+        Directory.CreateDirectory(parent);
+        var sawUidCapture = false;
+        var runner = CreateDeploymentRunner(
+            apk,
+            pidofOutput: "",
+            afterCall: (_, arguments) =>
+            {
+                if (arguments.Contains("logcat"))
+                {
+                    sawUidCapture = true;
+                }
+                else if (sawUidCapture &&
+                         arguments.Count > 2 &&
+                         arguments[2] == "exec-out")
+                {
+                    File.WriteAllText(output, "simulated competing output path");
+                }
+            });
+        try
+        {
+            await Assert.ThrowsAsync<IOException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output));
+
+            Assert.True(File.Exists(output));
+            Assert.Empty(Directory.EnumerateDirectories(parent));
+        }
+        finally
+        {
+            File.Delete(apk);
+            File.Delete(output);
             Directory.Delete(parent, recursive: true);
         }
     }
@@ -1521,6 +1912,32 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Observe_ReportsUnusablePidofOutputInsteadOfNoProcesses()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(
+            apk,
+            activities: "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
+            pidofOutput: "not-a-pid 0\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .ObserveInspectedAppAsync("QUEST123", apk);
+
+            Assert.Empty(result.ProcessIds);
+            Assert.Equal(RuntimeProcessObservationQuality.PidofOutputUnusable,
+                result.ProcessObservationQuality);
+            Assert.True(result.IsTopResumed);
+            Assert.Equal("unknown", result.ApplicationReadiness);
+            Assert.False(result.ApplicationReadinessAuthority);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
     public async Task Observe_TreatsOnlyTypedPackageAbsenceAsNotInstalled()
     {
         var apk = await CreateApkAsync();
@@ -1617,9 +2034,16 @@ public sealed class InspectedDeploymentTests
         string? packageDump = null,
         string packageName = "com.example.app",
         string activityName = ".Main",
-        CommandResult? launchStartResult = null)
+        CommandResult? launchStartResult = null,
+        string? pidofOutput = null,
+        CommandResult? packageUidResult = null,
+        CommandResult? uidLogcatResult = null,
+        Func<string, IReadOnlyList<string>, Exception?>? commandFailure = null,
+        Action<string, IReadOnlyList<string>>? afterCall = null,
+        CommandResult? finalPackagePathResult = null)
     {
         launcherOutput ??= $"{packageName}/{activityName}\n";
+        var packagePathReadCount = 0;
         return new FakeRunner((file, arguments) =>
         {
             if (file == "aapt2")
@@ -1634,6 +2058,9 @@ public sealed class InspectedDeploymentTests
             }
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", $"pm path '{packageName}'"]))
             {
+                packagePathReadCount++;
+                if (packagePathReadCount > 1 && finalPackagePathResult is not null)
+                    return finalPackagePathResult;
                 return Success("package:/data/app/example/base.apk\n");
             }
             if (probeInstallImmutability &&
@@ -1664,6 +2091,11 @@ public sealed class InspectedDeploymentTests
                     $"  Activity #0 ActivityInfo{{abc {packageName}/{activityName}}}\n" +
                     $"    exported={launcherExported.ToString().ToLowerInvariant()}\n");
             }
+            if (arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "pm", "list", "packages", "--user", "current", "-U", packageName]))
+            {
+                return packageUidResult ?? Success($"package:{packageName} uid:10234\n");
+            }
             if (arguments.Count >= 6 &&
                 arguments[2] == "shell" &&
                 arguments[3] == "am" &&
@@ -1677,10 +2109,14 @@ public sealed class InspectedDeploymentTests
             }
             if (arguments.Contains("pidof"))
             {
-                return Success("456 123\n");
+                return Success(pidofOutput ?? "456 123\n");
+            }
+            if (arguments.Contains("logcat") && arguments.Any(argument => argument.StartsWith("--uid=", StringComparison.Ordinal)))
+            {
+                return uidLogcatResult ?? Success("uid logcat witness\n");
             }
             return Success("Success\n");
-        }, File.ReadAllBytes(sourceApk));
+        }, File.ReadAllBytes(sourceApk), commandFailure, afterCall);
     }
 
     private static FakeRunner CreatePreflightRunner(
@@ -1770,7 +2206,9 @@ public sealed class InspectedDeploymentTests
 
     private sealed class FakeRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler,
-        byte[]? streamedBytes = null) : IStreamingCommandRunner
+        byte[]? streamedBytes = null,
+        Func<string, IReadOnlyList<string>, Exception?>? commandFailure = null,
+        Action<string, IReadOnlyList<string>>? afterCall = null) : IStreamingCommandRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
 
@@ -1783,6 +2221,9 @@ public sealed class InspectedDeploymentTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add((fileName, arguments.ToArray()));
+            afterCall?.Invoke(fileName, arguments);
+            if (commandFailure?.Invoke(fileName, arguments) is { } failure)
+                return Task.FromException<CommandResult>(failure);
             return Task.FromResult(handler(fileName, arguments) with
             {
                 FileName = fileName,
@@ -1800,6 +2241,9 @@ public sealed class InspectedDeploymentTests
         {
             Calls.Add((fileName, arguments.ToArray()));
             StreamMaximumBytes.Add(maximumBytes);
+            afterCall?.Invoke(fileName, arguments);
+            if (commandFailure?.Invoke(fileName, arguments) is { } failure)
+                return await Task.FromException<StreamingCommandResult>(failure);
             var result = handler(fileName, arguments) with
             {
                 FileName = fileName,
