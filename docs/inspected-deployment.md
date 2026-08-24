@@ -82,17 +82,22 @@ output to standard error or claim successful dispatch after `am start` fails.
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
 installed package and byte facts, foreground/top-resumed flags, exact observed
 foreground and top-resumed component sets, known blocking Quest system
-components, and package process IDs from fixed serial-scoped probes. The
-component sets are independent facts: an immersive app can be top-resumed and
-alive without appearing in the legacy foreground projection, while Guardian or
-sensor-lock UI is simultaneously visible. Consumers choose their own 2D or XR
-acceptance policy; File Manager does not infer OpenXR readiness. Identity,
-digest, and size must match before runtime probes execute. It does not claim
-effective in-app settings, app effect, or wearer-visible state. Process IDs and
-legacy resumed text prove neither XR readiness nor an app effect. `pidof`
-quality is explicit: only a clean zero-PID readback is reported as no process;
-unusable or nonzero `pidof` output is an observation limitation, not a negative
-readiness classification.
+components, package process IDs, and two separately parsed global Android focus
+facts: `mCurrentFocus` and `mFocusedApp`. The focus facts come only from one
+fixed serial-scoped `dumpsys window windows` readback and retain `observed`,
+`absent`, `malformed`, `multiple`, or `unknown` state; a component is emitted
+only when exactly one strict component token parses. The component sets and
+focus facts are independent: an immersive app can be top-resumed while Meta's
+`FocusPlaceholderActivity` has global focus, or the inspected target can be
+globally focused while fixed `pidof` returns no PID. Those are raw Android
+observations, not a QFM failure verdict or an application, OpenXR, panel-handoff,
+or readiness result. Consumers choose their own 2D or XR acceptance policy.
+Identity, digest, and size must match before runtime probes execute. It does not
+claim effective in-app settings, app effect, or wearer-visible state. Process
+IDs and resumed/focus text prove neither XR readiness nor an app effect.
+`pidof` quality is explicit: only a clean zero-PID readback is reported as no
+process; unusable or nonzero `pidof` output is an observation limitation, not a
+negative readiness classification.
 
 `apk diagnose --serial <quest-serial> --file <path-to.apk> --output
 <new-folder>` is a read-only durable projection of that same exact-artifact
@@ -109,20 +114,22 @@ selecting a device or performing a mutation. The consolidated
 `questionable.file_manager.inspected_deployment.v4` contract requires all of
 the behavior above: immutable artifact admission, exact installed-byte
 readback, one JSON launch envelope on success or failure, the bounded current-
-Quest resolver-table fallback, and runtime observation v3. Provider resolvers
+Quest resolver-table fallback, and runtime observation v4. Provider resolvers
 should require these exact revisions before a run so an older hash-pinned CLI
 cannot silently reintroduce empty launch JSON or reject the known Quest VR
-launcher projection.
+launcher projection. The v4 focus facts do not change the install/launch effect
+claim or grant QFM any application, OpenXR, handoff, or stability authority.
 
 `tests/QuestIonAbleFileManager.Core.Tests/Fixtures/inspected-deployment-provider-conformance.v1.json`
 is the public synthetic corpus for host consumers. Its
 `questionable.file_manager.inspected_deployment_provider_conformance.v1`
 metadata fixes the four native schema IDs, the launch-envelope nullability
-invariant, transport adversarial cases, and the runtime-v3 proof boundary. It
-states explicitly that runtime observation v3 proves Android installed,
-foreground, top-resumed, and process dimensions only—not OpenXR readiness, app
-effect, or wearer visibility. A consumer owns its terminal envelope and final
-file behavior; this corpus does not replace a native File Manager schema.
+invariant, transport adversarial cases, and the runtime-v4 proof boundary. It
+states explicitly that runtime observation v4 proves Android installed,
+foreground, top-resumed, process, and global-focus dimensions only—not OpenXR
+readiness, app effect, panel-handoff completion, or wearer visibility. A
+consumer owns its terminal envelope and final file behavior; this corpus does
+not replace a native File Manager schema.
 
 This slice requires Android Platform Tools and Android SDK Build Tools. It is
 single-device and single-base-APK only. Split-set inspected deployment and

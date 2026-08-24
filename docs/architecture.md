@@ -65,12 +65,15 @@ that core and do not redefine behavior.
 The inspected-deployment boundary derives identity from one local APK, confirms
 installation through exact serial/package/version/signer/base-APK byte
 readback, resolves only an exported launcher activity, and observes only bounded
-package/activity/process state. Its `confirmed` mutation state applies only to
-the QFM-owned installed-byte and resolved-launch effect. Runtime observations
-make foreground, top-resumed, known blocker, and fixed-`pidof` quality facts
-structural, but PID absence is not an application failure or readiness result.
-Application/OpenXR readiness remains `unknown` with authority `false` until an
-app owner reports it. See `inspected-deployment.md`.
+package/activity/process/global-focus state. Its `confirmed` mutation state
+applies only to the QFM-owned installed-byte and resolved-launch effect. Runtime
+observations make foreground, top-resumed, known blocker, fixed-`pidof` quality,
+and separately sourced `mCurrentFocus`/`mFocusedApp` facts structural. PID
+absence, a missing focus field, or a FocusPlaceholder global-focus component is
+not an application failure or readiness result. Application/OpenXR readiness,
+panel-paused state, app handoff markers, advancing submitted frames, and any
+`>=750 ms` stability decision remain app-owned and `unknown` to QFM. See
+`inspected-deployment.md`.
 
 The dedicated local API owns no device semantics. Core owns its strict
 preflight/retain/consume/status/cancel state machine and exact command digest;

@@ -603,6 +603,10 @@ public sealed partial class AdbClient
                 runtime.IsTopResumed,
                 runtime.BlockingSystemComponents,
                 exactInstalledBytesConfirmed && launch.ComponentObservedResumed)
+            {
+                CurrentFocus = runtime.CurrentFocus,
+                FocusedApp = runtime.FocusedApp
+            }
         };
     }
 
@@ -820,12 +824,25 @@ public sealed partial class AdbClient
             serial, ["shell", "dumpsys", "activity", "activities"],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         activities.EnsureSuccess("Read activity state");
+        var globalFocus = await RunForDeviceAsync(
+            serial, ["shell", "dumpsys", "window", "windows"],
+            InspectionTimeout, cancellationToken).ConfigureAwait(false);
         var processes = await RunForDeviceAsync(
             serial, ["shell", "pidof", artifact.Identity.PackageName],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);
         var packageToken = artifact.Identity.PackageName + "/";
         var lines = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n');
         var runtimeFacts = ParseActivityRuntimeFacts(lines);
+        var currentFocus = ParseGlobalFocusFact(
+            globalFocus,
+            "mCurrentFocus",
+            "Window",
+            "fixed serial-scoped dumpsys window windows mCurrentFocus");
+        var focusedApp = ParseGlobalFocusFact(
+            globalFocus,
+            "mFocusedApp",
+            "ActivityRecord",
+            "fixed serial-scoped dumpsys window windows mFocusedApp");
         var processTokens = processes.StandardOutput.Split(
             (char[]?)null,
             StringSplitOptions.RemoveEmptyEntries);
@@ -855,7 +872,80 @@ public sealed partial class AdbClient
             ForegroundComponents = runtimeFacts.ForegroundComponents,
             TopResumedComponents = runtimeFacts.TopResumedComponents,
             BlockingSystemComponents = runtimeFacts.BlockingSystemComponents,
-            ProcessObservationQuality = processObservationQuality
+            ActivityObservationSource = "fixed serial-scoped dumpsys activity activities",
+            ProcessObservationQuality = processObservationQuality,
+            CurrentFocus = currentFocus,
+            FocusedApp = focusedApp
+        };
+    }
+
+    private static AndroidGlobalFocusFact ParseGlobalFocusFact(
+        CommandResult windowDump,
+        string field,
+        string recordType,
+        string observationSource)
+    {
+        if (!windowDump.Succeeded || !string.IsNullOrWhiteSpace(windowDump.StandardError))
+        {
+            return AndroidGlobalFocusFact.Unknown(observationSource, windowDump.ExitCode);
+        }
+
+        var matches = Regex.Matches(
+                windowDump.StandardOutput,
+                $@"(?m)^\s*{Regex.Escape(field)}\s*=\s*(?<value>[^\r\n]*)\s*$",
+                RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            return new AndroidGlobalFocusFact(
+                AndroidGlobalFocusObservationState.Absent,
+                null,
+                observationSource)
+            {
+                SourceExitCode = windowDump.ExitCode
+            };
+        }
+        if (matches.Length != 1)
+        {
+            return new AndroidGlobalFocusFact(
+                AndroidGlobalFocusObservationState.Multiple,
+                null,
+                observationSource)
+            {
+                SourceExitCode = windowDump.ExitCode
+            };
+        }
+
+        var value = matches[0].Groups["value"].Value.Trim();
+        if (string.Equals(value, "null", StringComparison.Ordinal))
+        {
+            return new AndroidGlobalFocusFact(
+                AndroidGlobalFocusObservationState.Absent,
+                null,
+                observationSource)
+            {
+                SourceExitCode = windowDump.ExitCode
+            };
+        }
+        if (!HasExpectedFocusRecordEnvelope(value, recordType) ||
+            !TryReadSingleRuntimeComponent(value, out var component))
+        {
+            return new AndroidGlobalFocusFact(
+                AndroidGlobalFocusObservationState.Malformed,
+                null,
+                observationSource)
+            {
+                SourceExitCode = windowDump.ExitCode
+            };
+        }
+
+        return new AndroidGlobalFocusFact(
+            AndroidGlobalFocusObservationState.Observed,
+            component,
+            observationSource)
+        {
+            SourceExitCode = windowDump.ExitCode
         };
     }
 
@@ -914,6 +1004,33 @@ public sealed partial class AdbClient
         canonical = packageName + "/" + fullActivity;
         return true;
     }
+
+    private static bool TryReadSingleRuntimeComponent(string value, out string canonical)
+    {
+        canonical = string.Empty;
+        var matches = Regex.Matches(
+                value,
+                @"(?<package>[A-Za-z][A-Za-z0-9_.]*)/(?<activity>\.[A-Za-z0-9_.$]+|[A-Za-z][A-Za-z0-9_.$]*(?:\.[A-Za-z0-9_.$]+)*)",
+                RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            return false;
+        }
+
+        var packageName = matches[0].Groups["package"].Value;
+        var activity = matches[0].Groups["activity"].Value;
+        var fullActivity = activity.StartsWith(".", StringComparison.Ordinal)
+            ? packageName + activity
+            : activity;
+        canonical = packageName + "/" + fullActivity;
+        return true;
+    }
+
+    private static bool HasExpectedFocusRecordEnvelope(string value, string recordType) =>
+        value.StartsWith(recordType + "{", StringComparison.Ordinal) &&
+        value.EndsWith('}');
 
     private static bool IsKnownBlockingSystemComponent(string component) =>
         component.EndsWith(".GuardianDialogActivity", StringComparison.Ordinal) ||

@@ -27,7 +27,7 @@ public sealed class InspectedDeploymentProviderCorpusTests
         Assert.Equal(
             [
                 "questionable.file_manager.apk_launch_result.v1",
-                "questionable.file_manager.app_runtime_observation.v3",
+                "questionable.file_manager.app_runtime_observation.v4",
                 "questionable.file_manager.inspected_deployment.v4",
                 "questionable.file_manager.launcher_export_proof.v2"
             ],
@@ -46,10 +46,10 @@ public sealed class InspectedDeploymentProviderCorpusTests
         Assert.Equal("null", launchInvariant.GetProperty("failure").GetProperty("result").GetString());
         Assert.Equal("non-null", launchInvariant.GetProperty("failure").GetProperty("failure").GetString());
 
-        var runtime = root.GetProperty("runtime_observation_v3");
-        Assert.Equal("questionable.file_manager.app_runtime_observation.v3", runtime.GetProperty("schema").GetString());
+        var runtime = root.GetProperty("runtime_observation_v4");
+        Assert.Equal("questionable.file_manager.app_runtime_observation.v4", runtime.GetProperty("schema").GetString());
         Assert.Equal(
-            ["android_foreground", "android_installed_identity", "android_process", "android_top_resumed"],
+            ["android_foreground", "android_global_focus", "android_installed_identity", "android_process", "android_top_resumed"],
             runtime.GetProperty("proves").EnumerateArray()
                 .Select(static value => value.GetString()!).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(
@@ -58,6 +58,15 @@ public sealed class InspectedDeploymentProviderCorpusTests
                 .Select(static value => value.GetString()!).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal("pidof", runtime.GetProperty("process_observation_source").GetString());
         Assert.Equal("not-readiness-failure", runtime.GetProperty("empty_pidof_meaning").GetString());
+        Assert.Equal(
+            ["mCurrentFocus", "mFocusedApp"],
+            runtime.GetProperty("global_focus_observation_sources").EnumerateArray()
+                .Select(static value => value.GetString()!).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            ["absent", "malformed", "multiple", "observed", "unknown"],
+            runtime.GetProperty("global_focus_states").EnumerateArray()
+                .Select(static value => value.GetString()!).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal("raw-android-focus-only", runtime.GetProperty("global_focus_interpretation").GetString());
 
         var terminal = root.GetProperty("consumer_terminal_contract");
         Assert.Equal("consumer", terminal.GetProperty("owner").GetString());

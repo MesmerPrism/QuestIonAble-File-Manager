@@ -5,7 +5,7 @@
     "questionable.file_manager.inspected_deployment.v4",
     "questionable.file_manager.apk_launch_result.v1",
     "questionable.file_manager.launcher_export_proof.v2",
-    "questionable.file_manager.app_runtime_observation.v3"
+    "questionable.file_manager.app_runtime_observation.v4"
   ],
   "native_launch_envelope_invariant": {
     "schema": "questionable.file_manager.apk_launch_result.v1",
@@ -22,11 +22,12 @@
       "failure": "non-null"
     }
   },
-  "runtime_observation_v3": {
-    "schema": "questionable.file_manager.app_runtime_observation.v3",
+  "runtime_observation_v4": {
+    "schema": "questionable.file_manager.app_runtime_observation.v4",
     "proves": [
       "android_installed_identity",
       "android_foreground",
+      "android_global_focus",
       "android_top_resumed",
       "android_process"
     ],
@@ -36,7 +37,19 @@
       "wearer_visibility"
     ],
     "process_observation_source": "pidof",
-    "empty_pidof_meaning": "not-readiness-failure"
+    "empty_pidof_meaning": "not-readiness-failure",
+    "global_focus_observation_sources": [
+      "mCurrentFocus",
+      "mFocusedApp"
+    ],
+    "global_focus_states": [
+      "observed",
+      "absent",
+      "malformed",
+      "multiple",
+      "unknown"
+    ],
+    "global_focus_interpretation": "raw-android-focus-only"
   },
   "consumer_terminal_contract": {
     "owner": "consumer",

@@ -132,9 +132,14 @@ not evidence of a dispatch path.
 QFM's `apk deploy` confirmation is intentionally narrower than app readiness:
 it means exact installed bytes plus resolved-component launch evidence. Its
 separate runtime fields can report an empty `pidof`, foreground/top-resumed
-facts, and system blockers without classifying application/OpenXR readiness.
-App or capsule owners retain property profiles, hotload fences, refresh
-request/effective readback, and readiness interpretation.
+facts, system blockers, and independently parsed global Android
+`mCurrentFocus`/`mFocusedApp` facts without classifying application/OpenXR or
+handoff readiness. A `FocusPlaceholderActivity` is an observed focus component,
+not a universal app-failure verdict. App or capsule owners retain property
+profiles, hotload fences, paused-panel state, advancing focused/submitted frames,
+the `>=750 ms` stability decision, app handoff markers, OpenXR refresh
+request/effective readback, and readiness interpretation. QFM exposes no
+generic property, input, screenshot, component, or shell authority.
 
 `adb forwards --serial <quest-serial> --json` is a distinct agent-only,
 read-only route with the

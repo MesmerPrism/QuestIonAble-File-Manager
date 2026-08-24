@@ -95,7 +95,7 @@ public sealed partial class AdbClient
             {
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "runtime", "runtime.json", runtime, cancellationToken,
-                    observationSource: "fixed package/activity/pid observation",
+                    observationSource: "fixed package/activity/window/pid observation",
                     commandSemantic: "fixed serial-scoped runtime observation; it has no application or OpenXR readiness authority").ConfigureAwait(false),
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "device", "device.json",
@@ -156,8 +156,11 @@ public sealed partial class AdbClient
                     runtime.IsTopResumed,
                     runtime.ProcessAlive,
                     runtime.ProcessIds,
+                    runtime.ActivityObservationSource,
                     runtime.ProcessObservationSource,
                     runtime.ProcessObservationQuality,
+                    runtime.CurrentFocus,
+                    runtime.FocusedApp,
                     runtime.ForegroundComponents,
                     runtime.TopResumedComponents,
                     runtime.BlockingSystemComponents,
