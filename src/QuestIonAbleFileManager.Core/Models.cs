@@ -344,6 +344,87 @@ public sealed record AndroidGlobalFocusObservation(
 }
 
 /// <summary>
+/// The status of one bounded, fixed permission-observation source. These are
+/// transport and parser facts, not an admission, readiness, or policy result.
+/// </summary>
+public enum ApkPermissionObservationState
+{
+    Reported,
+    Absent,
+    Empty,
+    Malformed,
+    Unknown,
+    Unavailable,
+    PackageNotInstalled
+}
+
+/// <summary>
+/// One manifest-declared permission reported by Android's fixed package dump.
+/// </summary>
+public sealed record ApkManifestDeclaredPermission(string Name);
+
+/// <summary>
+/// One effective grant bit reported by Android's fixed package dump. The
+/// source distinguishes the platform's install and runtime sections without
+/// inferring whether a permission is eligible for a future grant operation.
+/// </summary>
+public sealed record ApkEffectivePermissionGrant(
+    string Name,
+    bool Granted,
+    string Source);
+
+/// <summary>
+/// One app-op mode reported by Android's fixed app-ops query. QFM retains the
+/// operation and mode as Android reported them and does not interpret either.
+/// </summary>
+public sealed record ApkPermissionAppOp(string Operation, string Mode);
+
+/// <summary>
+/// Identity of the QFM binary/contract that produced a permission observation.
+/// This binds the result to one provider, public source identity, and portable
+/// CLI distribution class without importing application policy into QFM.
+/// </summary>
+public sealed record ApkPermissionObservationProvider(
+    string Id,
+    string Version,
+    string SourceRepository,
+    string Distribution);
+
+/// <summary>
+/// Bounded raw Android permission facts for one exact serial and package.
+/// This contract never changes Android permission state and never decides
+/// whether an application may launch, use a feature, or satisfy readiness.
+/// </summary>
+public sealed record ApkPermissionObservation(
+    string Serial,
+    string PackageName,
+    ApkPermissionObservationState PackageState,
+    ApkPermissionObservationState ManifestDeclaredPermissionsState,
+    IReadOnlyList<ApkManifestDeclaredPermission> ManifestDeclaredPermissions,
+    ApkPermissionObservationState EffectiveGrantState,
+    IReadOnlyList<ApkEffectivePermissionGrant> EffectiveGrants,
+    ApkPermissionObservationState AppOpState,
+    IReadOnlyList<ApkPermissionAppOp> AppOps,
+    ApkPermissionObservationProvider Provider)
+{
+    public string ObservationContract { get; init; } =
+        "questionable.file_manager.apk_permission_observation.v1";
+
+    public string ManifestObservationSource { get; init; } =
+        "fixed serial-scoped dumpsys package requested permissions";
+
+    public string GrantObservationSource { get; init; } =
+        "fixed serial-scoped dumpsys package install/runtime permissions";
+
+    public string AppOpObservationSource { get; init; } =
+        "fixed serial-scoped cmd appops get --uid package";
+
+    public int? PackageSourceExitCode { get; init; }
+
+    public int? AppOpSourceExitCode { get; init; }
+}
+
+/// <summary>
 /// Exact-package readback after a fixed current-user force-stop request. These
 /// are Android process/activity facts only; they do not establish application,
 /// OpenXR, or wearer-visible behavior.

@@ -40,7 +40,8 @@ public enum OperatorCommandKind
     DeployInspectedApp,
     DiagnoseInspectedApp,
     StopPackage,
-    InventoryAdbForwards
+    InventoryAdbForwards,
+    ObservePackagePermissions
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -673,6 +674,41 @@ public static class OperatorCommands
         return InventoryAdbForwards(arguments[3]);
     }
 
+    public static OperatorCommand ObservePackagePermissions(
+        string serial,
+        string packageName)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        packageName = AndroidInput.RequirePackageName(packageName);
+        return new OperatorCommand(
+            OperatorCommandKind.ObservePackagePermissions,
+            ["apk", "permissions", "--serial", serial, "--package", packageName],
+            serial: serial,
+            packageName: packageName);
+    }
+
+    public static OperatorCommand ParsePackagePermissionObservationCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 7 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "permissions", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--package", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk permissions --serial <quest-serial> --package <package> --json.",
+                nameof(arguments));
+        }
+
+        return ObservePackagePermissions(arguments[3], arguments[5]);
+    }
+
     public static OperatorCommand InspectApk(string apkPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
@@ -1215,7 +1251,8 @@ public sealed record OperatorExecutionResult(
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
     PackageStopResult? PackageStopResult = null,
-    AdbForwardInventoryResult? AdbForwardInventoryResult = null);
+    AdbForwardInventoryResult? AdbForwardInventoryResult = null,
+    ApkPermissionObservation? ApkPermissionObservation = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1474,6 +1511,14 @@ public sealed class OperatorCommandExecutor
                     command,
                     AdbForwardInventoryResult: await client.GetForwardInventoryAsync(
                         Require(command.Serial, nameof(command.Serial)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObservePackagePermissions:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkPermissionObservation: await client.ObservePackagePermissionsAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.PackageName, nameof(command.PackageName)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.LaunchInspectedApp:
@@ -1739,6 +1784,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
         OperatorCommandKind.InventoryAdbForwards => "Reading the shared ADB forwarding inventory…",
+        OperatorCommandKind.ObservePackagePermissions => "Reading bounded exact-package permission facts…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",

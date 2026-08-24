@@ -80,6 +80,8 @@ public sealed class OperatorCommandTests
                 ["apk", "launch", "--serial", "QUEST123", "--file", apkPath]),
             (OperatorCommands.ObserveInspectedApp("QUEST123", apkPath),
                 ["apk", "observe", "--serial", "QUEST123", "--file", apkPath]),
+            (OperatorCommands.ObservePackagePermissions("QUEST123", "com.example.app"),
+                ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app"]),
             (OperatorCommands.EnableWifiAdb("QUEST123", 5555, operatorConfirmed: true),
                 ["wifi", "enable", "--serial", "QUEST123", "--port", "5555", "--confirm-wifi-adb"]),
             (OperatorCommands.ConnectWifiAdb("192.0.2.42", 5555, operatorConfirmed: true),

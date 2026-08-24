@@ -1,0 +1,130 @@
+{
+  "schema": "questionable.file_manager.apk_permission_observation.v1",
+  "cases": [
+    {
+      "id": "granted",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": {
+        "exit_code": 0,
+        "stdout": "  requested permissions:\n    android.permission.CAMERA\n    android.permission.RECORD_AUDIO\n  install permissions:\n    android.permission.INTERNET: granted=true\n  runtime permissions:\n    android.permission.CAMERA: granted=true, flags=[ USER_SET ]\n    android.permission.RECORD_AUDIO: granted=false, flags=[ USER_SET ]\n"
+      },
+      "app_ops": { "exit_code": 0, "stdout": "CAMERA: allow; time=+1m\nRECORD_AUDIO: ignore; time=+2m\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Reported",
+        "grant_state": "Reported",
+        "app_op_state": "Reported",
+        "manifest_permissions": [ "android.permission.CAMERA", "android.permission.RECORD_AUDIO" ],
+        "grants": [ "android.permission.CAMERA|True|runtime", "android.permission.INTERNET|True|install", "android.permission.RECORD_AUDIO|False|runtime" ],
+        "app_ops": [ "CAMERA|allow", "RECORD_AUDIO|ignore" ]
+      }
+    },
+    {
+      "id": "non_runtime_or_non_grantable",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": {
+        "exit_code": 0,
+        "stdout": "  requested permissions:\n    com.example.permission.SIGNATURE_ONLY\n  install permissions:\n    com.example.permission.SIGNATURE_ONLY: granted=true\n  runtime permissions:\n"
+      },
+      "app_ops": { "exit_code": 0, "stdout": "No operations.\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Reported",
+        "grant_state": "Reported",
+        "app_op_state": "Absent",
+        "manifest_permissions": [ "com.example.permission.SIGNATURE_ONLY" ],
+        "grants": [ "com.example.permission.SIGNATURE_ONLY|True|install" ],
+        "app_ops": []
+      }
+    },
+    {
+      "id": "empty_and_absent",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": { "exit_code": 0, "stdout": "  requested permissions:\n  runtime permissions:\n" },
+      "app_ops": { "exit_code": 0, "stdout": "" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Empty",
+        "grant_state": "Empty",
+        "app_op_state": "Empty",
+        "manifest_permissions": [],
+        "grants": [],
+        "app_ops": []
+      }
+    },
+    {
+      "id": "app_op_denied",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": { "exit_code": 0, "stdout": "  requested permissions:\n    android.permission.CAMERA\n  runtime permissions:\n    android.permission.CAMERA: granted=true\n" },
+      "app_ops": { "exit_code": 0, "stdout": "CAMERA: deny; time=+1m\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Reported",
+        "grant_state": "Reported",
+        "app_op_state": "Reported",
+        "manifest_permissions": [ "android.permission.CAMERA" ],
+        "grants": [ "android.permission.CAMERA|True|runtime" ],
+        "app_ops": [ "CAMERA|deny" ]
+      }
+    },
+    {
+      "id": "malformed",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": { "exit_code": 0, "stdout": "  requested permissions:\n    not a permission\n  runtime permissions:\n    android.permission.CAMERA: not-a-grant\n" },
+      "app_ops": { "exit_code": 0, "stdout": "CAMERA without a mode\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Malformed",
+        "grant_state": "Malformed",
+        "app_op_state": "Malformed",
+        "manifest_permissions": [],
+        "grants": [],
+        "app_ops": []
+      }
+    },
+    {
+      "id": "unknown",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": { "exit_code": 0, "stdout": "  requested permissions:\n    android.permission.CAMERA\n", "stderr": "warning\n" },
+      "app_ops": { "exit_code": 0, "stdout": "CAMERA: allow;\n", "stderr": "warning\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Unknown",
+        "grant_state": "Unknown",
+        "app_op_state": "Unknown",
+        "manifest_permissions": [],
+        "grants": [],
+        "app_ops": []
+      }
+    },
+    {
+      "id": "unavailable",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": { "exit_code": 1, "stderr": "permission denied\n" },
+      "app_ops": { "exit_code": 1, "stderr": "permission denied\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Unavailable",
+        "grant_state": "Unavailable",
+        "app_op_state": "Unavailable",
+        "manifest_permissions": [],
+        "grants": [],
+        "app_ops": []
+      }
+    },
+    {
+      "id": "package_not_installed",
+      "package_path": { "exit_code": 1, "stdout": "", "stderr": "" },
+      "package_list": { "exit_code": 0, "stdout": "" },
+      "expected": {
+        "package_state": "PackageNotInstalled",
+        "manifest_state": "PackageNotInstalled",
+        "grant_state": "PackageNotInstalled",
+        "app_op_state": "PackageNotInstalled",
+        "manifest_permissions": [],
+        "grants": [],
+        "app_ops": []
+      }
+    }
+  ]
+}

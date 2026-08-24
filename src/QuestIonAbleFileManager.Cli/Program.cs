@@ -12,6 +12,8 @@ internal static class CliApplication
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v3";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
+    private const string ApkPermissionObservationSchema =
+        "questionable.file_manager.apk_permission_observation.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v5";
@@ -46,6 +48,8 @@ internal static class CliApplication
             ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
         new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
             ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
+        new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
+            ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app", "--json"], true),
         new("adb_forward_inventory", "adb forwards --serial <serial> --json",
             ["adb", "forwards", "--serial", "QUEST123", "--json"], true)
     ];
@@ -76,6 +80,7 @@ internal static class CliApplication
                     "preflight" => "apk_preflight",
                     "deploy" => "apk_deploy",
                     "diagnose" => "apk_diagnose",
+                    "permissions" => "apk_permission_observation",
                     _ => string.Empty
                 };
                 return routeId.Length > 0;
@@ -121,6 +126,7 @@ internal static class CliApplication
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
+                        apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
@@ -190,6 +196,7 @@ internal static class CliApplication
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
         "apk_stop" => RunApkStopJsonAsync(arguments),
+        "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
     };
@@ -1963,6 +1970,66 @@ internal static class CliApplication
             1);
     }
 
+    private static async Task<int> RunApkPermissionObservationJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParsePackagePermissionObservationCliArguments(arguments);
+            var client = AdbClient.CreateDefault();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var observation = execution.ApkPermissionObservation ??
+                throw new InvalidOperationException("Permission observation returned no result.");
+            WriteJson(new
+            {
+                schema = ApkPermissionObservationSchema,
+                succeeded = true,
+                result = observation,
+                failure = (object?)null
+            });
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            return WriteApkPermissionObservationFailure(exception);
+        }
+    }
+
+    private static int WriteApkPermissionObservationFailure(Exception exception)
+    {
+        var failure = exception switch
+        {
+            ArgumentException => (
+                "input_rejected",
+                "The exact serial/package permission-observation input was rejected before device observation.",
+                2),
+            OperationCanceledException => (
+                "permission_observation_cancelled",
+                "The bounded exact-package permission observation did not complete.",
+                1),
+            InvalidDataException => (
+                "permission_observation_output_rejected",
+                "The exact-package permission observation source was malformed or incomplete.",
+                1),
+            _ => (
+                "permission_observation_failed",
+                "The bounded exact-package permission observation did not complete.",
+                1)
+        };
+        WriteJson(new
+        {
+            schema = ApkPermissionObservationSchema,
+            succeeded = false,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Item1,
+                message = failure.Item2,
+                state_change_possible = false
+            }
+        });
+        return failure.Item3;
+    }
+
     private static async Task<int> RunAdbForwardInventoryJsonAsync(string[] arguments)
     {
         try
@@ -2574,6 +2641,7 @@ internal static class CliApplication
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk permissions --serial <serial> --package <package> --json
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
               questionable-file-manager apk install-bundle-many --serial <host:port> --serial <host:port> --folder <apk-folder> [options]
