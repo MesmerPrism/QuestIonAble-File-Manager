@@ -10,15 +10,15 @@ internal static class CliApplication
     private const string ApkLaunchResultSchema = "questionable.file_manager.apk_launch_result.v1";
     private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
-    private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v1";
+    private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v2";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
-        "questionable.file_manager.inspected_deployment.v3";
+        "questionable.file_manager.inspected_deployment.v4";
     private const string LauncherExportProofContract =
         "questionable.file_manager.launcher_export_proof.v2";
     private const string RuntimeObservationContract =
-        "questionable.file_manager.app_runtime_observation.v2";
+        "questionable.file_manager.app_runtime_observation.v3";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -36,6 +36,59 @@ internal static class CliApplication
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         WriteIndented = true
     };
+    private static readonly IReadOnlyList<CliAgentRouteAdmission> AgentRouteAdmissions =
+    [
+        new("apk_preflight", "apk preflight --serial <serial> --file <file.apk> --json",
+            ["apk", "preflight", "--serial", "QUEST123", "--file", "example.apk", "--json"], true),
+        new("apk_deploy", "apk deploy --serial <serial> --file <file.apk> [options] --json",
+            ["apk", "deploy", "--serial", "QUEST123", "--file", "example.apk", "--json"], true),
+        new("apk_diagnose", "apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json",
+            ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
+        new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
+            ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
+        new("adb_forward_inventory", "adb forwards --serial <serial> --json",
+            ["adb", "forwards", "--serial", "QUEST123", "--json"], true)
+    ];
+
+    internal static IReadOnlyList<CliAgentRouteAdmission> DescribeAgentRouteAdmissions() =>
+        AgentRouteAdmissions;
+
+    internal static bool TryClassifyAgentRoute(IReadOnlyList<string> arguments, out string routeId)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        routeId = string.Empty;
+        if (arguments.Count < 2)
+        {
+            return false;
+        }
+
+        if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
+            {
+                routeId = "apk_stop";
+                return true;
+            }
+            if (HasFlag(arguments.ToArray(), "--json"))
+            {
+                routeId = arguments[1].ToLowerInvariant() switch
+                {
+                    "preflight" => "apk_preflight",
+                    "deploy" => "apk_deploy",
+                    "diagnose" => "apk_diagnose",
+                    _ => string.Empty
+                };
+                return routeId.Length > 0;
+            }
+        }
+        if (string.Equals(arguments[0], "adb", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(arguments[1], "forwards", StringComparison.OrdinalIgnoreCase))
+        {
+            routeId = "adb_forward_inventory";
+            return true;
+        }
+        return false;
+    }
 
     public static async Task<int> RunAsync(string[] arguments)
     {
@@ -90,38 +143,9 @@ internal static class CliApplication
             {
                 return await RunConnectivityProfileAsync(arguments);
             }
-            if (command == "apk" &&
-                arguments.Length > 1 &&
-                string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
+            if (TryClassifyAgentRoute(arguments, out var agentRouteId))
             {
-                return await RunApkStopJsonAsync(arguments);
-            }
-            if (command == "adb" &&
-                arguments.Length > 1 &&
-                string.Equals(arguments[1], "forwards", StringComparison.OrdinalIgnoreCase))
-            {
-                return await RunAdbForwardInventoryJsonAsync(arguments);
-            }
-            if (command == "apk" &&
-                arguments.Length > 1 &&
-                string.Equals(arguments[1], "preflight", StringComparison.OrdinalIgnoreCase) &&
-                HasFlag(arguments, "--json"))
-            {
-                return await RunApkPreflightJsonAsync(arguments);
-            }
-            if (command == "apk" &&
-                arguments.Length > 1 &&
-                string.Equals(arguments[1], "diagnose", StringComparison.OrdinalIgnoreCase) &&
-                HasFlag(arguments, "--json"))
-            {
-                return await RunApkDiagnoseJsonAsync(arguments);
-            }
-            if (command == "apk" &&
-                arguments.Length > 1 &&
-                string.Equals(arguments[1], "deploy", StringComparison.OrdinalIgnoreCase) &&
-                HasFlag(arguments, "--json"))
-            {
-                return await RunApkDeployJsonAsync(arguments);
+                return await RunAgentRouteAsync(agentRouteId, arguments);
             }
             if (command == "apk" &&
                 arguments.Length > 1 &&
@@ -159,6 +183,16 @@ internal static class CliApplication
             return 1;
         }
     }
+
+    private static Task<int> RunAgentRouteAsync(string routeId, string[] arguments) => routeId switch
+    {
+        "apk_preflight" => RunApkPreflightJsonAsync(arguments),
+        "apk_deploy" => RunApkDeployJsonAsync(arguments),
+        "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
+        "apk_stop" => RunApkStopJsonAsync(arguments),
+        "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
+        _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
+    };
 
     private static async Task<int> RunConnectivityProfileAsync(string[] arguments)
     {
@@ -1411,7 +1445,7 @@ internal static class CliApplication
                     schema = ApkDiagnosticResultSchema,
                     succeeded = true,
                     complete,
-                    result,
+                    result = CreateSanitizedApkDiagnosticResult(result),
                     failure = (object?)null
                 });
             }
@@ -1460,6 +1494,32 @@ internal static class CliApplication
         });
         return failure.ExitCode;
     }
+
+    private static object CreateSanitizedApkDiagnosticResult(ApkDiagnosticBundleResult result) => new
+    {
+        diagnosticContract = result.DiagnosticContract,
+        capturedAt = result.CapturedAt,
+        fileCount = result.Files.Count,
+        failedCaptureCount = result.FailedCaptureCount,
+        captures = result.Files.Select(file => new
+        {
+            captureKind = file.CaptureKind,
+            observationSource = file.ObservationSource,
+            commandSemantic = file.CommandSemantic,
+            exitCode = file.CommandExitCode,
+            sizeBytes = file.SizeBytes,
+            truncated = file.Truncated,
+            sha256 = file.Sha256
+        }),
+        limitations = new
+        {
+            applicationReadiness = "unknown",
+            applicationReadinessAuthority = false,
+            openXrReadiness = "unknown",
+            openXrReadinessAuthority = false,
+            wearerVisibility = "unknown"
+        }
+    };
 
     private static (string Code, string Message, int ExitCode)
         ClassifyApkDiagnosticFailure(Exception exception)
@@ -2474,7 +2534,6 @@ internal static class CliApplication
 
             Usage:
               questionable-file-manager devices [--json] [--adb <path>]
-              questionable-file-manager adb forwards --serial <serial> --json
               questionable-file-manager files list --serial <serial> [--path /sdcard] [--json]
               questionable-file-manager files pull --serial <serial> --remote <path> --output <path>
               questionable-file-manager files push --serial <serial> --file <path> --remote <path>
@@ -2482,9 +2541,6 @@ internal static class CliApplication
               questionable-file-manager apk inspect --file <file.apk> [--json]
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
-              questionable-file-manager apk preflight --serial <serial> --file <file.apk> [--json]
-              questionable-file-manager apk deploy --serial <serial> --file <file.apk> [options] [--json]
-              questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> [--json]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
@@ -2612,5 +2668,17 @@ internal static class CliApplication
             credential, device, ADB, hotspot, or elevation option and reports only sanitized
             handoff metadata.
             """);
+        Console.WriteLine();
+        Console.WriteLine("            Agent-only typed routes:");
+        foreach (var route in AgentRouteAdmissions.Where(static route => route.Executable))
+        {
+            Console.WriteLine($"              questionable-file-manager {route.HelpUsage}");
+        }
     }
 }
+
+internal sealed record CliAgentRouteAdmission(
+    string Id,
+    string HelpUsage,
+    IReadOnlyList<string> ProbeArguments,
+    bool Executable);

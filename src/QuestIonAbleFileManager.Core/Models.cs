@@ -167,7 +167,7 @@ public sealed record AppRuntimeObservation(
     IReadOnlyList<int> ProcessIds)
 {
     public string ObservationContract { get; init; } =
-        "questionable.file_manager.app_runtime_observation.v2";
+        "questionable.file_manager.app_runtime_observation.v3";
 
     public IReadOnlyList<string> ForegroundComponents { get; init; } = [];
 
@@ -175,7 +175,38 @@ public sealed record AppRuntimeObservation(
 
     public IReadOnlyList<string> BlockingSystemComponents { get; init; } = [];
 
+    /// <summary>
+    /// QFM currently uses only the fixed serial-scoped <c>pidof</c> probe for
+    /// this package dimension. A missing PID is an observation limitation, not
+    /// an application or OpenXR failure.
+    /// </summary>
+    public RuntimeProcessObservationQuality ProcessObservationQuality { get; init; } =
+        RuntimeProcessObservationQuality.PidofUnavailable;
+
+    public string ProcessObservationSource { get; init; } =
+        "fixed serial-scoped pidof derived from inspected package";
+
+    /// <summary>
+    /// Android foreground, activity, and PID facts do not make QFM an
+    /// application-runtime authority.
+    /// </summary>
+    public string ApplicationReadiness { get; init; } = "unknown";
+
+    public bool ApplicationReadinessAuthority { get; init; }
+
+    public string OpenXrReadiness { get; init; } = "unknown";
+
+    public bool OpenXrReadinessAuthority { get; init; }
+
     public bool ProcessAlive => ProcessIds.Count > 0;
+}
+
+public enum RuntimeProcessObservationQuality
+{
+    PidofReportedProcesses,
+    PidofReportedNoProcesses,
+    PidofOutputUnusable,
+    PidofUnavailable
 }
 
 /// <summary>
@@ -230,7 +261,40 @@ public sealed record InspectedApkDeploymentResult(
     AppRuntimeObservation Runtime)
 {
     public string DeploymentContract { get; init; } =
-        "questionable.file_manager.apk_deployment.v1";
+        "questionable.file_manager.apk_deployment.v2";
+
+    /// <summary>
+    /// Separates QFM's install/launch readback from app-owned runtime truth.
+    /// In particular, an empty <c>pidof</c> result does not negate an otherwise
+    /// confirmed install/launch effect.
+    /// </summary>
+    public QfmDeploymentClaimBoundary ClaimBoundary { get; init; } =
+        new(
+            ExactInstalledBytesConfirmed: false,
+            ResolvedComponentObserved: false,
+            ProcessObservationQuality: RuntimeProcessObservationQuality.PidofUnavailable,
+            IsForeground: false,
+            IsTopResumed: false,
+            BlockingSystemComponents: [],
+            QfmOwnedInstallLaunchEffectConfirmed: false);
+}
+
+public sealed record QfmDeploymentClaimBoundary(
+    bool ExactInstalledBytesConfirmed,
+    bool ResolvedComponentObserved,
+    RuntimeProcessObservationQuality ProcessObservationQuality,
+    bool IsForeground,
+    bool IsTopResumed,
+    IReadOnlyList<string> BlockingSystemComponents,
+    bool QfmOwnedInstallLaunchEffectConfirmed)
+{
+    public string ApplicationReadiness { get; init; } = "unknown";
+
+    public bool ApplicationReadinessAuthority { get; init; }
+
+    public string OpenXrReadiness { get; init; } = "unknown";
+
+    public bool OpenXrReadinessAuthority { get; init; }
 }
 
 public sealed record ApkDiagnosticBundleFile(
@@ -241,6 +305,14 @@ public sealed record ApkDiagnosticBundleFile(
     int? CommandExitCode = null)
 {
     public bool Succeeded => CommandExitCode is null or 0;
+
+    /// <summary>Fixed capture family; never caller-provided filtering.</summary>
+    public string? ObservationSource { get; init; }
+
+    /// <summary>Sanitized semantic description of the fixed command.</summary>
+    public string? CommandSemantic { get; init; }
+
+    public bool Truncated { get; init; }
 }
 
 public sealed record ApkDiagnosticDeviceFacts(
@@ -259,7 +331,7 @@ public sealed record ApkDiagnosticBundleResult(
     IReadOnlyList<ApkDiagnosticBundleFile> Files)
 {
     public string DiagnosticContract { get; init; } =
-        "questionable.file_manager.apk_diagnostic_bundle.v1";
+        "questionable.file_manager.apk_diagnostic_bundle.v2";
 
     public int FailedCaptureCount => Files.Count(static file => !file.Succeeded);
 }

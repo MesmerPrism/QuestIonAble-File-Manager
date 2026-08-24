@@ -196,7 +196,7 @@ internal static class OperatorMutations
         OperatorCommandKind.PushFile => $"file present at {command.RemotePath}",
         OperatorCommandKind.InstallApk => $"inspected APK installed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
         OperatorCommandKind.DeployInspectedApp =>
-            $"inspected APK installed, resolved launcher started, and runtime observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
+            $"inspected APK installed and resolved launcher effect observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}; application and OpenXR readiness remain app-owned",
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
         OperatorCommandKind.StopPackage =>
             $"exact package {command.PackageName} quiescent for the current Android user on {command.Serial}",
@@ -299,21 +299,30 @@ internal static class OperatorMutations
             return launch;
         }
 
-        var runtime = result.AppRuntimeObservation ??
-            throw new InvalidOperationException("Inspected deployment returned no final runtime observation.");
-        if (runtime.Installed is null)
+        var deployment = result.InspectedApkDeploymentResult ??
+            throw new InvalidOperationException("Inspected deployment returned no claim boundary.");
+        var boundary = deployment.ClaimBoundary;
+        if (!boundary.ExactInstalledBytesConfirmed)
         {
             return OperatorMutationObservation.Pending(
                 "The final runtime observation no longer sees the inspected package installed.",
                 "Installation and launch completed, but final installed-byte readback is pending.");
         }
+        if (!boundary.QfmOwnedInstallLaunchEffectConfirmed)
+        {
+            return OperatorMutationObservation.Pending(
+                "Exact installed bytes remain present, but the resolved launch component was not observed.",
+                "Installation completed, but QFM has not confirmed the fixed launcher effect.");
+        }
 
         return OperatorMutationObservation.Confirmed(
-            $"Exact installed bytes and resolved component {result.ResolvedAppLaunchResult!.Component} were confirmed; " +
-            $"final runtime reports process-alive={runtime.ProcessAlive.ToString().ToLowerInvariant()}, " +
-            $"foreground={runtime.IsForeground.ToString().ToLowerInvariant()}, " +
-            $"top-resumed={runtime.IsTopResumed.ToString().ToLowerInvariant()}, " +
-            $"blocking-system-components={runtime.BlockingSystemComponents.Count}.");
+            $"QFM-owned effect confirmed: exact installed bytes and resolved component " +
+            $"{result.ResolvedAppLaunchResult!.Component} were observed. " +
+            $"Application readiness=unknown and OpenXR readiness=unknown; both are app-owned. " +
+            $"Runtime facts remain separate: pidof-quality={boundary.ProcessObservationQuality}, " +
+            $"foreground={boundary.IsForeground.ToString().ToLowerInvariant()}, " +
+            $"top-resumed={boundary.IsTopResumed.ToString().ToLowerInvariant()}, " +
+            $"blocking-system-components={boundary.BlockingSystemComponents.Count}.");
     }
 
     private static OperatorMutationObservation ObserveInspectedInstall(

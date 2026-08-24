@@ -65,7 +65,12 @@ that core and do not redefine behavior.
 The inspected-deployment boundary derives identity from one local APK, confirms
 installation through exact serial/package/version/signer/base-APK byte
 readback, resolves only an exported launcher activity, and observes only bounded
-package/activity/process state. See `inspected-deployment.md`.
+package/activity/process state. Its `confirmed` mutation state applies only to
+the QFM-owned installed-byte and resolved-launch effect. Runtime observations
+make foreground, top-resumed, known blocker, and fixed-`pidof` quality facts
+structural, but PID absence is not an application failure or readiness result.
+Application/OpenXR readiness remains `unknown` with authority `false` until an
+app owner reports it. See `inspected-deployment.md`.
 
 The dedicated local API owns no device semantics. Core owns its strict
 preflight/retain/consume/status/cancel state machine and exact command digest;
@@ -287,9 +292,12 @@ and completed-target progress for fan-out. It does not invent byte or remaining-
 time percentages from ADB prose. The Rusty Kiosk tab additionally shows the
 latest PC/headset synchronization receipt rather than optimistic button state.
 
-Future diagnostics bundles will record tool version, command goal, selected
-serial placeholder, result class, and artifact types while keeping raw device
-evidence local.
+Diagnostic bundles record fixed capture semantics, exit status, byte count,
+truncation, SHA-256, and source while keeping raw device evidence local. The
+fixed current-user package/UID readback permits bounded package-attributed logs
+when `pidof` returns no process; PID logs are corroboration only. No log record
+is interpreted as application/OpenXR readiness, a crash verdict, refresh rate,
+or wearer visibility.
 
 ## Validation
 

@@ -7,6 +7,80 @@ namespace QuestIonAbleFileManager.Core.Tests;
 public sealed class OperatorActionRegistryTests
 {
     [Fact]
+    public async Task EveryAdvertisedAgentRouteIsDynamicallyClassifiedAndShownInCliHelp()
+    {
+        var advertised = OperatorActionRegistry.AgentRoutes
+            .ToDictionary(route => route.Id, StringComparer.Ordinal);
+        var admissions = CliApplication.DescribeAgentRouteAdmissions()
+            .ToDictionary(route => route.Id, StringComparer.Ordinal);
+
+        Assert.Equal(
+            advertised.Keys.Order(StringComparer.Ordinal),
+            admissions.Keys.Order(StringComparer.Ordinal));
+
+        var originalOut = Console.Out;
+        using var help = new StringWriter();
+        try
+        {
+            Console.SetOut(help);
+            Assert.Equal(0, await CliApplication.RunAsync(["--help"]));
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        foreach (var route in advertised.Values)
+        {
+            var admission = Assert.Single(admissions.Values, item => item.Id == route.Id);
+            Assert.True(admission.Executable, $"{route.Id} must be explicitly non-executable or dispatched.");
+            Assert.True(CliApplication.TryClassifyAgentRoute(admission.ProbeArguments, out var classified));
+            Assert.Equal(route.Id, classified);
+            Assert.Contains(
+                "questionable-file-manager " + admission.HelpUsage,
+                help.ToString(),
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task ApkDiagnosticFailureJsonDoesNotExposePrivateArgumentValues()
+    {
+        var privateSerial = "PRIVATE-SERIAL-DO-NOT-EMIT";
+        var privateApk = Path.Combine(
+            Path.GetTempPath(),
+            "private-apk-path-DO-NOT-EMIT.apk");
+        var privateOutput = Path.Combine(
+            Path.GetTempPath(),
+            "private-output-path-DO-NOT-EMIT");
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            var exitCode = await CliApplication.RunAsync(
+            [
+                "apk", "diagnose", "--serial", privateSerial,
+                "--file", privateApk, "--output", privateOutput, "--json"
+            ]);
+
+            Assert.Equal(2, exitCode);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.False(json.RootElement.GetProperty("succeeded").GetBoolean());
+        Assert.Equal("input_rejected", json.RootElement.GetProperty("failure")
+            .GetProperty("code").GetString());
+        Assert.DoesNotContain(privateSerial, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(privateApk, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(privateOutput, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistryCoversEveryWpfClickActionExactlyOnce()
     {
         var root = FindRepositoryRoot();
@@ -602,12 +676,25 @@ public sealed class OperatorActionRegistryTests
             "private static async Task<int> RunApkDiagnoseAsync",
             "private static async Task<int> RunApkDiagnoseJsonAsync");
 
-        Assert.Contains("questionable.file_manager.apk_diagnostic_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("questionable.file_manager.apk_diagnostic_result.v2", source, StringComparison.Ordinal);
         Assert.Contains("OperatorCommands.DiagnoseInspectedApp", method, StringComparison.Ordinal);
         Assert.Contains("succeeded = true", method, StringComparison.Ordinal);
         Assert.DoesNotContain("Console.Error", method, StringComparison.Ordinal);
         Assert.DoesNotContain("exception.Message", method, StringComparison.Ordinal);
         Assert.Single(Regex.Matches(method, "WriteJson\\(").Cast<Match>());
+
+        var sanitizer = SourceMethod(
+            source,
+            "private static object CreateSanitizedApkDiagnosticResult",
+            "private static (string Code, string Message, int ExitCode)");
+        Assert.Contains("captureKind", sanitizer, StringComparison.Ordinal);
+        Assert.Contains("sha256", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.Artifact", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.Installed", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.Runtime", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.Device", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.OutputDirectory", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("file.RelativePath", sanitizer, StringComparison.Ordinal);
 
         var failureMethod = SourceMethod(
             source,
@@ -624,6 +711,9 @@ public sealed class OperatorActionRegistryTests
             "AdbClient.ApkDiagnostics.cs"));
         Assert.Contains("DiagnosticLogLineCount = 400", core, StringComparison.Ordinal);
         Assert.Contains("MaximumDiagnosticProcessCount = 8", core, StringComparison.Ordinal);
+        Assert.Contains("--user\", \"current\", \"-U\"", core, StringComparison.Ordinal);
+        Assert.Contains("--uid={currentUserUid}", core, StringComparison.Ordinal);
+        Assert.Contains("MaximumDiagnosticTextFileBytes", core, StringComparison.Ordinal);
         Assert.DoesNotContain("screencap", core, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("bugreport", core, StringComparison.OrdinalIgnoreCase);
     }
@@ -639,7 +729,7 @@ public sealed class OperatorActionRegistryTests
             "Program.cs"));
 
         Assert.Contains(
-            "questionable.file_manager.inspected_deployment.v3",
+            "questionable.file_manager.inspected_deployment.v4",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -655,7 +745,7 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "questionable.file_manager.apk_diagnostic_result.v1",
+            "questionable.file_manager.apk_diagnostic_result.v2",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -671,7 +761,7 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "questionable.file_manager.app_runtime_observation.v2",
+            "questionable.file_manager.app_runtime_observation.v3",
             source,
             StringComparison.Ordinal);
         var preflight = Assert.Single(

@@ -124,6 +124,18 @@ user, component, activity, shell fragment, or raw-ADB input. These agent routes
 are advertised separately by `operator-actions --json`; none is a WPF parity
 claim or a general ADB or shell command.
 
+`operator-actions` agent-route entries are dynamically checked against the CLI
+classifier and `--help` output. An advertised route must be executable through
+that classifier or explicitly marked non-executable; registry text alone is
+not evidence of a dispatch path.
+
+QFM's `apk deploy` confirmation is intentionally narrower than app readiness:
+it means exact installed bytes plus resolved-component launch evidence. Its
+separate runtime fields can report an empty `pidof`, foreground/top-resumed
+facts, and system blockers without classifying application/OpenXR readiness.
+App or capsule owners retain property profiles, hotload fences, refresh
+request/effective readback, and readiness interpretation.
+
 `adb forwards --serial <quest-serial> --json` is a distinct agent-only,
 read-only route with the
 `questionable.file_manager.adb_forward_inventory_result.v1` envelope. It runs

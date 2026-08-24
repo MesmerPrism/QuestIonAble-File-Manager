@@ -38,8 +38,11 @@ readback, launcher resolution/export proof, fixed component dispatch, and final
 runtime observation. Installed bytes are checked after Package Manager to gate
 launch, then checked again before final runtime probes. The command
 returns one `questionable.file_manager.apk_deploy_result.v1` JSON envelope; its
-result carries `questionable.file_manager.apk_deployment.v1` install, launch,
-and runtime evidence plus the overall mutation receipt. Sanitized failure
+result carries `questionable.file_manager.apk_deployment.v2` install, launch,
+runtime evidence, and a structural QFM claim boundary plus the overall mutation
+receipt. `confirmed` applies only to QFM's exact-installed-byte and resolved
+component launch effect. It never means application readiness, OpenXR
+readiness, app effect, or wearer visibility. Sanitized failure
 envelopes conservatively report whether a device state change may have occurred.
 Callers still cannot provide package names, components, intents, extras, shell
 fragments, or generic ADB arguments.
@@ -86,7 +89,10 @@ sensor-lock UI is simultaneously visible. Consumers choose their own 2D or XR
 acceptance policy; File Manager does not infer OpenXR readiness. Identity,
 digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings, app effect, or wearer-visible state. Process IDs and
-legacy resumed text prove neither XR readiness nor an app effect.
+legacy resumed text prove neither XR readiness nor an app effect. `pidof`
+quality is explicit: only a clean zero-PID readback is reported as no process;
+unusable or nonzero `pidof` output is an observation limitation, not a negative
+readiness classification.
 
 `apk diagnose --serial <quest-serial> --file <path-to.apk> --output
 <new-folder>` is a read-only durable projection of that same exact-artifact
@@ -100,10 +106,10 @@ counts, or capture kinds.
 inspected-deployment, launch-result, deploy-result, diagnostic-result,
 launcher-export-proof, and runtime-observation contract revisions without
 selecting a device or performing a mutation. The consolidated
-`questionable.file_manager.inspected_deployment.v3` contract requires all of
+`questionable.file_manager.inspected_deployment.v4` contract requires all of
 the behavior above: immutable artifact admission, exact installed-byte
 readback, one JSON launch envelope on success or failure, the bounded current-
-Quest resolver-table fallback, and runtime observation v2. Provider resolvers
+Quest resolver-table fallback, and runtime observation v3. Provider resolvers
 should require these exact revisions before a run so an older hash-pinned CLI
 cannot silently reintroduce empty launch JSON or reject the known Quest VR
 launcher projection.
@@ -112,8 +118,8 @@ launcher projection.
 is the public synthetic corpus for host consumers. Its
 `questionable.file_manager.inspected_deployment_provider_conformance.v1`
 metadata fixes the four native schema IDs, the launch-envelope nullability
-invariant, transport adversarial cases, and the runtime-v2 proof boundary. It
-states explicitly that runtime observation v2 proves Android installed,
+invariant, transport adversarial cases, and the runtime-v3 proof boundary. It
+states explicitly that runtime observation v3 proves Android installed,
 foreground, top-resumed, and process dimensions only—not OpenXR readiness, app
 effect, or wearer visibility. A consumer owns its terminal envelope and final
 file behavior; this corpus does not replace a native File Manager schema.

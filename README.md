@@ -160,6 +160,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <qu
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk preflight --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <quest-serial> --file ./example.apk --output ./private-diagnostics --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk stop --serial <quest-serial> --package com.example.app --confirm-package-stop --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
@@ -241,14 +242,27 @@ generic command. See [APK preflight](docs/apk-preflight.md).
 `apk deploy` is the bounded agent-oriented fast path for a source-repository
 build output: it retains one immutable APK, installs and verifies its exact
 bytes, derives and launches the only proven exported launcher, then returns a
-final runtime observation. It does not accept package names, components,
-intents, shell fragments, or generic ADB arguments. See
+final Android runtime observation. Its confirmed mutation claim is limited to
+the QFM-owned install/launch effect; PID, foreground, top-resumed, and blocker
+facts are separate and never establish application or OpenXR readiness. It does
+not accept package names, components, intents, shell fragments, or generic ADB
+arguments. See
 [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md).
 `apk diagnose` is the corresponding read-only evidence path. It verifies the
 same exact installed bytes before writing one new no-overwrite local bundle of
-fixed package/runtime/device facts and bounded PID-scoped logs. Diagnostic
-bundles may contain private runtime data and must not be committed or published
-without review. See [APK diagnostic bundle](docs/apk-diagnostic-bundle.md).
+fixed package/runtime/device facts, a current-user-UID-scoped log window, and
+optional bounded PID corroboration. Its public JSON is sanitized; the local
+bundle may contain private runtime data and must not be committed or published
+without review. Logs are raw facts, not readiness or crash conclusions. See
+[APK diagnostic bundle](docs/apk-diagnostic-bundle.md).
+`apk stop` is the separate exact-package, current-user force-stop route. It
+confirms only package/process/activity quiescence and makes no readiness,
+OpenXR, app-effect, or wearer-visibility claim.
+
+Application and capsule owners retain profile-property snapshots, hotload
+fencing, OpenXR refresh request/effective readback, and readiness
+interpretation. A Work Environment wrapper owns immutable multi-step run-copy
+composition; QFM owns the receipt-pinned identity of its own inspected output.
 A Meta permission prompt can legitimately remain pending until wearer response.
 The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact

@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/QuestIonAbleFileManager.Core/QuestIonAbleFileManager.Core.csproj" />
+    <ProjectReference Include="../../src/QuestIonAbleFileManager.Cli/QuestIonAbleFileManager.Cli.csproj" />
   </ItemGroup>
 </Project>

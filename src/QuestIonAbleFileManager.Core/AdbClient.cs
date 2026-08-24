@@ -588,7 +588,22 @@ public sealed partial class AdbClient
             reportedPath,
             artifact,
             cancellationToken).ConfigureAwait(false);
-        return new InspectedApkDeploymentResult(install, launch, runtime);
+        var exactInstalledBytesConfirmed = runtime.Installed is { } finalInstalled &&
+            finalInstalled.Identity is not null &&
+            string.Equals(finalInstalled.Serial, serial, StringComparison.Ordinal) &&
+            string.Equals(finalInstalled.BaseApkSha256, artifact.Sha256, StringComparison.OrdinalIgnoreCase) &&
+            finalInstalled.BaseApkSizeBytes == artifact.SizeBytes;
+        return new InspectedApkDeploymentResult(install, launch, runtime)
+        {
+            ClaimBoundary = new QfmDeploymentClaimBoundary(
+                exactInstalledBytesConfirmed,
+                launch.ComponentObservedResumed,
+                runtime.ProcessObservationQuality,
+                runtime.IsForeground,
+                runtime.IsTopResumed,
+                runtime.BlockingSystemComponents,
+                exactInstalledBytesConfirmed && launch.ComponentObservedResumed)
+        };
     }
 
     private async Task<InspectedApkInstallResult> InstallAdmittedApkAsync(
@@ -811,11 +826,23 @@ public sealed partial class AdbClient
         var packageToken = artifact.Identity.PackageName + "/";
         var lines = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n');
         var runtimeFacts = ParseActivityRuntimeFacts(lines);
+        var processTokens = processes.StandardOutput.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries);
+        var pidofOutputUnusable = processes.Succeeded && processTokens.Any(
+            static value => !int.TryParse(value, out var pid) || pid <= 0);
         var pids = processes.Succeeded
-            ? processes.StandardOutput.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            ? processTokens
                 .Select(value => int.TryParse(value, out var pid) ? pid : -1)
                 .Where(static pid => pid > 0).Distinct().Order().ToArray()
             : [];
+        var processObservationQuality = !processes.Succeeded
+            ? RuntimeProcessObservationQuality.PidofUnavailable
+            : pidofOutputUnusable
+                ? RuntimeProcessObservationQuality.PidofOutputUnusable
+            : pids.Length == 0
+                ? RuntimeProcessObservationQuality.PidofReportedNoProcesses
+                : RuntimeProcessObservationQuality.PidofReportedProcesses;
         return new AppRuntimeObservation(
             artifact with { Path = reportedPath },
             installed,
@@ -827,7 +854,8 @@ public sealed partial class AdbClient
         {
             ForegroundComponents = runtimeFacts.ForegroundComponents,
             TopResumedComponents = runtimeFacts.TopResumedComponents,
-            BlockingSystemComponents = runtimeFacts.BlockingSystemComponents
+            BlockingSystemComponents = runtimeFacts.BlockingSystemComponents,
+            ProcessObservationQuality = processObservationQuality
         };
     }
 

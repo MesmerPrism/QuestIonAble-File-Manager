@@ -67,9 +67,13 @@ The fixed `apk observe` result reports installed byte identity, processes,
 foreground components, top-resumed components, and known blocking Quest system
 components. `apk diagnose` first proves those same installed bytes, then writes
 an atomic no-overwrite bundle containing that runtime result, fixed package and
-memory snapshots, four fixed build properties, and at most 400 recent lines for
-each of at most eight package-derived PIDs. It does not capture screenshots,
-bugreports, arbitrary tags, or unbounded logs. Project-specific interpretation
-and app-owned readiness markers still belong in the source repository's
-tracked agent instructions; this document is not authority to run arbitrary
-`adb shell` or unconstrained `logcat` commands.
+memory snapshots, four fixed build properties, and a fixed current-user UID
+log window derived from the inspected package. It may add at most 400 recent
+lines for each of at most eight package-derived PIDs as corroboration; empty
+or unusable `pidof` output is not an admission gate. Each captured text file is
+bounded to 256 KiB.
+It does not capture screenshots, bugreports, arbitrary tags, or unbounded logs.
+Project-specific interpretation, app-owned readiness markers, profile-property
+control, hotload fencing, and OpenXR refresh/effective-readback remain in the
+source repository's tracked instructions; this document is not authority to run
+arbitrary `adb shell` or unconstrained `logcat` commands.
