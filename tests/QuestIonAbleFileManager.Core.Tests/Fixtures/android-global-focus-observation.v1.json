@@ -1,0 +1,54 @@
+{
+  "schema": "questionable.file_manager.android_global_focus_observation_fixture.v1",
+  "purpose": "Synthetic fixed dumpsys window windows excerpts for host-only parser coverage.",
+  "cases": [
+    {
+      "id": "exact_target_focus",
+      "window_dump": "mCurrentFocus=Window{123 u0 com.example.app/.Main}\nmFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n",
+      "expected": {
+        "current_focus": { "state": "observed", "component": "com.example.app/com.example.app.Main" },
+        "focused_app": { "state": "observed", "component": "com.example.app/com.example.app.Main" }
+      }
+    },
+    {
+      "id": "focus_placeholder_takeover",
+      "window_dump": "mCurrentFocus=Window{123 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{456 u0 com.oculus.vrshell/.FocusPlaceholderActivity t7}\n",
+      "expected": {
+        "current_focus": { "state": "observed", "component": "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity" },
+        "focused_app": { "state": "observed", "component": "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity" }
+      }
+    },
+    {
+      "id": "multiple_and_stale_current_focus",
+      "window_dump": "mCurrentFocus=Window{123 u0 com.example.app/.Main}\nmCurrentFocus=Window{124 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\nmFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n",
+      "expected": {
+        "current_focus": { "state": "multiple", "component": null },
+        "focused_app": { "state": "observed", "component": "com.example.app/com.example.app.Main" }
+      }
+    },
+    {
+      "id": "malformed_focus_records",
+      "window_dump": "mCurrentFocus=Window{123 u0 missing-component}\nmFocusedApp=ActivityRecord{456 u0 also-missing t7}\n",
+      "expected": {
+        "current_focus": { "state": "malformed", "component": null },
+        "focused_app": { "state": "malformed", "component": null }
+      }
+    },
+    {
+      "id": "malformed_record_envelopes_with_components",
+      "window_dump": "mCurrentFocus=not-a-window-record com.example.app/.Main\nmFocusedApp=not-an-activity-record com.example.app/.Main\n",
+      "expected": {
+        "current_focus": { "state": "malformed", "component": null },
+        "focused_app": { "state": "malformed", "component": null }
+      }
+    },
+    {
+      "id": "absent_focus_records",
+      "window_dump": "Window manager state unavailable in this excerpt\n",
+      "expected": {
+        "current_focus": { "state": "absent", "component": null },
+        "focused_app": { "state": "absent", "component": null }
+      }
+    }
+  ]
+}

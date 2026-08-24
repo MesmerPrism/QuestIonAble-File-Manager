@@ -167,13 +167,17 @@ public sealed record AppRuntimeObservation(
     IReadOnlyList<int> ProcessIds)
 {
     public string ObservationContract { get; init; } =
-        "questionable.file_manager.app_runtime_observation.v3";
+        "questionable.file_manager.app_runtime_observation.v4";
 
     public IReadOnlyList<string> ForegroundComponents { get; init; } = [];
 
     public IReadOnlyList<string> TopResumedComponents { get; init; } = [];
 
     public IReadOnlyList<string> BlockingSystemComponents { get; init; } = [];
+
+    /// <summary>Fixed source for the resumed and top-resumed activity facts.</summary>
+    public string ActivityObservationSource { get; init; } =
+        "fixed serial-scoped dumpsys activity activities";
 
     /// <summary>
     /// QFM currently uses only the fixed serial-scoped <c>pidof</c> probe for
@@ -185,6 +189,25 @@ public sealed record AppRuntimeObservation(
 
     public string ProcessObservationSource { get; init; } =
         "fixed serial-scoped pidof derived from inspected package";
+
+    /// <summary>
+    /// The latest Android window-manager focus fact. This is deliberately
+    /// independent from resumed activity and process readback. It reports only
+    /// what the fixed window dump represented; it does not establish whether
+    /// the inspected app, a panel handoff, or an OpenXR session is ready.
+    /// </summary>
+    public AndroidGlobalFocusFact CurrentFocus { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mCurrentFocus");
+
+    /// <summary>
+    /// The latest Android activity-manager focused-app fact. This is a second,
+    /// separately parsed source rather than a projection of
+    /// <see cref="CurrentFocus"/> or of resumed activity readback.
+    /// </summary>
+    public AndroidGlobalFocusFact FocusedApp { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mFocusedApp");
 
     /// <summary>
     /// Android foreground, activity, and PID facts do not make QFM an
@@ -207,6 +230,46 @@ public enum RuntimeProcessObservationQuality
     PidofReportedNoProcesses,
     PidofOutputUnusable,
     PidofUnavailable
+}
+
+/// <summary>
+/// The outcome of parsing one fixed Android global-focus field. The state is
+/// retained even when a component is unavailable, so callers do not have to
+/// reinterpret missing, malformed, duplicate, or unavailable readback as
+/// application state.
+/// </summary>
+public enum AndroidGlobalFocusObservationState
+{
+    Observed,
+    Absent,
+    Malformed,
+    Multiple,
+    Unknown
+}
+
+/// <summary>
+/// One raw, bounded Android global-focus fact. A component is present only
+/// when exactly one strict same-line component token was read from the fixed
+/// field. The source never contains the raw window dump.
+/// </summary>
+public sealed record AndroidGlobalFocusFact(
+    AndroidGlobalFocusObservationState State,
+    string? Component,
+    string ObservationSource)
+{
+    /// <summary>
+    /// Exit evidence for the fixed source only. It is absent when no command
+    /// was attempted, and it never carries raw command output.
+    /// </summary>
+    public int? SourceExitCode { get; init; }
+
+    public static AndroidGlobalFocusFact Unknown(
+        string observationSource,
+        int? sourceExitCode = null) =>
+        new(AndroidGlobalFocusObservationState.Unknown, null, observationSource)
+        {
+            SourceExitCode = sourceExitCode
+        };
 }
 
 /// <summary>
@@ -288,6 +351,19 @@ public sealed record QfmDeploymentClaimBoundary(
     IReadOnlyList<string> BlockingSystemComponents,
     bool QfmOwnedInstallLaunchEffectConfirmed)
 {
+    /// <summary>
+    /// Raw Android focus evidence is copied into the deployment receipt so it
+    /// remains structurally distinct from QFM's install/launch confirmation.
+    /// It does not change the QFM-owned effect claim.
+    /// </summary>
+    public AndroidGlobalFocusFact CurrentFocus { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mCurrentFocus");
+
+    public AndroidGlobalFocusFact FocusedApp { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mFocusedApp");
+
     public string ApplicationReadiness { get; init; } = "unknown";
 
     public bool ApplicationReadinessAuthority { get; init; }

@@ -243,10 +243,13 @@ generic command. See [APK preflight](docs/apk-preflight.md).
 build output: it retains one immutable APK, installs and verifies its exact
 bytes, derives and launches the only proven exported launcher, then returns a
 final Android runtime observation. Its confirmed mutation claim is limited to
-the QFM-owned install/launch effect; PID, foreground, top-resumed, and blocker
-facts are separate and never establish application or OpenXR readiness. It does
-not accept package names, components, intents, shell fragments, or generic ADB
-arguments. See
+the QFM-owned install/launch effect; PID, foreground, top-resumed, blocker, and
+global Android `mCurrentFocus`/`mFocusedApp` facts are separate and never
+establish application, panel-handoff, or OpenXR readiness. Focus facts are
+strict, fixed read-only window-manager observations, so Meta's
+`FocusPlaceholderActivity` is reported as a system focus fact rather than an
+application failure verdict. It does not accept package names, components,
+intents, shell fragments, or generic ADB arguments. See
 [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md).
 `apk diagnose` is the corresponding read-only evidence path. It verifies the
 same exact installed bytes before writing one new no-overwrite local bundle of
@@ -260,9 +263,13 @@ confirms only package/process/activity quiescence and makes no readiness,
 OpenXR, app-effect, or wearer-visibility claim.
 
 Application and capsule owners retain profile-property snapshots, hotload
-fencing, OpenXR refresh request/effective readback, and readiness
-interpretation. A Work Environment wrapper owns immutable multi-step run-copy
-composition; QFM owns the receipt-pinned identity of its own inspected output.
+fencing, panel-paused state, advancing frame/submission evidence, the
+`>=750 ms` stability decision, app-owned handoff markers, OpenXR refresh
+request/effective readback, and readiness interpretation. A Work Environment
+wrapper owns immutable multi-step run-copy composition; QFM owns the
+receipt-pinned identity of its own inspected output. A future screenshot witness
+would require a separate attended, privacy-reviewed package; this route does
+not capture screenshots.
 A Meta permission prompt can legitimately remain pending until wearer response.
 The optional [Fleet installer handoff](docs/fleet-installer-handoff.md) is a
 distribution bootstrap, available in the WPF **Get Fleet** tab and the exact

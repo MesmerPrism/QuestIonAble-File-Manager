@@ -29,7 +29,9 @@ published as a partial bundle with its exact exit evidence.
 
 The v2 fixed capture set is:
 
-- `runtime.json`, using `app_runtime_observation.v3`;
+- `runtime.json`, using `app_runtime_observation.v4`, including the bounded
+  separately parsed `mCurrentFocus` and `mFocusedApp` facts from the fixed
+  window-manager readback;
 - `device.json`, containing only model, Android release, API level, and build
   fingerprint from four fixed properties;
 - `package.txt`, from the exact derived package's package snapshot;
@@ -58,11 +60,14 @@ serials, package names, UIDs, local paths, raw logs, or stderr. A complete
 bundle exits zero; a partial bundle exits three. Sanitized error envelopes
 contain no private capture data and always report `state_change_possible=false`.
 
-The bundle reports raw transport and Android facts only. It never infers an
-application/OpenXR readiness state, crash cause, refresh rate, wearer
+The bundle reports raw transport and Android facts only. Global Android focus
+does not establish target-app focus, panel handoff, or readiness: an app-side
+owner must interpret it with its retained panel-paused state, advancing
+focused/submitted-frame evidence, and its `>=750 ms` stability decision. QFM
+never infers application/OpenXR readiness, crash cause, refresh rate, wearer
 visibility, or application effect. App/capsule owners consume this evidence
-with their own reducer, property profile, hotload fence, and effective-runtime
-receipt.
+with their own reducer, property profile, hotload fence, OpenXR refresh
+request/effective readback, and effective-runtime receipt.
 
 Raw package snapshots and logs can contain private device or application data.
 Store bundles in an ignored/private location, and review or sanitize them before
