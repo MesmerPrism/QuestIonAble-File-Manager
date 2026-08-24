@@ -352,6 +352,9 @@ public sealed partial class AdbClient
         ApkPermissionObservationState State,
         IReadOnlyList<T> Values)
     {
+        public static PermissionObservationFact<T> Unknown { get; } =
+            new(ApkPermissionObservationState.Unknown, []);
+
         public static PermissionObservationFact<T> Unavailable { get; } =
             new(ApkPermissionObservationState.Unavailable, []);
     }
