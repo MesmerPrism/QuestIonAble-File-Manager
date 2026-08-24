@@ -2,10 +2,10 @@
   "schema": "questionable.file_manager.inspected_deployment_provider_conformance.v1",
   "purpose": "Public host-only synthetic corpus for consumers of the File Manager inspected-deployment provider.",
   "native_schema_ids": [
-    "questionable.file_manager.inspected_deployment.v4",
+    "questionable.file_manager.inspected_deployment.v5",
     "questionable.file_manager.apk_launch_result.v1",
     "questionable.file_manager.launcher_export_proof.v2",
-    "questionable.file_manager.app_runtime_observation.v4"
+    "questionable.file_manager.app_runtime_observation.v5"
   ],
   "native_launch_envelope_invariant": {
     "schema": "questionable.file_manager.apk_launch_result.v1",
@@ -22,34 +22,34 @@
       "failure": "non-null"
     }
   },
-  "runtime_observation_v4": {
-    "schema": "questionable.file_manager.app_runtime_observation.v4",
+  "runtime_observation_v5": {
+    "schema": "questionable.file_manager.app_runtime_observation.v5",
     "proves": [
       "android_installed_identity",
       "android_foreground",
-      "android_global_focus",
       "android_top_resumed",
-      "android_process"
+      "android_process",
+      "android_global_current_focus",
+      "android_global_focused_app"
     ],
     "does_not_prove": [
       "openxr_readiness",
       "app_effect",
-      "wearer_visibility"
+      "wearer_visibility",
+      "panel_paused_state",
+      "advancing_focused_or_submitted_frames",
+      "app_owned_handoff_marker"
     ],
     "process_observation_source": "pidof",
     "empty_pidof_meaning": "not-readiness-failure",
-    "global_focus_observation_sources": [
-      "mCurrentFocus",
-      "mFocusedApp"
-    ],
-    "global_focus_states": [
-      "observed",
-      "absent",
-      "malformed",
-      "multiple",
-      "unknown"
-    ],
-    "global_focus_interpretation": "raw-android-focus-only"
+    "global_focus": {
+      "source_command": "fixed serial-scoped dumpsys window windows",
+      "facts": ["mCurrentFocus", "mFocusedApp"],
+      "record_states": ["reported", "absent", "empty", "malformed", "unknown", "unavailable"],
+      "multiple_records": "retained-in-source-order",
+      "focus_placeholder_activity": "observed-system-component-not-universal-failure",
+      "contradictions": "reported-without-handoff-or-readiness-verdict"
+    }
   },
   "consumer_terminal_contract": {
     "owner": "consumer",

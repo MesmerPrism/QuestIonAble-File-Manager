@@ -27,11 +27,14 @@ bundle. A failed admission, UID proof, final installed-byte proof, cancellation,
 or atomic-output write publishes no bundle. A nonzero optional capture is still
 published as a partial bundle with its exact exit evidence.
 
-The v2 fixed capture set is:
+The v3 fixed capture set is:
 
-- `runtime.json`, using `app_runtime_observation.v4`, including the bounded
-  separately parsed `mCurrentFocus` and `mFocusedApp` facts from the fixed
-  window-manager readback;
+- `runtime.json`, using `app_runtime_observation.v5`, including the retained
+  legacy v4 single-field projections and separately
+  parsed bounded `mCurrentFocus` and `mFocusedApp` global-focus facts from the
+  fixed `dumpsys window windows` command. It retains field status, count,
+  structured components, and source metadata only; the raw WindowManager dump
+  is never included;
 - `device.json`, containing only model, Android release, API level, and build
   fingerprint from four fixed properties;
 - `package.txt`, from the exact derived package's package snapshot;
@@ -53,21 +56,23 @@ marker; it does not create an unbounded file. Command stderr is retained only
 inside the private payload and is never copied to the public JSON envelope.
 
 The JSON envelope schema is
-`questionable.file_manager.apk_diagnostic_result.v2`; the result contract is
-`questionable.file_manager.apk_diagnostic_bundle.v2`. Success JSON includes
-only sanitized capture metadata, hashes, and authority limitations—not
-serials, package names, UIDs, local paths, raw logs, or stderr. A complete
+`questionable.file_manager.apk_diagnostic_result.v3`; the result contract is
+`questionable.file_manager.apk_diagnostic_bundle.v3`. Success JSON includes a
+bounded sanitized global-focus projection plus capture metadata, hashes, and
+authority limitations—not serials, package names, UIDs, local paths, raw
+WindowManager dumps, raw logs, or stderr. A complete
 bundle exits zero; a partial bundle exits three. Sanitized error envelopes
 contain no private capture data and always report `state_change_possible=false`.
 
-The bundle reports raw transport and Android facts only. Global Android focus
-does not establish target-app focus, panel handoff, or readiness: an app-side
-owner must interpret it with its retained panel-paused state, advancing
-focused/submitted-frame evidence, and its `>=750 ms` stability decision. QFM
-never infers application/OpenXR readiness, crash cause, refresh rate, wearer
-visibility, or application effect. App/capsule owners consume this evidence
-with their own reducer, property profile, hotload fence, OpenXR refresh
-request/effective readback, and effective-runtime receipt.
+The bundle reports raw transport and Android facts only. It never infers an
+application/OpenXR readiness state, crash cause, refresh rate, wearer
+visibility, application effect, or handoff success. QFM reports Android focus
+observations only: the application owns panel-paused state, advancing focused
+and submitted frames, the >=750 ms stability window, app-owned handoff markers,
+OpenXR readiness, and interpretation. A FocusPlaceholderActivity component is
+reported as observed, not treated as a universal failure verdict. App/capsule
+owners consume this evidence with their own reducer, property profile, hotload
+fence, and effective-runtime receipt.
 
 Raw package snapshots and logs can contain private device or application data.
 Store bundles in an ignored/private location, and review or sanitize them before

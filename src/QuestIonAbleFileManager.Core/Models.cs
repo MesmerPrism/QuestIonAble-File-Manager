@@ -167,7 +167,7 @@ public sealed record AppRuntimeObservation(
     IReadOnlyList<int> ProcessIds)
 {
     public string ObservationContract { get; init; } =
-        "questionable.file_manager.app_runtime_observation.v4";
+        "questionable.file_manager.app_runtime_observation.v5";
 
     public IReadOnlyList<string> ForegroundComponents { get; init; } = [];
 
@@ -180,6 +180,30 @@ public sealed record AppRuntimeObservation(
         "fixed serial-scoped dumpsys activity activities";
 
     /// <summary>
+    /// Legacy v4 projection of <c>mCurrentFocus</c>. It is retained for
+    /// existing consumers; <see cref="GlobalFocus"/> is the richer bounded v5 fact set.
+    /// </summary>
+    public AndroidGlobalFocusFact CurrentFocus { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mCurrentFocus");
+
+    /// <summary>
+    /// Legacy v4 projection of <c>mFocusedApp</c>. It is retained for
+    /// existing consumers; <see cref="GlobalFocus"/> is the richer bounded v5 fact set.
+    /// </summary>
+    public AndroidGlobalFocusFact FocusedApp { get; init; } =
+        AndroidGlobalFocusFact.Unknown(
+            "fixed serial-scoped dumpsys window windows mFocusedApp");
+
+    /// <summary>
+    /// Fixed, separately parsed WindowManager focus facts. They remain Android
+    /// observations: QFM does not infer an app handoff, panel state, frame
+    /// stability, application readiness, or OpenXR readiness from them.
+    /// </summary>
+    public AndroidGlobalFocusObservation GlobalFocus { get; init; } =
+        AndroidGlobalFocusObservation.NotCollected;
+
+    /// <summary>
     /// QFM currently uses only the fixed serial-scoped <c>pidof</c> probe for
     /// this package dimension. A missing PID is an observation limitation, not
     /// an application or OpenXR failure.
@@ -189,25 +213,6 @@ public sealed record AppRuntimeObservation(
 
     public string ProcessObservationSource { get; init; } =
         "fixed serial-scoped pidof derived from inspected package";
-
-    /// <summary>
-    /// The latest Android window-manager focus fact. This is deliberately
-    /// independent from resumed activity and process readback. It reports only
-    /// what the fixed window dump represented; it does not establish whether
-    /// the inspected app, a panel handoff, or an OpenXR session is ready.
-    /// </summary>
-    public AndroidGlobalFocusFact CurrentFocus { get; init; } =
-        AndroidGlobalFocusFact.Unknown(
-            "fixed serial-scoped dumpsys window windows mCurrentFocus");
-
-    /// <summary>
-    /// The latest Android activity-manager focused-app fact. This is a second,
-    /// separately parsed source rather than a projection of
-    /// <see cref="CurrentFocus"/> or of resumed activity readback.
-    /// </summary>
-    public AndroidGlobalFocusFact FocusedApp { get; init; } =
-        AndroidGlobalFocusFact.Unknown(
-            "fixed serial-scoped dumpsys window windows mFocusedApp");
 
     /// <summary>
     /// Android foreground, activity, and PID facts do not make QFM an
@@ -233,10 +238,8 @@ public enum RuntimeProcessObservationQuality
 }
 
 /// <summary>
-/// The outcome of parsing one fixed Android global-focus field. The state is
-/// retained even when a component is unavailable, so callers do not have to
-/// reinterpret missing, malformed, duplicate, or unavailable readback as
-/// application state.
+/// Legacy v4 state for one fixed Android global-focus field. It remains public
+/// so existing v4 consumers retain their compiled and wire contract.
 /// </summary>
 public enum AndroidGlobalFocusObservationState
 {
@@ -248,19 +251,15 @@ public enum AndroidGlobalFocusObservationState
 }
 
 /// <summary>
-/// One raw, bounded Android global-focus fact. A component is present only
-/// when exactly one strict same-line component token was read from the fixed
-/// field. The source never contains the raw window dump.
+/// Legacy v4 single-component projection for one Android global-focus field.
+/// Runtime v5 retains it and adds <see cref="AndroidGlobalFocusObservation"/>
+/// for multiple, empty, malformed, unavailable, and bounded-source facts.
 /// </summary>
 public sealed record AndroidGlobalFocusFact(
     AndroidGlobalFocusObservationState State,
     string? Component,
     string ObservationSource)
 {
-    /// <summary>
-    /// Exit evidence for the fixed source only. It is absent when no command
-    /// was attempted, and it never carries raw command output.
-    /// </summary>
     public int? SourceExitCode { get; init; }
 
     public static AndroidGlobalFocusFact Unknown(
@@ -270,6 +269,78 @@ public sealed record AndroidGlobalFocusFact(
         {
             SourceExitCode = sourceExitCode
         };
+}
+
+/// <summary>
+/// The parse state of one fixed Android global-focus field. A nonzero source
+/// command is unavailable; a missing field is absent; a literal empty field is
+/// distinct from both; and malformed, unknown, or truncated field records
+/// remain explicitly visible rather than being converted into a foreground
+/// verdict.
+/// </summary>
+public enum AndroidGlobalFocusRecordState
+{
+    Reported,
+    Absent,
+    Empty,
+    Malformed,
+    Unknown,
+    Unavailable
+}
+
+/// <summary>
+/// A bounded parsed fact for either <c>mCurrentFocus</c> or
+/// <c>mFocusedApp</c>. Components are structured component names only: QFM
+/// never exposes the unbounded raw WindowManager dump. Multiple records and
+/// repeated components are retained in source order so a consumer can see an
+/// ambiguous or stale-looking observation without QFM deciding its meaning.
+/// </summary>
+public sealed record AndroidGlobalFocusRecord(
+    AndroidGlobalFocusRecordState State,
+    int RecordCount,
+    IReadOnlyList<string> Components)
+{
+    /// <summary>Fixed serial-scoped command and field that produced this fact.</summary>
+    public string ObservationSource { get; init; } = "not collected";
+
+    /// <summary>Count of explicitly empty focus records such as <c>null</c>.</summary>
+    public int EmptyRecordCount { get; init; }
+
+    /// <summary>Count of field records that did not contain one valid component.</summary>
+    public int MalformedRecordCount { get; init; }
+
+    /// <summary>Nonzero exit status when the fixed source command was unavailable.</summary>
+    public int? SourceExitCode { get; init; }
+
+    /// <summary>
+    /// True when the bounded parser stopped retaining further matching records
+    /// or source lines. A truncated fact is state
+    /// <see cref="AndroidGlobalFocusRecordState.Unknown"/> rather than silently using a partial focus set.
+    /// </summary>
+    public bool RecordsTruncated { get; init; }
+}
+
+/// <summary>
+/// Two independently named global Android focus facts sourced by the fixed
+/// serial-scoped WindowManager readback. Their agreement is not required and
+/// neither fact is an application-level handoff or readiness result.
+/// </summary>
+public sealed record AndroidGlobalFocusObservation(
+    AndroidGlobalFocusRecord CurrentFocus,
+    AndroidGlobalFocusRecord FocusedApp)
+{
+    public string ObservationContract { get; init; } =
+        "questionable.file_manager.android_global_focus_observation.v1";
+
+    public static AndroidGlobalFocusObservation NotCollected { get; } = new(
+        new AndroidGlobalFocusRecord(AndroidGlobalFocusRecordState.Unknown, 0, [])
+        {
+            ObservationSource = "not collected"
+        },
+        new AndroidGlobalFocusRecord(AndroidGlobalFocusRecordState.Unknown, 0, [])
+        {
+            ObservationSource = "not collected"
+        });
 }
 
 /// <summary>
@@ -324,7 +395,7 @@ public sealed record InspectedApkDeploymentResult(
     AppRuntimeObservation Runtime)
 {
     public string DeploymentContract { get; init; } =
-        "questionable.file_manager.apk_deployment.v2";
+        "questionable.file_manager.apk_deployment.v3";
 
     /// <summary>
     /// Separates QFM's install/launch readback from app-owned runtime truth.
@@ -352,9 +423,8 @@ public sealed record QfmDeploymentClaimBoundary(
     bool QfmOwnedInstallLaunchEffectConfirmed)
 {
     /// <summary>
-    /// Raw Android focus evidence is copied into the deployment receipt so it
-    /// remains structurally distinct from QFM's install/launch confirmation.
-    /// It does not change the QFM-owned effect claim.
+    /// Legacy v4 focus projection retained independently from QFM's install/launch
+    /// effect claim. The richer v5 facts remain in <see cref="InspectedApkDeploymentResult.Runtime"/>.
     /// </summary>
     public AndroidGlobalFocusFact CurrentFocus { get; init; } =
         AndroidGlobalFocusFact.Unknown(
@@ -407,7 +477,7 @@ public sealed record ApkDiagnosticBundleResult(
     IReadOnlyList<ApkDiagnosticBundleFile> Files)
 {
     public string DiagnosticContract { get; init; } =
-        "questionable.file_manager.apk_diagnostic_bundle.v2";
+        "questionable.file_manager.apk_diagnostic_bundle.v3";
 
     public int FailedCaptureCount => Files.Count(static file => !file.Succeeded);
 }

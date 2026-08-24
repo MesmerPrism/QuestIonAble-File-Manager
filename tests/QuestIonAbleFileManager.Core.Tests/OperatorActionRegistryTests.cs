@@ -676,7 +676,7 @@ public sealed class OperatorActionRegistryTests
             "private static async Task<int> RunApkDiagnoseAsync",
             "private static async Task<int> RunApkDiagnoseJsonAsync");
 
-        Assert.Contains("questionable.file_manager.apk_diagnostic_result.v2", source, StringComparison.Ordinal);
+        Assert.Contains("questionable.file_manager.apk_diagnostic_result.v3", source, StringComparison.Ordinal);
         Assert.Contains("OperatorCommands.DiagnoseInspectedApp", method, StringComparison.Ordinal);
         Assert.Contains("succeeded = true", method, StringComparison.Ordinal);
         Assert.DoesNotContain("Console.Error", method, StringComparison.Ordinal);
@@ -691,7 +691,9 @@ public sealed class OperatorActionRegistryTests
         Assert.Contains("sha256", sanitizer, StringComparison.Ordinal);
         Assert.DoesNotContain("result.Artifact", sanitizer, StringComparison.Ordinal);
         Assert.DoesNotContain("result.Installed", sanitizer, StringComparison.Ordinal);
-        Assert.DoesNotContain("result.Runtime", sanitizer, StringComparison.Ordinal);
+        Assert.Contains("result.Runtime.GlobalFocus", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("StandardOutput", sanitizer, StringComparison.Ordinal);
+        Assert.DoesNotContain("StandardError", sanitizer, StringComparison.Ordinal);
         Assert.DoesNotContain("result.Device", sanitizer, StringComparison.Ordinal);
         Assert.DoesNotContain("result.OutputDirectory", sanitizer, StringComparison.Ordinal);
         Assert.DoesNotContain("file.RelativePath", sanitizer, StringComparison.Ordinal);
@@ -714,6 +716,7 @@ public sealed class OperatorActionRegistryTests
         Assert.Contains("--user\", \"current\", \"-U\"", core, StringComparison.Ordinal);
         Assert.Contains("--uid={currentUserUid}", core, StringComparison.Ordinal);
         Assert.Contains("MaximumDiagnosticTextFileBytes", core, StringComparison.Ordinal);
+        Assert.Contains("runtime.GlobalFocus", core, StringComparison.Ordinal);
         Assert.DoesNotContain("screencap", core, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("bugreport", core, StringComparison.OrdinalIgnoreCase);
     }
@@ -729,7 +732,7 @@ public sealed class OperatorActionRegistryTests
             "Program.cs"));
 
         Assert.Contains(
-            "questionable.file_manager.inspected_deployment.v4",
+            "questionable.file_manager.inspected_deployment.v5",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -745,7 +748,7 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "questionable.file_manager.apk_diagnostic_result.v2",
+            "questionable.file_manager.apk_diagnostic_result.v3",
             source,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -761,7 +764,7 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "questionable.file_manager.app_runtime_observation.v4",
+            "questionable.file_manager.app_runtime_observation.v5",
             source,
             StringComparison.Ordinal);
         var preflight = Assert.Single(

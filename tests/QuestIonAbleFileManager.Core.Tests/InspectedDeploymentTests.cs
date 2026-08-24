@@ -1,5 +1,6 @@
 using QuestIonAbleFileManager.Core;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -665,7 +666,7 @@ public sealed class InspectedDeploymentTests
             var deployment = Assert.IsType<InspectedApkDeploymentResult>(
                 execution.InspectedApkDeploymentResult);
 
-            Assert.Equal("questionable.file_manager.apk_deployment.v2", deployment.DeploymentContract);
+            Assert.Equal("questionable.file_manager.apk_deployment.v3", deployment.DeploymentContract);
             Assert.Equal(Path.GetFullPath(apk), deployment.Install.Artifact.Path);
             Assert.Equal(Path.GetFullPath(apk), deployment.Launch.Artifact.Path);
             Assert.Equal(Path.GetFullPath(apk), deployment.Runtime.Artifact.Path);
@@ -679,6 +680,8 @@ public sealed class InspectedDeploymentTests
             Assert.Contains("QFM-owned effect confirmed", execution.MutationReceipt.ObservedState,
                 StringComparison.Ordinal);
             Assert.True(deployment.ClaimBoundary.QfmOwnedInstallLaunchEffectConfirmed);
+            Assert.Equal(deployment.Runtime.CurrentFocus, deployment.ClaimBoundary.CurrentFocus);
+            Assert.Equal(deployment.Runtime.FocusedApp, deployment.ClaimBoundary.FocusedApp);
             Assert.Equal("unknown", deployment.ClaimBoundary.ApplicationReadiness);
             Assert.False(deployment.ClaimBoundary.ApplicationReadinessAuthority);
             Assert.Equal("unknown", deployment.ClaimBoundary.OpenXrReadiness);
@@ -838,8 +841,8 @@ public sealed class InspectedDeploymentTests
                 "mResumedActivity: ActivityRecord{1 com.example.app/.Main}\n" +
                 "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
             windowFocus:
-                "mCurrentFocus=Window{123 u0 com.example.app/.Main}\n" +
-                "mFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n");
+                "mCurrentFocus=Window{a1 u0 com.example.app/.Main}\n" +
+                "mFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n");
         try
         {
             var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
@@ -849,14 +852,12 @@ public sealed class InspectedDeploymentTests
                 apk,
                 output);
 
-            Assert.Equal("questionable.file_manager.apk_diagnostic_bundle.v2", result.DiagnosticContract);
+            Assert.Equal("questionable.file_manager.apk_diagnostic_bundle.v3", result.DiagnosticContract);
             Assert.Equal(Path.GetFullPath(output), result.OutputDirectory);
             Assert.Equal(Path.GetFullPath(apk), result.Artifact.Path);
             Assert.Equal(result.Artifact.Sha256, result.Installed.BaseApkSha256);
             Assert.Equal(0, result.FailedCaptureCount);
             Assert.Equal(8, result.Files.Count);
-            Assert.Equal(AndroidGlobalFocusObservationState.Observed, result.Runtime.CurrentFocus.State);
-            Assert.Equal("com.example.app/com.example.app.Main", result.Runtime.CurrentFocus.Component);
             Assert.All(result.Files, file =>
             {
                 Assert.True(File.Exists(Path.Combine(output, file.RelativePath)));
@@ -865,26 +866,27 @@ public sealed class InspectedDeploymentTests
             using var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(
                 Path.Combine(output, "diagnostic-manifest.json")));
             Assert.Equal(
-                "questionable.file_manager.apk_diagnostic_manifest.v2",
+                "questionable.file_manager.apk_diagnostic_manifest.v3",
                 manifest.RootElement.GetProperty("schema").GetString());
+            Assert.Equal(
+                "reported",
+                manifest.RootElement.GetProperty("runtime")
+                    .GetProperty("globalFocus")
+                    .GetProperty("currentFocus")
+                    .GetProperty("state")
+                    .GetString());
             Assert.Equal(
                 "com.example.app",
                 manifest.RootElement.GetProperty("artifact")
                     .GetProperty("identity")
                     .GetProperty("packageName")
                     .GetString());
-            var manifestRuntime = manifest.RootElement.GetProperty("runtime");
-            Assert.Equal(
-                "fixed serial-scoped dumpsys window windows mCurrentFocus",
-                manifestRuntime.GetProperty("currentFocus")
-                    .GetProperty("observationSource")
-                    .GetString());
-            Assert.False(manifestRuntime.GetProperty("currentFocus")
-                .TryGetProperty("raw", out _));
             Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
                 ["-s", "QUEST123", "shell", "dumpsys", "meminfo", "com.example.app"]));
             Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
                 ["-s", "QUEST123", "shell", "pm", "list", "packages", "--user", "current", "-U", "com.example.app"]));
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"]));
             Assert.Equal(3, runner.Calls.Count(call =>
                 call.Arguments.Count == 10 &&
                 call.Arguments[2] == "shell" &&
@@ -1249,7 +1251,7 @@ public sealed class InspectedDeploymentTests
             Assert.Equal(
                 Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
                 installed.BaseApkSha256);
-            Assert.Equal(bytes.LongLength, Assert.Single(runner.StreamMaximumBytes));
+            Assert.Contains(runner.StreamMaximumBytes, maximum => maximum == bytes.LongLength);
 
             var stream = Assert.Single(runner.Calls, call =>
                 call.Arguments.Count == 6 && call.Arguments[2] == "exec-out");
@@ -1852,6 +1854,256 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Observe_ParsesBoundedGlobalFocusFixtureCorpusWithoutHandoffInterpretation()
+    {
+        var apk = await CreateApkAsync();
+        using var fixture = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures",
+            "android-global-focus-observation.v1.json")));
+        try
+        {
+            Assert.Equal(
+                "questionable.file_manager.android_global_focus_observation_fixture.v1",
+                fixture.RootElement.GetProperty("schema").GetString());
+            Assert.Equal(
+                "questionable.file_manager.app_runtime_observation.v5",
+                fixture.RootElement.GetProperty("runtime_contract").GetString());
+            Assert.Equal(
+                "questionable.file_manager.android_global_focus_observation.v1",
+                fixture.RootElement.GetProperty("global_focus_contract").GetString());
+            Assert.Equal(
+                ["shell", "dumpsys", "window", "windows"],
+                fixture.RootElement.GetProperty("source_command")
+                    .EnumerateArray().Select(static item => item.GetString()!).ToArray());
+
+            foreach (var testCase in fixture.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                var windowOutput = testCase.GetProperty("window").GetString()!;
+                if (testCase.TryGetProperty("unrelated_line_count", out var unrelatedLineCount))
+                {
+                    windowOutput = string.Join(
+                        "\n",
+                        Enumerable.Repeat("unrelated WindowManager record", unrelatedLineCount.GetInt32())) + "\n";
+                }
+                if (testCase.TryGetProperty("oversized_current_focus_value_characters", out var oversizedValue))
+                {
+                    windowOutput = "mCurrentFocus=" + new string('x', oversizedValue.GetInt32()) + "\n" +
+                                   "mFocusedApp=ActivityRecord{b2 u0 com.example.app/.Main t12}\n";
+                }
+                CommandResult? windowResult = testCase.TryGetProperty(
+                    "window_exit_code", out var windowExitCode)
+                    ? new CommandResult("", [], windowExitCode.GetInt32(), windowOutput,
+                        "synthetic global-focus command failure", TimeSpan.Zero)
+                    : null;
+                var runner = CreateDeploymentRunner(
+                    apk,
+                    activities: testCase.GetProperty("activities").GetString()!,
+                    windowFocus: windowOutput,
+                    windowFocusResult: windowResult,
+                    pidofOutput: testCase.GetProperty("pidof").GetString()!);
+
+                var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .ObserveInspectedAppAsync("QUEST123", apk);
+                var expected = testCase.GetProperty("expected");
+                var current = result.GlobalFocus.CurrentFocus;
+                var focusedApp = result.GlobalFocus.FocusedApp;
+
+                Assert.Equal("questionable.file_manager.app_runtime_observation.v5",
+                    result.ObservationContract);
+                Assert.Equal("questionable.file_manager.android_global_focus_observation.v1",
+                    result.GlobalFocus.ObservationContract);
+                Assert.Equal(
+                    Enum.Parse<AndroidGlobalFocusRecordState>(
+                        expected.GetProperty("current_focus_state").GetString()!),
+                    current.State);
+                Assert.Equal(expected.GetProperty("current_focus_record_count").GetInt32(),
+                    current.RecordCount);
+                Assert.Equal(
+                    expected.GetProperty("current_focus_components")
+                        .EnumerateArray().Select(static item => item.GetString()!).ToArray(),
+                    current.Components);
+                Assert.Equal(
+                    Enum.Parse<AndroidGlobalFocusRecordState>(
+                        expected.GetProperty("focused_app_state").GetString()!),
+                    focusedApp.State);
+                Assert.Equal(expected.GetProperty("focused_app_record_count").GetInt32(),
+                    focusedApp.RecordCount);
+                Assert.Equal(
+                    expected.GetProperty("focused_app_components")
+                        .EnumerateArray().Select(static item => item.GetString()!).ToArray(),
+                    focusedApp.Components);
+                Assert.Equal(
+                    Enum.Parse<RuntimeProcessObservationQuality>(
+                        expected.GetProperty("process_quality").GetString()!),
+                    result.ProcessObservationQuality);
+                Assert.Equal(
+                    "fixed serial-scoped dumpsys window windows mCurrentFocus",
+                    current.ObservationSource);
+                Assert.Equal(
+                    "fixed serial-scoped dumpsys window windows mFocusedApp",
+                    focusedApp.ObservationSource);
+                Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"]));
+
+                if (testCase.GetProperty("id").GetString() == "focus-placeholder-takeover")
+                {
+                    Assert.True(result.IsTopResumed);
+                    Assert.Contains(
+                        "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity",
+                        current.Components);
+                    Assert.Empty(result.BlockingSystemComponents);
+                }
+                if (testCase.GetProperty("id").GetString() == "exact-target-focus")
+                {
+                    Assert.Equal(AndroidGlobalFocusObservationState.Observed, result.CurrentFocus.State);
+                    Assert.Equal("com.example.app/com.example.app.Main", result.CurrentFocus.Component);
+                    Assert.Equal(AndroidGlobalFocusObservationState.Observed, result.FocusedApp.State);
+                    Assert.Equal("com.example.app/com.example.app.Main", result.FocusedApp.Component);
+                    Assert.Equal("fixed serial-scoped dumpsys activity activities",
+                        result.ActivityObservationSource);
+                }
+                if (testCase.GetProperty("id").GetString() == "multiple-current-focus-records")
+                {
+                    Assert.Equal(AndroidGlobalFocusObservationState.Multiple, result.CurrentFocus.State);
+                    Assert.Null(result.CurrentFocus.Component);
+                }
+                if (testCase.GetProperty("id").GetString() is
+                    "multiple-empty-current-focus-records" or
+                    "valid-and-malformed-current-focus-records")
+                {
+                    Assert.Equal(AndroidGlobalFocusObservationState.Multiple, result.CurrentFocus.State);
+                    Assert.Null(result.CurrentFocus.Component);
+                }
+                if (testCase.GetProperty("id").GetString() == "component-without-focus-envelope")
+                {
+                    Assert.Equal(AndroidGlobalFocusObservationState.Malformed, result.CurrentFocus.State);
+                    Assert.Null(result.CurrentFocus.Component);
+                }
+                if (testCase.GetProperty("id").GetString() == "target-focus-pidof-absent")
+                {
+                    Assert.False(result.ProcessAlive);
+                    Assert.Contains("com.example.app/com.example.app.Main", current.Components);
+                }
+                if (testCase.TryGetProperty("must_not_publish_raw_fragment", out var rawFragment))
+                {
+                    Assert.DoesNotContain(
+                        rawFragment.GetString()!,
+                        JsonSerializer.Serialize(result.GlobalFocus),
+                        StringComparison.Ordinal);
+                }
+                if (current.State == AndroidGlobalFocusRecordState.Unavailable)
+                {
+                    Assert.Equal(1, current.SourceExitCode);
+                    Assert.Equal(1, focusedApp.SourceExitCode);
+                }
+
+                Assert.Equal("unknown", result.ApplicationReadiness);
+                Assert.False(result.ApplicationReadinessAuthority);
+                Assert.Equal("unknown", result.OpenXrReadiness);
+                Assert.False(result.OpenXrReadinessAuthority);
+            }
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Observe_BoundsExcessGlobalFocusRecordsInsteadOfSelectingOne()
+    {
+        var apk = await CreateApkAsync();
+        var currentFocusLines = string.Join(
+            "\n",
+            Enumerable.Range(1, 9).Select(index =>
+                $"mCurrentFocus=Window{{{index} u0 com.example.app/.Main}}"));
+        var runner = CreateDeploymentRunner(
+            apk,
+            windowFocus: currentFocusLines + "\n" +
+                         "mFocusedApp=ActivityRecord{10 u0 com.example.app/.Main t1}\n");
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .ObserveInspectedAppAsync("QUEST123", apk);
+
+            var currentFocus = result.GlobalFocus.CurrentFocus;
+            Assert.Equal(AndroidGlobalFocusRecordState.Unknown, currentFocus.State);
+            Assert.Equal(9, currentFocus.RecordCount);
+            Assert.Equal(8, currentFocus.Components.Count);
+            Assert.True(currentFocus.RecordsTruncated);
+            Assert.Equal(AndroidGlobalFocusRecordState.Reported,
+                result.GlobalFocus.FocusedApp.State);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Observe_MapsFixedStreamLimitToUnknownGlobalFocusFacts()
+    {
+        var apk = await CreateApkAsync();
+        try
+        {
+            var runner = CreateDeploymentRunner(
+                apk,
+                commandFailure: (_, arguments) => arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"])
+                    ? new FleetTransferLimitException(1)
+                    : null);
+
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .ObserveInspectedAppAsync("QUEST123", apk);
+
+            Assert.Equal(AndroidGlobalFocusRecordState.Unknown, result.GlobalFocus.CurrentFocus.State);
+            Assert.Equal(AndroidGlobalFocusRecordState.Unknown, result.GlobalFocus.FocusedApp.State);
+            Assert.True(result.GlobalFocus.CurrentFocus.RecordsTruncated);
+            Assert.True(result.GlobalFocus.FocusedApp.RecordsTruncated);
+            Assert.Contains(runner.StreamMaximumBytes, maximum => maximum > 0);
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
+    public async Task Observe_PropagatesGlobalFocusTimeoutAndCancellation()
+    {
+        var apk = await CreateApkAsync();
+        try
+        {
+            var timeoutRunner = CreateDeploymentRunner(
+                apk,
+                commandFailure: (_, arguments) => arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"])
+                    ? new TimeoutException("synthetic focus timeout")
+                    : null);
+            await Assert.ThrowsAsync<TimeoutException>(() =>
+                new AdbClient("adb", timeoutRunner, new("aapt2", "apksigner"))
+                    .ObserveInspectedAppAsync("QUEST123", apk));
+
+            var cancellationRunner = CreateDeploymentRunner(
+                apk,
+                commandFailure: (_, arguments) => arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"])
+                    ? new OperationCanceledException("synthetic focus cancellation")
+                    : null);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                new AdbClient("adb", cancellationRunner, new("aapt2", "apksigner"))
+                    .ObserveInspectedAppAsync("QUEST123", apk));
+        }
+        finally
+        {
+            File.Delete(apk);
+        }
+    }
+
+    [Fact]
     public async Task Observe_UsesOnlyBoundedSerialScopedPackageCommands()
     {
         var apk = await CreateApkAsync();
@@ -1979,186 +2231,6 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
-    public async Task Observe_ParsesSyntheticGlobalFocusFixturesWithSeparateBoundedSources()
-    {
-        using var fixture = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(
-            FindRepositoryRoot(),
-            "tests",
-            "QuestIonAbleFileManager.Core.Tests",
-            "Fixtures",
-            "android-global-focus-observation.v1.json")));
-        Assert.Equal(
-            "questionable.file_manager.android_global_focus_observation_fixture.v1",
-            fixture.RootElement.GetProperty("schema").GetString());
-
-        foreach (var item in fixture.RootElement.GetProperty("cases").EnumerateArray())
-        {
-            var apk = await CreateApkAsync();
-            try
-            {
-                var runner = CreateDeploymentRunner(
-                    apk,
-                    windowFocus: item.GetProperty("window_dump").GetString()!);
-                var runtime = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
-                    .ObserveInspectedAppAsync("QUEST123", apk);
-                var expected = item.GetProperty("expected");
-
-                AssertGlobalFocus(
-                    expected.GetProperty("current_focus"),
-                    runtime.CurrentFocus);
-                AssertGlobalFocus(
-                    expected.GetProperty("focused_app"),
-                    runtime.FocusedApp);
-                Assert.Equal(
-                    "fixed serial-scoped dumpsys window windows mCurrentFocus",
-                    runtime.CurrentFocus.ObservationSource);
-                Assert.Equal(0, runtime.CurrentFocus.SourceExitCode);
-                Assert.Equal(
-                    "fixed serial-scoped dumpsys window windows mFocusedApp",
-                    runtime.FocusedApp.ObservationSource);
-                Assert.Equal(0, runtime.FocusedApp.SourceExitCode);
-            }
-            finally
-            {
-                File.Delete(apk);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task Observe_PreservesTargetFocusWithoutPidofAsRawContradictoryEvidence()
-    {
-        var apk = await CreateApkAsync();
-        var runner = CreateDeploymentRunner(
-            apk,
-            activities: "topResumedActivity=ActivityRecord{1 com.example.app/.Main}\n",
-            pidofOutput: "",
-            windowFocus:
-                "mCurrentFocus=Window{123 u0 com.example.app/.Main private-window-token}\n" +
-                "mFocusedApp=ActivityRecord{456 u0 com.example.app/.Main t7}\n");
-        try
-        {
-            var runtime = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
-                .ObserveInspectedAppAsync("QUEST123", apk);
-
-            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses,
-                runtime.ProcessObservationQuality);
-            Assert.Empty(runtime.ProcessIds);
-            Assert.True(runtime.IsTopResumed);
-            Assert.Equal(AndroidGlobalFocusObservationState.Observed, runtime.CurrentFocus.State);
-            Assert.Equal("com.example.app/com.example.app.Main", runtime.CurrentFocus.Component);
-            Assert.Equal(AndroidGlobalFocusObservationState.Observed, runtime.FocusedApp.State);
-            Assert.DoesNotContain("private-window-token", JsonSerializer.Serialize(runtime), StringComparison.Ordinal);
-            Assert.Equal("unknown", runtime.ApplicationReadiness);
-            Assert.False(runtime.ApplicationReadinessAuthority);
-        }
-        finally
-        {
-            File.Delete(apk);
-        }
-    }
-
-    [Fact]
-    public async Task Deploy_ReportsFocusPlaceholderTakeoverWithoutChangingTheQfmEffectClaim()
-    {
-        var apk = await CreateApkAsync();
-        var runner = CreateDeploymentRunner(
-            apk,
-            activities: "topResumedActivity=ActivityRecord{2 com.example.app/.Main}\n",
-            pidofOutput: "",
-            windowFocus:
-                "mCurrentFocus=Window{123 u0 com.oculus.vrshell/.FocusPlaceholderActivity}\n" +
-                "mFocusedApp=ActivityRecord{456 u0 com.oculus.vrshell/.FocusPlaceholderActivity t7}\n");
-        try
-        {
-            var execution = await new OperatorCommandExecutor(
-                new AdbClient("adb", runner, new("aapt2", "apksigner")))
-                .ExecuteAsync(OperatorCommands.DeployInspectedApp("QUEST123", apk));
-            var deployment = Assert.IsType<InspectedApkDeploymentResult>(execution.InspectedApkDeploymentResult);
-
-            Assert.Equal(OperatorMutationStage.Confirmed, execution.MutationReceipt!.Stage);
-            Assert.True(deployment.ClaimBoundary.QfmOwnedInstallLaunchEffectConfirmed);
-            Assert.True(deployment.Runtime.IsTopResumed);
-            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses,
-                deployment.Runtime.ProcessObservationQuality);
-            Assert.Equal(AndroidGlobalFocusObservationState.Observed,
-                deployment.ClaimBoundary.CurrentFocus.State);
-            Assert.Equal(
-                "com.oculus.vrshell/com.oculus.vrshell.FocusPlaceholderActivity",
-                deployment.ClaimBoundary.CurrentFocus.Component);
-            Assert.Equal(
-                "unknown",
-                deployment.ClaimBoundary.ApplicationReadiness);
-            Assert.False(deployment.ClaimBoundary.ApplicationReadinessAuthority);
-            Assert.Equal("unknown", deployment.ClaimBoundary.OpenXrReadiness);
-            Assert.False(deployment.ClaimBoundary.OpenXrReadinessAuthority);
-            Assert.DoesNotContain("failure", execution.MutationReceipt.ObservedState,
-                StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            File.Delete(apk);
-        }
-    }
-
-    [Fact]
-    public async Task Observe_PreservesUnknownGlobalFocusWhenTheFixedProbeFails()
-    {
-        var apk = await CreateApkAsync();
-        var runner = CreateDeploymentRunner(
-            apk,
-            windowFocusResult: new CommandResult("", [], 1, "", "window dump unavailable", TimeSpan.Zero));
-        try
-        {
-            var runtime = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
-                .ObserveInspectedAppAsync("QUEST123", apk);
-
-            Assert.Equal(AndroidGlobalFocusObservationState.Unknown, runtime.CurrentFocus.State);
-            Assert.Null(runtime.CurrentFocus.Component);
-            Assert.Equal(1, runtime.CurrentFocus.SourceExitCode);
-            Assert.Equal(AndroidGlobalFocusObservationState.Unknown, runtime.FocusedApp.State);
-            Assert.Null(runtime.FocusedApp.Component);
-            Assert.Equal(1, runtime.FocusedApp.SourceExitCode);
-        }
-        finally
-        {
-            File.Delete(apk);
-        }
-    }
-
-    [Fact]
-    public async Task Observe_TreatsFixedWindowDumpStderrAsUnknownWithoutLeakingIt()
-    {
-        var apk = await CreateApkAsync();
-        var runner = CreateDeploymentRunner(
-            apk,
-            windowFocusResult: new CommandResult(
-                "",
-                [],
-                0,
-                "mCurrentFocus=Window{123 u0 com.example.app/.Main}\n",
-                "private-window-stderr-token",
-                TimeSpan.Zero));
-        try
-        {
-            var runtime = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
-                .ObserveInspectedAppAsync("QUEST123", apk);
-
-            Assert.Equal(AndroidGlobalFocusObservationState.Unknown, runtime.CurrentFocus.State);
-            Assert.Null(runtime.CurrentFocus.Component);
-            Assert.Equal(0, runtime.CurrentFocus.SourceExitCode);
-            Assert.Equal(AndroidGlobalFocusObservationState.Unknown, runtime.FocusedApp.State);
-            Assert.Null(runtime.FocusedApp.Component);
-            Assert.DoesNotContain("private-window-stderr-token", JsonSerializer.Serialize(runtime),
-                StringComparison.Ordinal);
-        }
-        finally
-        {
-            File.Delete(apk);
-        }
-    }
-
-    [Fact]
     public async Task Observe_PropagatesAmbiguousPackageReadbackAndSkipsRuntimeProbes()
     {
         var apk = await CreateApkAsync();
@@ -2222,6 +2294,8 @@ public sealed class InspectedDeploymentTests
         string? splitName = null,
         string? launcherOutput = null,
         string activities = "",
+        string windowFocus = "",
+        CommandResult? windowFocusResult = null,
         bool launcherExported = true,
         bool probeInstallImmutability = false,
         string? packageDump = null,
@@ -2229,8 +2303,6 @@ public sealed class InspectedDeploymentTests
         string activityName = ".Main",
         CommandResult? launchStartResult = null,
         string? pidofOutput = null,
-        string? windowFocus = null,
-        CommandResult? windowFocusResult = null,
         CommandResult? packageUidResult = null,
         CommandResult? uidLogcatResult = null,
         Func<string, IReadOnlyList<string>, Exception?>? commandFailure = null,
@@ -2304,7 +2376,7 @@ public sealed class InspectedDeploymentTests
             }
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "window", "windows"]))
             {
-                return windowFocusResult ?? Success(windowFocus ?? "");
+                return windowFocusResult ?? Success(windowFocus);
             }
             if (arguments.Contains("pidof"))
             {
@@ -2403,20 +2475,6 @@ public sealed class InspectedDeploymentTests
     private static CommandResult SilentFailure() =>
         new("", [], 1, "", "", TimeSpan.Zero);
 
-    private static void AssertGlobalFocus(JsonElement expected, AndroidGlobalFocusFact actual)
-    {
-        Assert.Equal(
-            expected.GetProperty("state").GetString(),
-            actual.State.ToString().ToLowerInvariant());
-        var component = expected.GetProperty("component");
-        if (component.ValueKind == JsonValueKind.Null)
-        {
-            Assert.Null(actual.Component);
-            return;
-        }
-        Assert.Equal(component.GetString(), actual.Component);
-    }
-
     private sealed class FakeRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler,
         byte[]? streamedBytes = null,
@@ -2462,7 +2520,10 @@ public sealed class InspectedDeploymentTests
                 FileName = fileName,
                 Arguments = arguments.ToArray()
             };
-            var bytes = streamedBytes ?? [0x50, 0x4b, 0x03, 0x04];
+            var bytes = arguments.SequenceEqual(
+                    ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"])
+                ? Encoding.UTF8.GetBytes(result.StandardOutput)
+                : streamedBytes ?? [0x50, 0x4b, 0x03, 0x04];
             if (result.Succeeded)
             {
                 if (bytes.LongLength > maximumBytes)
