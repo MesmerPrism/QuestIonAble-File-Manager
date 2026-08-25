@@ -112,10 +112,15 @@ public sealed class ApkPermissionObservationTests
             "questionable.file_manager.apk_permission_observation.v1",
             exported.RootElement.GetProperty("contracts")
                 .GetProperty("apkPermissionObservation").GetString());
-        Assert.Contains(
-            exported.RootElement.GetProperty("agentRoutes").EnumerateArray()
-                .Select(route => route.GetProperty("id").GetString()),
-            id => string.Equals(id, "apk_permission_observation", StringComparison.Ordinal));
+        var route = Assert.Single(
+            exported.RootElement.GetProperty("agentRoutes").EnumerateArray(),
+            route => string.Equals(
+                route.GetProperty("Id").GetString(),
+                "apk_permission_observation",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "apk permissions --serial --package --json",
+            route.GetProperty("CliRoute").GetString());
     }
 
     private static ApkPermissionObservationState ParseState(
