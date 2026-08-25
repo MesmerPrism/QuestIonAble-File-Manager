@@ -163,6 +163,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <q
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk stop --serial <quest-serial> --package com.example.app --confirm-package-stop --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk permissions --serial <quest-serial> --package <package> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
 dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
 dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
@@ -261,6 +262,13 @@ without review. Logs are raw facts, not readiness or crash conclusions. See
 `apk stop` is the separate exact-package, current-user force-stop route. It
 confirms only package/process/activity quiescence and makes no readiness,
 OpenXR, app-effect, or wearer-visibility claim.
+`apk permissions` is a separate agent-only, read-only contract for one exact
+serial and installed package. It returns only bounded manifest-declared
+permissions, Android-reported effective install/runtime grant bits, and
+Android-reported app-op modes, each with explicit reported/absent/empty/
+malformed/unknown/unavailable/package-not-installed state. It never grants or
+revokes a permission, accepts no raw command input, and does not decide
+admission, readiness, feature use, or wearer visibility.
 
 Application and capsule owners retain profile-property snapshots, hotload
 fencing, OpenXR refresh request/effective readback, and readiness

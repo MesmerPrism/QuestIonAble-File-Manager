@@ -33,6 +33,13 @@ and the choice of build output.
    confirms only the absence of that package's PIDs, foreground components,
    and top-resumed components. Quiescence does not prove app readiness, OpenXR
    readiness, a semantic app effect, or wearer visibility.
+9. Use `apk permissions --serial <serial> --package <package> --json` only
+   when a consumer needs bounded raw pre-launch permission facts for one exact
+   installed package. The v1 result separately reports manifest declarations,
+   reported effective install/runtime grant bits, and reported app-op modes.
+   It preserves reported, absent, empty, malformed, unknown, unavailable, and
+   package-not-installed source states. QFM neither grants/revokes permissions
+   nor decides whether those facts admit a launch or feature.
 
 For a release candidate, add the source repository's release gates before
 step 4. The QFM device boundary stays the same; validation depth is selected by
@@ -45,6 +52,18 @@ read-only APK/device preflight, exact install, composite deploy, resolved
 launch, runtime observation, package export, bounded power/performance control,
 Wi-Fi ADB setup, and the documented Kiosk/Fleet integrations. Prefer those
 routes over reimplementing their ADB sequences.
+
+## Permission observation boundary
+
+`apk permissions` is separate from runtime observation v5. It is a fixed,
+bounded, exact-serial/package read-only observation: after package presence is
+confirmed, QFM reads only package-manager permission sections and the fixed
+app-ops query for that same package. The result binds the QFM provider ID,
+provider version, public source repository, and portable CLI distribution
+class. It emits structured names, grant bits, and app-op modes—not raw command
+output. A missing runtime record may describe a non-runtime, signature, or
+otherwise unreported permission; QFM does not infer grantability or policy
+from it. App owners and workflow consumers own any admission decision.
 
 ## Information that remains project-owned
 

@@ -57,6 +57,12 @@ public static class OperatorActionRegistry
                 true,
                 "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility"),
             new(
+                "apk_permission_observation",
+                "apk permissions --serial --package --json",
+                "OperatorCommands.ObservePackagePermissions",
+                false,
+                "bounded fixed package-manager and app-ops readback for one exact installed package: manifest declarations, reported effective grant bits, and reported app-op modes only; it does not mutate permission state or decide admission, application readiness, OpenXR readiness, feature use, or wearer visibility"),
+            new(
                 "adb_forward_inventory",
                 "adb forwards --serial --json",
                 "OperatorCommands.InventoryAdbForwards",

@@ -129,6 +129,15 @@ classifier and `--help` output. An advertised route must be executable through
 that classifier or explicitly marked non-executable; registry text alone is
 not evidence of a dispatch path.
 
+`apk permissions --serial <quest-serial> --package <package> --json` is another
+agent-only route. It uses one strict immutable Core command and only bounded
+fixed package-manager/app-ops observation sources for that exact installed
+package. Its `questionable.file_manager.apk_permission_observation.v1`
+envelope preserves source states rather than interpreting permission or app-op
+facts as launch admission, runtime readiness, feature use, or wearer-visible
+success. It has no WPF action, no confirmation flag, and no grant/revoke,
+generic-shell, arbitrary-command, or policy surface.
+
 QFM's `apk deploy` confirmation is intentionally narrower than app readiness:
 it means exact installed bytes plus resolved-component launch evidence. Its
 separate runtime fields can report an empty `pidof`, foreground/top-resumed
