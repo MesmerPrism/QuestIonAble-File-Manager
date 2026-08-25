@@ -5,6 +5,7 @@ using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
+[Collection("Console output")]
 public sealed class ApkPermissionObservationTests
 {
     private const string Serial = "QUEST123";
