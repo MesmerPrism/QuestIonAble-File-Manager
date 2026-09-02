@@ -124,6 +124,16 @@ user, component, activity, shell fragment, or raw-ADB input. These agent routes
 are advertised separately by `operator-actions --json`; none is a WPF parity
 claim or a general ADB or shell command.
 
+`apk uninstall --serial <quest-serial> --file <apk>
+--confirm-exact-apk-uninstall --json` is another AgentRoutes-only mutation. It
+derives the package from an immutable APK, requires full single-base installed
+identity equality, and removes the app and may delete app-private data. It has
+no caller package/user/flags, WPF action, or Local API projection. Confirmation
+is limited to fixed unscoped and current-user package absence; separate workflow
+evidence must prove an absent pre-run snapshot and ownership of the install.
+Post-dispatch uncertainty emits `pending` or `cleanupUnknown`, never a false
+restoration claim or automatic retry.
+
 `operator-actions` agent-route entries are dynamically checked against the CLI
 classifier and `--help` output. An advertised route must be executable through
 that classifier or explicitly marked non-executable; registry text alone is

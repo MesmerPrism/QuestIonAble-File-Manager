@@ -68,6 +68,12 @@ documented.
 - Initial file management is limited to list, pull, and explicit push.
 - Do not add delete, uninstall, clear-data, or ADB server lifecycle operations
   without a separate safety and UX review.
+- The reviewed uninstall exception is only the AgentRoutes-only exact inspected-
+  APK cleanup command. It derives the package from immutable artifact bytes,
+  requires full single-base installed identity equality and one ready serial,
+  warns that app-private data may be deleted, and confirms only fixed package
+  absence. A separate workflow must bind an absent pre-run snapshot and
+  run-owned install; never retry a pending or cleanup-unknown result.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes

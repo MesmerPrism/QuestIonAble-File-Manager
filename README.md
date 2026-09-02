@@ -161,6 +161,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk preflight --serial <
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <quest-serial> --file ./example.apk --output ./private-diagnostics --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk stop --serial <quest-serial> --package com.example.app --confirm-package-stop --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk uninstall --serial <quest-serial> --file ./example.apk --confirm-exact-apk-uninstall --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk permissions --serial <quest-serial> --package <package> --json
@@ -262,6 +263,13 @@ without review. Logs are raw facts, not readiness or crash conclusions. See
 `apk stop` is the separate exact-package, current-user force-stop route. It
 confirms only package/process/activity quiescence and makes no readiness,
 OpenXR, app-effect, or wearer-visibility claim.
+`apk uninstall` is a destructive agent-only cleanup route. It immutably
+inspects one local APK, requires the installed single-base package to match its
+package/version/signer/bytes exactly, rechecks one ready serial, dispatches one
+derived-package uninstall, and confirms only fixed unscoped and current-user
+package absence. It removes the app and may delete app-private data. Use it only
+when a separately bound pre-run snapshot was absent and the current run owns
+the install; exact-byte equality alone is not cleanup authority.
 `apk permissions` is a separate agent-only, read-only contract for one exact
 serial and installed package. It returns only bounded manifest-declared
 permissions, Android-reported effective install/runtime grant bits, and

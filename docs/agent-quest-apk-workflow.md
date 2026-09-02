@@ -40,6 +40,12 @@ and the choice of build output.
    It preserves reported, absent, empty, malformed, unknown, unavailable, and
    package-not-installed source states. QFM neither grants/revokes permissions
    nor decides whether those facts admit a launch or feature.
+10. When the pre-run snapshot proved the package absent and this run owns the
+    exact install, restore that absence with `apk uninstall --serial <serial>
+    --file <apk> --confirm-exact-apk-uninstall --json`. This deletes the app and
+    may delete app-private data. Exact installed-byte equality is necessary but
+    is not ownership authority. A confirmed receipt proves package absence only;
+    `pending` or `cleanupUnknown` requires owner adjudication and must not replay.
 
 For a release candidate, add the source repository's release gates before
 step 4. The QFM device boundary stays the same; validation depth is selected by

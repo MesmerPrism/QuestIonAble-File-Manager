@@ -116,6 +116,18 @@ manifest is complete. The fixed capture set is documented in
 `apk-diagnostic-bundle.md`; callers cannot supply commands, tags, PIDs, log
 counts, or capture kinds.
 
+`apk uninstall --serial <quest-serial> --file <path-to.apk>
+--confirm-exact-apk-uninstall --json` is the destructive cleanup companion. It
+holds an immutable inspected APK, requires one exact matching installed base
+APK and one ready serial immediately before its single derived-package
+uninstall, and then reads both fixed unscoped and current-user package absence.
+Installed split sets, absent/different/unverified preimages, arbitrary package
+or user arguments, retries, and WPF/Local API projections are rejected. The
+route removes the app and may delete app-private data. `confirmed` proves only
+the two reported absence scopes; a caller needs a separately authenticated
+absent pre-run snapshot and run-owned install before calling that restoration.
+Dispatch or readback ambiguity remains `cleanupUnknown` in the mutation receipt.
+
 `operator-actions --json` advertises the preflight-result,
 inspected-deployment, launch-result, deploy-result, diagnostic-result,
 launcher-export-proof, and runtime-observation contract revisions without

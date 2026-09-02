@@ -175,6 +175,7 @@ internal static class OperatorMutations
         OperatorCommandKind.DeployInspectedApp or
         OperatorCommandKind.LaunchInspectedApp or
         OperatorCommandKind.StopPackage or
+        OperatorCommandKind.UninstallExactApk or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
         OperatorCommandKind.DisconnectWifiAdb or
@@ -200,6 +201,8 @@ internal static class OperatorMutations
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
         OperatorCommandKind.StopPackage =>
             $"exact package {command.PackageName} quiescent for the current Android user on {command.Serial}",
+        OperatorCommandKind.UninstallExactApk =>
+            $"exact inspected APK absent after destructive cleanup on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
         OperatorCommandKind.EnableWifiAdb => $"Wi-Fi ADB enabled on port {command.WifiPort}",
         OperatorCommandKind.DisconnectWifiAdb => "Wi-Fi ADB endpoint disconnected from this PC",
@@ -245,6 +248,7 @@ internal static class OperatorMutations
             OperatorCommandKind.DeployInspectedApp => ObserveInspectedDeployment(command, result),
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
             OperatorCommandKind.StopPackage => ObservePackageStop(result),
+            OperatorCommandKind.UninstallExactApk => ObserveExactApkUninstall(result),
             OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
                     "Android Package Manager completed the install and the installed-package inventory was read back."),
@@ -281,6 +285,32 @@ internal static class OperatorMutations
                 $"foreground-count={quiescence.ForegroundComponents.Count}; " +
                 $"top-resumed-count={quiescence.TopResumedComponents.Count}.",
                 "The force-stop was sent, but exact-package quiescence has not appeared in Android readback.");
+    }
+
+    private static OperatorMutationObservation ObserveExactApkUninstall(
+        OperatorExecutionResult result)
+    {
+        var uninstall = result.ExactApkUninstallResult ??
+            throw new InvalidOperationException("Exact inspected-APK uninstall returned no structured readback.");
+        if (uninstall.Confirmed)
+        {
+            return OperatorMutationObservation.Confirmed(
+                $"{uninstall.Artifact.Identity.PackageName} is absent in both fixed package-manager readback scopes.");
+        }
+
+        if (uninstall.Disposition == ExactApkUninstallDisposition.StillPresent)
+        {
+            return OperatorMutationObservation.Pending(
+                uninstall.Detail,
+                "The uninstall command completed, but the exact package remains present in at least one fixed readback scope.");
+        }
+
+        return new OperatorMutationObservation(
+            OperatorMutationStage.CleanupUnknown,
+            "The uninstall may have changed headset state, but exact package absence was not confirmed.",
+            uninstall.Detail,
+            HeadsetReadback: uninstall.UnscopedPackageAbsent is not null ||
+                             uninstall.CurrentUserPackageAbsent is not null);
     }
 
     private static OperatorMutationObservation ObserveInspectedDeployment(

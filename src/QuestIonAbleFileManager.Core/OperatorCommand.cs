@@ -40,6 +40,7 @@ public enum OperatorCommandKind
     DeployInspectedApp,
     DiagnoseInspectedApp,
     StopPackage,
+    UninstallExactApk,
     InventoryAdbForwards,
     ObservePackagePermissions
 }
@@ -642,6 +643,51 @@ public static class OperatorCommands
         }
 
         return StopPackage(arguments[3], arguments[5], operatorConfirmed: true);
+    }
+
+    public static OperatorCommand UninstallExactApk(
+        string serial,
+        string apkPath,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(
+            operatorConfirmed,
+            "Exact inspected-APK uninstall, including app-private data removal");
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.UninstallExactApk,
+            [
+                "apk", "uninstall", "--serial", serial, "--file", fullApkPath,
+                "--confirm-exact-apk-uninstall"
+            ],
+            serial: serial,
+            localPath: fullApkPath,
+            operatorConfirmed: true);
+    }
+
+    public static OperatorCommand ParseExactApkUninstallCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 8 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "uninstall", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--file", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--confirm-exact-apk-uninstall", "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk uninstall --serial <quest-serial> --file <apk> " +
+                "--confirm-exact-apk-uninstall --json.",
+                nameof(arguments));
+        }
+
+        return UninstallExactApk(arguments[3], arguments[5], operatorConfirmed: true);
     }
 
     public static OperatorCommand InventoryAdbForwards(string serial)
@@ -1251,6 +1297,7 @@ public sealed record OperatorExecutionResult(
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
     PackageStopResult? PackageStopResult = null,
+    ExactApkUninstallResult? ExactApkUninstallResult = null,
     AdbForwardInventoryResult? AdbForwardInventoryResult = null,
     ApkPermissionObservation? ApkPermissionObservation = null);
 
@@ -1504,6 +1551,19 @@ public sealed class OperatorCommandExecutor
                     PackageStopResult: await client.StopPackageAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.UninstallExactApk:
+                if (!command.OperatorConfirmed)
+                {
+                    throw new InvalidOperationException(
+                        "Exact inspected-APK uninstall requires explicit confirmation.");
+                }
+                return new OperatorExecutionResult(
+                    command,
+                    ExactApkUninstallResult: await client.UninstallExactApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InventoryAdbForwards:
@@ -1783,6 +1843,8 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
+        OperatorCommandKind.UninstallExactApk =>
+            "Removing one exact inspected APK and its app-private data…",
         OperatorCommandKind.InventoryAdbForwards => "Reading the shared ADB forwarding inventory…",
         OperatorCommandKind.ObservePackagePermissions => "Reading bounded exact-package permission facts…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",

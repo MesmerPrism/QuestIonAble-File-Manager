@@ -448,6 +448,38 @@ public sealed record PackageStopResult(
     CommandResult StopCommand,
     PackageStopQuiescence Quiescence);
 
+public enum ExactApkUninstallDisposition
+{
+    ConfirmedAbsent,
+    StillPresent,
+    CleanupUnknown
+}
+
+/// <summary>
+/// Cleanup-only result for removing one immutably inspected APK after its full
+/// installed identity matched. This proves only the reported package-absence
+/// scopes; it does not prove that the caller owned the install or that any
+/// broader device snapshot was restored.
+/// </summary>
+public sealed record ExactApkUninstallResult(
+    string Serial,
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity InstalledBeforeDispatch,
+    CommandResult? UninstallCommand,
+    ExactApkUninstallDisposition Disposition,
+    bool? UnscopedPackageAbsent,
+    bool? CurrentUserPackageAbsent,
+    string Detail)
+{
+    public bool Confirmed =>
+        Disposition == ExactApkUninstallDisposition.ConfirmedAbsent &&
+        UnscopedPackageAbsent == true &&
+        CurrentUserPackageAbsent == true;
+
+    public string ObservedAbsenceScope { get; init; } =
+        "fixed unscoped and --user current package-manager path/list readback";
+}
+
 /// <summary>
 /// One forwarding record observed in a shared ADB daemon inventory. It is not
 /// a transport, device-health, ownership, reachability, or application-state
