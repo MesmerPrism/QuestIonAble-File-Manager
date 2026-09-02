@@ -86,6 +86,16 @@ documented.
   confirm only exact manifest readback while the same APK bytes remain installed.
   They are AgentRoutes-only: no WPF, Local API, arbitrary shell,
   generic property, retry, or overwrite surface is admitted.
+- The reviewed agent-only `apk launch-diagnose` exception accepts only one
+  immutable inspected standalone APK with no installed splits, one exact ready
+  serial, and one new private
+  output directory. It derives package, launcher, a non-shared current-user UID,
+  and UID-bound package/process PIDs;
+  arms one fixed UID-filtered logcat process at a device-time fence before one
+  resolved launch; then stops and drains that process tree. It exposes no
+  caller package, UID, PID, tag, duration, command, shell, or raw-ADB surface,
+  and it does not appear in WPF or the local API. Capture or readback ambiguity
+  remains `outcome_unknown`; never retry the launch automatically.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes
@@ -338,6 +348,7 @@ questionable-file-manager.exe apk inspect --file <path-to.apk> --json
 questionable-file-manager.exe apk export --serial <quest-serial> --package <package> --output <local-apk>
 questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
 questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk launch-diagnose --serial <quest-serial> --file <path-to.apk> --output <new-private-folder> --json
 questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
 questionable-file-manager.exe apk properties observe --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --output <new-snapshot.json> --json
 questionable-file-manager.exe apk properties clear --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json

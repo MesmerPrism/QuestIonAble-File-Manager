@@ -51,6 +51,12 @@ public static class OperatorActionRegistry
                 false,
                 "exact installed base-APK bytes plus a fixed bounded private diagnostic bundle, including structured global mCurrentFocus/mFocusedApp observations only; it does not prove handoff or readiness"),
             new(
+                "apk_launch_diagnose",
+                "apk launch-diagnose --serial --file --output --json",
+                "OperatorCommands.LaunchDiagnoseInspectedApp",
+                false,
+                "one exact resolved launch under a pre-armed, device-time-fenced, bounded current-UID log capture; app semantics remain external"),
+            new(
                 "apk_stop",
                 "apk stop --serial --package --confirm-package-stop --json",
                 "OperatorCommands.StopPackage",

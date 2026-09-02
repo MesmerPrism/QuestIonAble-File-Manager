@@ -39,6 +39,7 @@ public enum OperatorCommandKind
     PreflightInspectedApp,
     DeployInspectedApp,
     DiagnoseInspectedApp,
+    LaunchDiagnoseInspectedApp,
     StopPackage,
     UninstallExactApk,
     InventoryAdbForwards,
@@ -744,6 +745,49 @@ public static class OperatorCommands
         return value;
     }
 
+    public static OperatorCommand LaunchDiagnoseInspectedApp(
+        string serial,
+        string apkPath,
+        string outputDirectory)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        var fullOutputDirectory = Path.GetFullPath(outputDirectory);
+        return new OperatorCommand(
+            OperatorCommandKind.LaunchDiagnoseInspectedApp,
+            [
+                "apk", "launch-diagnose", "--serial", serial, "--file", fullApkPath,
+                "--output", fullOutputDirectory
+            ],
+            serial: serial,
+            localPath: fullApkPath,
+            outputPath: fullOutputDirectory);
+    }
+
+    public static OperatorCommand ParseLaunchDiagnosticCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 9 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "launch-diagnose", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--file", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--output", arguments.Count > 7 ? arguments[7] : string.Empty,
+                    "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk launch-diagnose --serial <quest-serial> --file <file.apk> --output <new-folder> --json.",
+                nameof(arguments));
+        }
+        return LaunchDiagnoseInspectedApp(arguments[3], arguments[5], arguments[7]);
+    }
+
     public static OperatorCommand StopPackage(
         string serial,
         string packageName,
@@ -1435,6 +1479,7 @@ public sealed record OperatorExecutionResult(
     ApkPreflightResult? ApkPreflightResult = null,
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
+    ApkLaunchDiagnosticBundleResult? ApkLaunchDiagnosticBundleResult = null,
     PackageStopResult? PackageStopResult = null,
     ExactApkUninstallResult? ExactApkUninstallResult = null,
     AdbForwardInventoryResult? AdbForwardInventoryResult = null,
@@ -1485,13 +1530,14 @@ public sealed class OperatorCommandExecutor
         }
 
         var tracker = new OperatorMutationTracker(command, progress);
-        var reportsDispatch = command.Kind is
+        var propertyReportsDispatch = command.Kind is
             OperatorCommandKind.ClearExactApkProperties or
             OperatorCommandKind.RestoreExactApkProperties;
+        var launchReportsDispatch = command.Kind == OperatorCommandKind.LaunchDiagnoseInspectedApp;
+        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch;
         if (!reportsDispatch)
         {
-            tracker.Sent();
-            tracker.Pending();
+            tracker.Dispatched();
         }
         try
         {
@@ -1500,9 +1546,10 @@ public sealed class OperatorCommandExecutor
                 cancellationToken,
                 progress,
                 privateInput,
-                reportsDispatch ? tracker : null).ConfigureAwait(false);
+                propertyReportsDispatch ? tracker : null,
+                launchReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
             var observation = OperatorMutations.Observe(command, result);
-            var receipt = reportsDispatch
+            var receipt = propertyReportsDispatch
                 ? tracker.CompleteAfterReportedDispatch(observation)
                 : tracker.Complete(observation);
             return result with { MutationReceipt = receipt };
@@ -1530,7 +1577,8 @@ public sealed class OperatorCommandExecutor
         CancellationToken cancellationToken,
         IProgress<OperatorProgress>? progress,
         Stream? privateInput,
-        OperatorMutationTracker? propertyMutationTracker = null)
+        OperatorMutationTracker? propertyMutationTracker = null,
+        Action? deviceDispatchObserved = null)
     {
         progress?.Report(new OperatorProgress(
             command.Kind.ToString(),
@@ -1701,6 +1749,16 @@ public sealed class OperatorCommandExecutor
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         Require(command.OutputPath, nameof(command.OutputPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.LaunchDiagnoseInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkLaunchDiagnosticBundleResult: await client.LaunchAndCaptureInspectedApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.OutputPath, nameof(command.OutputPath)),
+                        deviceDispatchObserved,
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.StopPackage:
@@ -2067,6 +2125,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.PreflightInspectedApp => "Checking APK and selected Quest readiness…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
+        OperatorCommandKind.LaunchDiagnoseInspectedApp => "Launching one inspected APK under bounded UID diagnostics…",
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
         OperatorCommandKind.UninstallExactApk =>
             "Removing one exact inspected APK and its app-private data…",

@@ -26,6 +26,11 @@ and the choice of build output.
    checks against the same artifact. When a durable evidence pack is useful,
    use `apk diagnose --serial <serial> --file <apk> --output <new-folder>
    --json` instead.
+   When the app's first post-launch UID log bytes must be retained, use the
+   separate exact-once `apk launch-diagnose --serial <serial> --file <apk>
+   --output <new-folder> --json` route. It is state-changing, never retries,
+   and returns only QFM transport/effect evidence; the app owner still reduces
+   readiness and semantics.
 8. When one exact installed package must be made quiescent after a QFM-managed
    run, use `apk stop --serial <serial> --package <package>
    --confirm-package-stop --json`. It is a fixed current-user request, not a

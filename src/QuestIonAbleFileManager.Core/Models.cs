@@ -595,6 +595,55 @@ public sealed record ApkDiagnosticBundleResult(
     public int FailedCaptureCount => Files.Count(static file => !file.Succeeded);
 }
 
+public enum ApkLaunchDiagnosticDisposition
+{
+    Completed,
+    LaunchPending,
+    RejectedBeforeDispatch,
+    OutcomeUnknown
+}
+
+public sealed record ApkLaunchDiagnosticAttempt(
+    bool DispatchAttempted,
+    ResolvedAppLaunchResult? Launch,
+    string? FailureCode,
+    string? FailureMessage,
+    IReadOnlyList<int> CurrentPackageProcessIds);
+
+public sealed record ApkLaunchDiagnosticCapture(
+    string RelativePath,
+    long SizeBytes,
+    string Sha256,
+    bool PostActionWindowElapsed,
+    bool OutputLimitReached,
+    bool CaptureExitedEarly,
+    bool ProcessTreeCleanupSucceeded,
+    int CaptureExitCode);
+
+public sealed record ApkLaunchDiagnosticBundleResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity InstalledBeforeDispatch,
+    InstalledApkIdentity? InstalledAfterCapture,
+    int CurrentUserUidBeforeDispatch,
+    int? CurrentUserUidAfterCapture,
+    string HostLaunchFence,
+    DateTimeOffset HostFenceCreatedAt,
+    string DeviceLaunchFenceEpoch,
+    ApkLaunchDiagnosticAttempt Attempt,
+    ApkLaunchDiagnosticCapture Capture,
+    ApkLaunchDiagnosticDisposition Disposition,
+    string DispositionDetail,
+    string OutputDirectory,
+    string ManifestRelativePath,
+    long ManifestSizeBytes,
+    string ManifestSha256,
+    bool PublishedAtRequestedPath,
+    string BundleLeafName)
+{
+    public string DiagnosticContract { get; init; } =
+        "questionable.file_manager.apk_launch_diagnostic_bundle.v1";
+}
+
 public sealed record ApkExportResult(
     string PackageName,
     string SourcePath,
