@@ -11,9 +11,17 @@ internal static class CliApplication
     private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v3";
+    private const string ApkLaunchDiagnosticResultSchema =
+        "questionable.file_manager.apk_launch_diagnostic_result.v1";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
+    private const string ExactApkUninstallResultSchema =
+        "questionable.file_manager.apk_uninstall_result.v1";
     private const string ApkPermissionObservationSchema =
         "questionable.file_manager.apk_permission_observation.v1";
+    private const string ApkPropertyObservationSchema =
+        "questionable.file_manager.apk_property_observation_result.v1";
+    private const string ApkPropertyMutationSchema =
+        "questionable.file_manager.apk_property_mutation_result.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v5";
@@ -46,8 +54,18 @@ internal static class CliApplication
             ["apk", "deploy", "--serial", "QUEST123", "--file", "example.apk", "--json"], true),
         new("apk_diagnose", "apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json",
             ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
+        new("apk_launch_diagnose", "apk launch-diagnose --serial <serial> --file <file.apk> --output <new-folder> --json",
+            ["apk", "launch-diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
         new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
             ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
+        new("apk_exact_uninstall", "apk uninstall --serial <serial> --file <file.apk> --confirm-exact-apk-uninstall --json",
+            ["apk", "uninstall", "--serial", "QUEST123", "--file", "example.apk", "--confirm-exact-apk-uninstall", "--json"], true),
+        new("apk_property_observe", "apk properties observe --serial <serial> --file <apk> --manifest <manifest> --output <new-snapshot> --json",
+            ["apk", "properties", "observe", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--output", "snapshot.json", "--json"], true),
+        new("apk_property_clear", "apk properties clear --serial <serial> --file <apk> --manifest <manifest> --snapshot <snapshot> --confirm-exact-apk-property-mutation --json",
+            ["apk", "properties", "clear", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--snapshot", "snapshot.json", "--confirm-exact-apk-property-mutation", "--json"], true),
+        new("apk_property_restore", "apk properties restore --serial <serial> --file <apk> --manifest <manifest> --snapshot <snapshot> --confirm-exact-apk-property-mutation --json",
+            ["apk", "properties", "restore", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--snapshot", "snapshot.json", "--confirm-exact-apk-property-mutation", "--json"], true),
         new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
             ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app", "--json"], true),
         new("adb_forward_inventory", "adb forwards --serial <serial> --json",
@@ -68,9 +86,26 @@ internal static class CliApplication
 
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
         {
+            if (string.Equals(arguments[1], "properties", StringComparison.OrdinalIgnoreCase) &&
+                arguments.Count > 2)
+            {
+                routeId = arguments[2].ToLowerInvariant() switch
+                {
+                    "observe" => "apk_property_observe",
+                    "clear" => "apk_property_clear",
+                    "restore" => "apk_property_restore",
+                    _ => string.Empty
+                };
+                return routeId.Length > 0;
+            }
             if (string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
             {
                 routeId = "apk_stop";
+                return true;
+            }
+            if (string.Equals(arguments[1], "uninstall", StringComparison.OrdinalIgnoreCase))
+            {
+                routeId = "apk_exact_uninstall";
                 return true;
             }
             if (HasFlag(arguments.ToArray(), "--json"))
@@ -80,6 +115,7 @@ internal static class CliApplication
                     "preflight" => "apk_preflight",
                     "deploy" => "apk_deploy",
                     "diagnose" => "apk_diagnose",
+                    "launch-diagnose" => "apk_launch_diagnose",
                     "permissions" => "apk_permission_observation",
                     _ => string.Empty
                 };
@@ -125,7 +161,11 @@ internal static class CliApplication
                         apkPreflightResult = ApkPreflightResultSchema,
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
+                        apkLaunchDiagnosticResult = ApkLaunchDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
+                        exactApkUninstallResult = ExactApkUninstallResultSchema,
+                        apkPropertyObservationResult = ApkPropertyObservationSchema,
+                        apkPropertyMutationResult = ApkPropertyMutationSchema,
                         apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
@@ -195,7 +235,11 @@ internal static class CliApplication
         "apk_preflight" => RunApkPreflightJsonAsync(arguments),
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
+        "apk_launch_diagnose" => RunApkLaunchDiagnoseJsonAsync(arguments),
         "apk_stop" => RunApkStopJsonAsync(arguments),
+        "apk_exact_uninstall" => RunExactApkUninstallJsonAsync(arguments),
+        "apk_property_observe" or "apk_property_clear" or "apk_property_restore" =>
+            RunExactApkPropertiesJsonAsync(arguments),
         "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
@@ -1213,6 +1257,9 @@ internal static class CliApplication
             case "diagnose":
                 return await RunApkDiagnoseAsync(executor, arguments);
 
+            case "launch-diagnose":
+                return await RunApkLaunchDiagnoseAsync(executor, arguments);
+
             case "launch":
                 return await RunApkLaunchAsync(executor, arguments);
 
@@ -1483,6 +1530,125 @@ internal static class CliApplication
         {
             return WriteApkDiagnosticFailure(exception);
         }
+    }
+
+    private static async Task<int> RunApkLaunchDiagnoseAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseLaunchDiagnosticCliArguments(arguments);
+            var execution = await executor.ExecuteAsync(command).ConfigureAwait(false);
+            var result = execution.ApkLaunchDiagnosticBundleResult ??
+                throw new InvalidOperationException("APK launch diagnostics returned no result.");
+            var completed = result.Disposition == ApkLaunchDiagnosticDisposition.Completed;
+            WriteJson(new
+            {
+                schema = ApkLaunchDiagnosticResultSchema,
+                succeeded = completed,
+                complete = completed,
+                mutation = execution.MutationReceipt,
+                result = CreateSanitizedApkLaunchDiagnosticResult(result),
+                failure = completed ? null : new
+                {
+                    code = result.Disposition.ToString().ToLowerInvariant(),
+                    message = result.DispositionDetail,
+                    state_change_possible = result.Attempt.DispatchAttempted
+                }
+            });
+            return result.Disposition switch
+            {
+                ApkLaunchDiagnosticDisposition.Completed => 0,
+                ApkLaunchDiagnosticDisposition.RejectedBeforeDispatch => 2,
+                ApkLaunchDiagnosticDisposition.LaunchPending => 3,
+                _ => 4
+            };
+        }
+        catch (Exception exception)
+        {
+            return WriteApkLaunchDiagnosticFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkLaunchDiagnoseJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkLaunchDiagnoseAsync(
+                new OperatorCommandExecutor(client),
+                arguments).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkLaunchDiagnosticFailure(exception);
+        }
+    }
+
+    private static object CreateSanitizedApkLaunchDiagnosticResult(
+        ApkLaunchDiagnosticBundleResult result) => new
+    {
+        diagnosticContract = result.DiagnosticContract,
+        disposition = result.Disposition,
+        dispositionDetail = result.DispositionDetail,
+        dispatchAttempted = result.Attempt.DispatchAttempted,
+        componentObservedResumed = result.Attempt.Launch?.ComponentObservedResumed,
+        currentPackageProcessCount = result.Attempt.CurrentPackageProcessIds.Count,
+        capture = new
+        {
+            result.Capture.SizeBytes,
+            result.Capture.Sha256,
+            result.Capture.PostActionWindowElapsed,
+            result.Capture.OutputLimitReached,
+            result.Capture.CaptureExitedEarly,
+            result.Capture.ProcessTreeCleanupSucceeded,
+            result.Capture.CaptureExitCode
+        },
+        manifest = new
+        {
+            result.ManifestSizeBytes,
+            result.ManifestSha256,
+            result.PublishedAtRequestedPath,
+            result.BundleLeafName
+        },
+        limitations = new
+        {
+            applicationReadiness = "unknown",
+            openXrReadiness = "unknown",
+            wearerVisibility = "unknown",
+            appSemanticAcceptance = false,
+            screenshotOrRecording = false,
+            retryPerformed = false
+        }
+    };
+
+    internal static int WriteApkLaunchDiagnosticFailure(Exception exception)
+    {
+        var dispatched = exception as OperatorMutationExecutionException;
+        var inputRejected = exception is ArgumentException or FileNotFoundException or
+            DirectoryNotFoundException or SplitPackageException;
+        WriteJson(new
+        {
+            schema = ApkLaunchDiagnosticResultSchema,
+            succeeded = false,
+            complete = false,
+            mutation = dispatched?.MutationReceipt,
+            result = (object?)null,
+            failure = new
+            {
+                code = dispatched is not null
+                    ? "launch_pending"
+                    : inputRejected ? "input_rejected" : "launch_diagnostic_failed",
+                message = dispatched is not null
+                    ? "Launch was dispatched, but exact terminal evidence is unavailable."
+                    : inputRejected
+                        ? "The exact launch-diagnostic input or new output directory was rejected."
+                        : "Launch diagnostics failed without exposing private artifact, target, or log details.",
+                state_change_possible = dispatched is not null || !inputRejected
+            }
+        });
+        return dispatched is not null ? 3 : inputRejected ? 2 : 1;
     }
 
     private static int WriteApkDiagnosticFailure(Exception exception)
@@ -1967,6 +2133,214 @@ internal static class CliApplication
             "stop_failed",
             "The exact-package stop did not complete before dispatch was proven.",
             false,
+            1);
+    }
+
+    private static async Task<int> RunExactApkUninstallJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseExactApkUninstallCliArguments(arguments);
+            var client = AdbClient.CreateDefault();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var result = execution.ExactApkUninstallResult ??
+                throw new InvalidOperationException("Exact inspected-APK uninstall returned no result.");
+            var confirmed = result.Confirmed;
+            WriteJson(new
+            {
+                schema = ExactApkUninstallResultSchema,
+                succeeded = confirmed,
+                mutation = execution.MutationReceipt,
+                result,
+                failure = confirmed
+                    ? (object?)null
+                    : new
+                    {
+                        code = result.Disposition == ExactApkUninstallDisposition.StillPresent
+                            ? "still_present"
+                            : "cleanup_unknown",
+                        message = result.Detail,
+                        state_change_possible = true
+                    }
+            });
+            return confirmed ? 0 : 1;
+        }
+        catch (Exception exception)
+        {
+            var failure = ClassifyExactApkUninstallFailure(exception);
+            WriteJson(new
+            {
+                schema = ExactApkUninstallResultSchema,
+                succeeded = false,
+                mutation = (object?)null,
+                result = (object?)null,
+                failure = new
+                {
+                    code = failure.Code,
+                    message = failure.Message,
+                    state_change_possible = false
+                }
+            });
+            return failure.ExitCode;
+        }
+    }
+
+    private static (string Code, string Message, int ExitCode)
+        ClassifyExactApkUninstallFailure(Exception exception)
+    {
+        if (exception is ArgumentException or FileNotFoundException or IOException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The exact inspected-APK uninstall input was rejected before device dispatch.",
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "preimage_absent",
+                "The inspected package was absent before dispatch; uninstall is not an idempotent success.",
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_dispatch_proof_rejected",
+                "Exact serial, immutable artifact, or installed-identity proof was rejected before dispatch.",
+                1);
+        }
+        if (exception is AdbCommandException or OperationCanceledException or TimeoutException)
+        {
+            return (
+                "pre_dispatch_read_failed",
+                "A fixed serial-scoped uninstall precondition readback did not complete before dispatch.",
+                1);
+        }
+        return (
+            "pre_dispatch_failed",
+            "Exact inspected-APK uninstall did not reach device dispatch.",
+            1);
+    }
+
+    private static async Task<int> RunExactApkPropertiesJsonAsync(string[] arguments)
+    {
+        var mutationRequested = arguments.Length > 2 &&
+            (string.Equals(arguments[2], "clear", StringComparison.Ordinal) ||
+             string.Equals(arguments[2], "restore", StringComparison.Ordinal));
+        try
+        {
+            var command = OperatorCommands.ParseExactApkPropertyCliArguments(arguments);
+            var execution = await new OperatorCommandExecutor(AdbClient.CreateDefault())
+                .ExecuteAsync(command);
+            if (command.Kind == OperatorCommandKind.ObserveExactApkProperties)
+            {
+                var observation = execution.ApkPropertyObservationResult ??
+                    throw new InvalidOperationException("Exact APK property observation returned no result.");
+                WriteJson(new
+                {
+                    schema = ApkPropertyObservationSchema,
+                    succeeded = true,
+                    result = observation,
+                    failure = (object?)null
+                });
+                return 0;
+            }
+
+            var mutation = execution.ApkPropertyMutationResult ??
+                throw new InvalidOperationException("Exact APK property mutation returned no result.");
+            WriteJson(new
+            {
+                schema = ApkPropertyMutationSchema,
+                succeeded = mutation.Confirmed,
+                mutation = execution.MutationReceipt,
+                result = mutation,
+                failure = mutation.Confirmed
+                    ? (object?)null
+                    : new
+                    {
+                        code = mutation.Disposition == ApkPropertyMutationDisposition.StillDivergent
+                            ? "property_readback_divergent"
+                            : "cleanup_unknown",
+                        message = mutation.Detail,
+                        state_change_possible = true
+                    }
+            });
+            return mutation.Confirmed ? 0 : 1;
+        }
+        catch (Exception exception)
+        {
+            return WriteExactApkPropertyFailureJson(exception, mutationRequested);
+        }
+    }
+
+    internal static int WriteExactApkPropertyFailureJson(
+        Exception exception,
+        bool mutationRequested)
+    {
+        var dispatched = exception as OperatorMutationExecutionException;
+        var failure = dispatched is null
+            ? ClassifyExactApkPropertyFailure(exception, mutationRequested)
+            : (
+                Code: "cleanup_unknown",
+                Message: "Property mutation was dispatched, but exact terminal readback is unavailable.",
+                StateChangePossible: true,
+                ExitCode: 1);
+        WriteJson(new
+        {
+            schema = mutationRequested ? ApkPropertyMutationSchema : ApkPropertyObservationSchema,
+            succeeded = false,
+            mutation = dispatched?.MutationReceipt,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = failure.StateChangePossible
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, bool StateChangePossible, int ExitCode)
+        ClassifyExactApkPropertyFailure(Exception exception, bool mutationRequested)
+    {
+        if (exception is ArgumentException or FileNotFoundException or DirectoryNotFoundException or
+            IOException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The exact APK property input was rejected before device mutation.",
+                false,
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "exact_apk_absent",
+                "The exact inspected APK is not installed on the selected serial.",
+                false,
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_dispatch_proof_rejected",
+                "Exact serial, APK, closed manifest, snapshot, or installed-byte proof was rejected.",
+                false,
+                1);
+        }
+        if (exception is AdbCommandException or OperationCanceledException or TimeoutException)
+        {
+            return (
+                "pre_dispatch_read_failed",
+                "A fixed serial-scoped APK property precondition readback did not complete.",
+                false,
+                1);
+        }
+        return (
+            "property_operation_failed",
+            "The exact APK property operation did not complete.",
+            mutationRequested,
             1);
     }
 
@@ -2640,8 +3014,17 @@ internal static class CliApplication
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk launch-diagnose --serial <serial> --file <file.apk> --output <new-folder> --json
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk properties observe --serial <serial> --file <file.apk> --manifest <manifest.json> --output <new-snapshot.json> --json
+              questionable-file-manager apk properties clear --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
+              questionable-file-manager apk properties restore --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
               questionable-file-manager apk permissions --serial <serial> --package <package> --json
+              questionable-file-manager apk preflight --serial <serial> --file <file.apk> --json
+              questionable-file-manager apk deploy --serial <serial> --file <file.apk> --json
+              questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json
+              questionable-file-manager apk stop --serial <serial> --package <package> --confirm-package-stop --json
+              questionable-file-manager apk uninstall --serial <serial> --file <file.apk> --confirm-exact-apk-uninstall --json
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
               questionable-file-manager apk install-bundle-many --serial <host:port> --serial <host:port> --folder <apk-folder> [options]
@@ -2736,6 +3119,11 @@ internal static class CliApplication
             input; serials, endpoints, and pairing codes are never command-line arguments
             or output. Replacement and revocation require their explicit confirmation flags.
             Split APK packages are refused by the single-APK export command.
+            Exact inspected-APK uninstall is a destructive agent-only cleanup
+            primitive: it removes the app and may delete its app-private data.
+            It is valid only when a separate pre-run snapshot proves absence and
+            the current run owns the exact install. Exact-byte equality alone is
+            not cleanup authority, and the route proves only fixed package absence.
             Fleet integration is optional and disabled by default. The normal executable
             exposes one exact-device read-only list or staged pull under adb-shared.
             Bounded push is advertised only by a host that injects current Quest identity

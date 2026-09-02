@@ -8,6 +8,37 @@ namespace QuestIonAbleFileManager.Core.Tests;
 public sealed class OperatorActionRegistryTests
 {
     [Fact]
+    public async Task ExactApkUninstallFailureJsonDoesNotExposePrivateArgumentValues()
+    {
+        var privateSerial = "PRIVATE-UNINSTALL-SERIAL-DO-NOT-EMIT";
+        var privateApk = Path.Combine(Path.GetTempPath(), "private-uninstall-DO-NOT-EMIT.apk");
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            var exitCode = await CliApplication.RunAsync(
+            [
+                "apk", "uninstall", "--serial", privateSerial,
+                "--file", privateApk, "--confirm-exact-apk-uninstall", "--json"
+            ]);
+            Assert.Equal(2, exitCode);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.False(json.RootElement.GetProperty("succeeded").GetBoolean());
+        Assert.Equal(
+            "input_rejected",
+            json.RootElement.GetProperty("failure").GetProperty("code").GetString());
+        Assert.DoesNotContain(privateSerial, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(privateApk, output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task EveryAdvertisedAgentRouteIsDynamicallyClassifiedAndShownInCliHelp()
     {
         var advertised = OperatorActionRegistry.AgentRoutes
@@ -757,6 +788,10 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
+            "questionable.file_manager.apk_uninstall_result.v1",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "questionable.file_manager.adb_forward_inventory_result.v1",
             source,
             StringComparison.Ordinal);
@@ -824,6 +859,54 @@ public sealed class OperatorActionRegistryTests
         Assert.Contains("stop_dispatch_failed", classifier, StringComparison.Ordinal);
         Assert.Contains("post_stop_readback_failed", classifier, StringComparison.Ordinal);
         Assert.DoesNotContain("exception.Message", classifier, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExactApkUninstallIsAgentOnlyDestructiveAndKeepsOneSanitizedEnvelope()
+    {
+        var route = Assert.Single(
+            OperatorActionRegistry.AgentRoutes,
+            route => route.Id == "apk_exact_uninstall");
+        Assert.Equal(
+            "apk uninstall --serial --file --confirm-exact-apk-uninstall --json",
+            route.CliRoute);
+        Assert.Equal("OperatorCommands.UninstallExactApk", route.CoreOperation);
+        Assert.True(route.RequiresConfirmation);
+        Assert.Contains("app-private data", route.ReadbackContract, StringComparison.Ordinal);
+        Assert.Contains("does not prove run ownership", route.ReadbackContract, StringComparison.Ordinal);
+        Assert.DoesNotContain(OperatorActionRegistry.Actions, action => action.Id == "apk.uninstall");
+
+        var root = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Cli",
+            "Program.cs"));
+        var method = SourceMethod(
+            source,
+            "private static async Task<int> RunExactApkUninstallJsonAsync",
+            "private static (string Code, string Message, int ExitCode)");
+        Assert.Contains("OperatorCommands.ParseExactApkUninstallCliArguments", method, StringComparison.Ordinal);
+        Assert.Contains("questionable.file_manager.apk_uninstall_result.v1", source, StringComparison.Ordinal);
+        Assert.Contains("cleanup_unknown", method, StringComparison.Ordinal);
+        Assert.Contains("still_present", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("Console.Error", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("exception.Message", method, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Matches(method, "WriteJson\\(").Count);
+
+        var core = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "QuestIonAbleFileManager.Core",
+            "AdbClient.ApkUninstall.cs"));
+        Assert.Contains("ImmutableApkAdmission.CreateAsync", core, StringComparison.Ordinal);
+        Assert.Contains("installed.ApkPaths.Count != 1", core, StringComparison.Ordinal);
+        Assert.Contains("GetDevicesAsync", core, StringComparison.Ordinal);
+        Assert.Contains("[\"uninstall\", artifact.Identity.PackageName]", core, StringComparison.Ordinal);
+        Assert.Contains("ReadUnscopedPackageAbsenceAsync", core, StringComparison.Ordinal);
+        Assert.Contains("ReadCurrentUserPackageAbsenceAsync", core, StringComparison.Ordinal);
+        Assert.DoesNotContain("shell -c", core, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("retry", core, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -448,6 +448,38 @@ public sealed record PackageStopResult(
     CommandResult StopCommand,
     PackageStopQuiescence Quiescence);
 
+public enum ExactApkUninstallDisposition
+{
+    ConfirmedAbsent,
+    StillPresent,
+    CleanupUnknown
+}
+
+/// <summary>
+/// Cleanup-only result for removing one immutably inspected APK after its full
+/// installed identity matched. This proves only the reported package-absence
+/// scopes; it does not prove that the caller owned the install or that any
+/// broader device snapshot was restored.
+/// </summary>
+public sealed record ExactApkUninstallResult(
+    string Serial,
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity InstalledBeforeDispatch,
+    CommandResult? UninstallCommand,
+    ExactApkUninstallDisposition Disposition,
+    bool? UnscopedPackageAbsent,
+    bool? CurrentUserPackageAbsent,
+    string Detail)
+{
+    public bool Confirmed =>
+        Disposition == ExactApkUninstallDisposition.ConfirmedAbsent &&
+        UnscopedPackageAbsent == true &&
+        CurrentUserPackageAbsent == true;
+
+    public string ObservedAbsenceScope { get; init; } =
+        "fixed unscoped and --user current package-manager path/list readback";
+}
+
 /// <summary>
 /// One forwarding record observed in a shared ADB daemon inventory. It is not
 /// a transport, device-health, ownership, reachability, or application-state
@@ -561,6 +593,55 @@ public sealed record ApkDiagnosticBundleResult(
         "questionable.file_manager.apk_diagnostic_bundle.v3";
 
     public int FailedCaptureCount => Files.Count(static file => !file.Succeeded);
+}
+
+public enum ApkLaunchDiagnosticDisposition
+{
+    Completed,
+    LaunchPending,
+    RejectedBeforeDispatch,
+    OutcomeUnknown
+}
+
+public sealed record ApkLaunchDiagnosticAttempt(
+    bool DispatchAttempted,
+    ResolvedAppLaunchResult? Launch,
+    string? FailureCode,
+    string? FailureMessage,
+    IReadOnlyList<int> CurrentPackageProcessIds);
+
+public sealed record ApkLaunchDiagnosticCapture(
+    string RelativePath,
+    long SizeBytes,
+    string Sha256,
+    bool PostActionWindowElapsed,
+    bool OutputLimitReached,
+    bool CaptureExitedEarly,
+    bool ProcessTreeCleanupSucceeded,
+    int CaptureExitCode);
+
+public sealed record ApkLaunchDiagnosticBundleResult(
+    ApkArtifactInspection Artifact,
+    InstalledApkIdentity InstalledBeforeDispatch,
+    InstalledApkIdentity? InstalledAfterCapture,
+    int CurrentUserUidBeforeDispatch,
+    int? CurrentUserUidAfterCapture,
+    string HostLaunchFence,
+    DateTimeOffset HostFenceCreatedAt,
+    string DeviceLaunchFenceEpoch,
+    ApkLaunchDiagnosticAttempt Attempt,
+    ApkLaunchDiagnosticCapture Capture,
+    ApkLaunchDiagnosticDisposition Disposition,
+    string DispositionDetail,
+    string OutputDirectory,
+    string ManifestRelativePath,
+    long ManifestSizeBytes,
+    string ManifestSha256,
+    bool PublishedAtRequestedPath,
+    string BundleLeafName)
+{
+    public string DiagnosticContract { get; init; } =
+        "questionable.file_manager.apk_launch_diagnostic_bundle.v1";
 }
 
 public sealed record ApkExportResult(

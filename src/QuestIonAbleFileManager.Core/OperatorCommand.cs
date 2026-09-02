@@ -39,9 +39,14 @@ public enum OperatorCommandKind
     PreflightInspectedApp,
     DeployInspectedApp,
     DiagnoseInspectedApp,
+    LaunchDiagnoseInspectedApp,
     StopPackage,
+    UninstallExactApk,
     InventoryAdbForwards,
-    ObservePackagePermissions
+    ObservePackagePermissions,
+    ObserveExactApkProperties,
+    ClearExactApkProperties,
+    RestoreExactApkProperties
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -81,7 +86,9 @@ public sealed class OperatorCommand
         QuestConnectivityProfileInputKind connectivityProfileInputKind =
             QuestConnectivityProfileInputKind.None,
         bool replaceExisting = false,
-        string? outputPath = null)
+        string? outputPath = null,
+        string? propertyManifestPath = null,
+        string? propertySnapshotPath = null)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -112,6 +119,8 @@ public sealed class OperatorCommand
         ConnectivityProfileInputKind = connectivityProfileInputKind;
         ReplaceExisting = replaceExisting;
         OutputPath = outputPath;
+        PropertyManifestPath = propertyManifestPath;
+        PropertySnapshotPath = propertySnapshotPath;
     }
 
     public OperatorCommandKind Kind { get; }
@@ -167,6 +176,10 @@ public sealed class OperatorCommand
     public bool ReplaceExisting { get; }
 
     public string? OutputPath { get; }
+
+    public string? PropertyManifestPath { get; }
+
+    public string? PropertySnapshotPath { get; }
 
     public string ToPowerShellCommand(
         string cliExecutable = ".\\questionable-file-manager.exe",
@@ -604,6 +617,177 @@ public static class OperatorCommands
             outputPath: fullOutputDirectory);
     }
 
+    public static OperatorCommand ObserveExactApkProperties(
+        string serial,
+        string apkPath,
+        string propertyManifestPath,
+        string outputSnapshotPath)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        var apk = Path.GetFullPath(RequirePath(apkPath, nameof(apkPath)));
+        var manifest = Path.GetFullPath(RequirePath(propertyManifestPath, nameof(propertyManifestPath)));
+        var output = Path.GetFullPath(RequirePath(outputSnapshotPath, nameof(outputSnapshotPath)));
+        return new OperatorCommand(
+            OperatorCommandKind.ObserveExactApkProperties,
+            [
+                "apk", "properties", "observe", "--serial", serial,
+                "--file", apk, "--manifest", manifest, "--output", output
+            ],
+            serial: serial,
+            localPath: apk,
+            outputPath: output,
+            propertyManifestPath: manifest);
+    }
+
+    public static OperatorCommand ClearExactApkProperties(
+        string serial,
+        string apkPath,
+        string propertyManifestPath,
+        string snapshotPath,
+        bool operatorConfirmed = false) =>
+        CreateExactApkPropertyMutation(
+            OperatorCommandKind.ClearExactApkProperties,
+            "clear",
+            serial,
+            apkPath,
+            propertyManifestPath,
+            snapshotPath,
+            operatorConfirmed);
+
+    public static OperatorCommand RestoreExactApkProperties(
+        string serial,
+        string apkPath,
+        string propertyManifestPath,
+        string snapshotPath,
+        bool operatorConfirmed = false) =>
+        CreateExactApkPropertyMutation(
+            OperatorCommandKind.RestoreExactApkProperties,
+            "restore",
+            serial,
+            apkPath,
+            propertyManifestPath,
+            snapshotPath,
+            operatorConfirmed);
+
+    public static OperatorCommand ParseExactApkPropertyCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count == 12 &&
+            arguments.SequenceEqual(
+                [
+                    "apk", "properties", "observe", "--serial", arguments[4],
+                    "--file", arguments[6], "--manifest", arguments[8],
+                    "--output", arguments[10], "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            return ObserveExactApkProperties(arguments[4], arguments[6], arguments[8], arguments[10]);
+        }
+
+        if (arguments.Count == 13 &&
+            (arguments[2] == "clear" || arguments[2] == "restore") &&
+            arguments.SequenceEqual(
+                [
+                    "apk", "properties", arguments[2], "--serial", arguments[4],
+                    "--file", arguments[6], "--manifest", arguments[8],
+                    "--snapshot", arguments[10],
+                    "--confirm-exact-apk-property-mutation", "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            return arguments[2] == "clear"
+                ? ClearExactApkProperties(
+                    arguments[4], arguments[6], arguments[8], arguments[10], operatorConfirmed: true)
+                : RestoreExactApkProperties(
+                    arguments[4], arguments[6], arguments[8], arguments[10], operatorConfirmed: true);
+        }
+
+        throw new ArgumentException(
+            "Use exactly apk properties observe --serial <serial> --file <apk> --manifest <manifest.json> " +
+            "--output <new-snapshot.json> --json, or clear|restore with --snapshot <snapshot.json> " +
+            "--confirm-exact-apk-property-mutation --json.",
+            nameof(arguments));
+    }
+
+    private static OperatorCommand CreateExactApkPropertyMutation(
+        OperatorCommandKind kind,
+        string action,
+        string serial,
+        string apkPath,
+        string propertyManifestPath,
+        string snapshotPath,
+        bool operatorConfirmed)
+    {
+        RequireApproval(operatorConfirmed, "Exact inspected-APK property mutation");
+        serial = AndroidInput.RequireSerial(serial);
+        var apk = Path.GetFullPath(RequirePath(apkPath, nameof(apkPath)));
+        var manifest = Path.GetFullPath(RequirePath(propertyManifestPath, nameof(propertyManifestPath)));
+        var snapshot = Path.GetFullPath(RequirePath(snapshotPath, nameof(snapshotPath)));
+        return new OperatorCommand(
+            kind,
+            [
+                "apk", "properties", action, "--serial", serial,
+                "--file", apk, "--manifest", manifest, "--snapshot", snapshot,
+                "--confirm-exact-apk-property-mutation"
+            ],
+            serial: serial,
+            localPath: apk,
+            operatorConfirmed: true,
+            propertyManifestPath: manifest,
+            propertySnapshotPath: snapshot);
+    }
+
+    private static string RequirePath(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("A non-empty path is required.", parameterName);
+        return value;
+    }
+
+    public static OperatorCommand LaunchDiagnoseInspectedApp(
+        string serial,
+        string apkPath,
+        string outputDirectory)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        var fullOutputDirectory = Path.GetFullPath(outputDirectory);
+        return new OperatorCommand(
+            OperatorCommandKind.LaunchDiagnoseInspectedApp,
+            [
+                "apk", "launch-diagnose", "--serial", serial, "--file", fullApkPath,
+                "--output", fullOutputDirectory
+            ],
+            serial: serial,
+            localPath: fullApkPath,
+            outputPath: fullOutputDirectory);
+    }
+
+    public static OperatorCommand ParseLaunchDiagnosticCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 9 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "launch-diagnose", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--file", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--output", arguments.Count > 7 ? arguments[7] : string.Empty,
+                    "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk launch-diagnose --serial <quest-serial> --file <file.apk> --output <new-folder> --json.",
+                nameof(arguments));
+        }
+        return LaunchDiagnoseInspectedApp(arguments[3], arguments[5], arguments[7]);
+    }
+
     public static OperatorCommand StopPackage(
         string serial,
         string packageName,
@@ -642,6 +826,51 @@ public static class OperatorCommands
         }
 
         return StopPackage(arguments[3], arguments[5], operatorConfirmed: true);
+    }
+
+    public static OperatorCommand UninstallExactApk(
+        string serial,
+        string apkPath,
+        bool operatorConfirmed = false)
+    {
+        RequireApproval(
+            operatorConfirmed,
+            "Exact inspected-APK uninstall, including app-private data removal");
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullApkPath = Path.GetFullPath(apkPath);
+        return new OperatorCommand(
+            OperatorCommandKind.UninstallExactApk,
+            [
+                "apk", "uninstall", "--serial", serial, "--file", fullApkPath,
+                "--confirm-exact-apk-uninstall"
+            ],
+            serial: serial,
+            localPath: fullApkPath,
+            operatorConfirmed: true);
+    }
+
+    public static OperatorCommand ParseExactApkUninstallCliArguments(
+        IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 8 ||
+            !arguments.SequenceEqual(
+                [
+                    "apk", "uninstall", "--serial",
+                    arguments.Count > 3 ? arguments[3] : string.Empty,
+                    "--file", arguments.Count > 5 ? arguments[5] : string.Empty,
+                    "--confirm-exact-apk-uninstall", "--json"
+                ],
+                StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                "Use exactly apk uninstall --serial <quest-serial> --file <apk> " +
+                "--confirm-exact-apk-uninstall --json.",
+                nameof(arguments));
+        }
+
+        return UninstallExactApk(arguments[3], arguments[5], operatorConfirmed: true);
     }
 
     public static OperatorCommand InventoryAdbForwards(string serial)
@@ -1250,9 +1479,13 @@ public sealed record OperatorExecutionResult(
     ApkPreflightResult? ApkPreflightResult = null,
     InspectedApkDeploymentResult? InspectedApkDeploymentResult = null,
     ApkDiagnosticBundleResult? ApkDiagnosticBundleResult = null,
+    ApkLaunchDiagnosticBundleResult? ApkLaunchDiagnosticBundleResult = null,
     PackageStopResult? PackageStopResult = null,
+    ExactApkUninstallResult? ExactApkUninstallResult = null,
     AdbForwardInventoryResult? AdbForwardInventoryResult = null,
-    ApkPermissionObservation? ApkPermissionObservation = null);
+    ApkPermissionObservation? ApkPermissionObservation = null,
+    ApkPropertyObservationResult? ApkPropertyObservationResult = null,
+    ApkPropertyMutationResult? ApkPropertyMutationResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1297,20 +1530,43 @@ public sealed class OperatorCommandExecutor
         }
 
         var tracker = new OperatorMutationTracker(command, progress);
-        tracker.Sent();
-        tracker.Pending();
+        var propertyReportsDispatch = command.Kind is
+            OperatorCommandKind.ClearExactApkProperties or
+            OperatorCommandKind.RestoreExactApkProperties;
+        var launchReportsDispatch = command.Kind == OperatorCommandKind.LaunchDiagnoseInspectedApp;
+        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch;
+        if (!reportsDispatch)
+        {
+            tracker.Dispatched();
+        }
         try
         {
             var result = await ExecuteCoreAsync(
                 command,
                 cancellationToken,
                 progress,
-                privateInput).ConfigureAwait(false);
-            var receipt = tracker.Complete(OperatorMutations.Observe(command, result));
+                privateInput,
+                propertyReportsDispatch ? tracker : null,
+                launchReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
+            var observation = OperatorMutations.Observe(command, result);
+            var receipt = propertyReportsDispatch
+                ? tracker.CompleteAfterReportedDispatch(observation)
+                : tracker.Complete(observation);
             return result with { MutationReceipt = receipt };
         }
         catch (Exception exception)
         {
+            if (reportsDispatch)
+            {
+                if (tracker.HasSent)
+                {
+                    throw new OperatorMutationExecutionException(
+                        tracker.PreservePending(exception),
+                        exception);
+                }
+
+                throw;
+            }
             tracker.Failed(exception);
             throw;
         }
@@ -1320,7 +1576,9 @@ public sealed class OperatorCommandExecutor
         OperatorCommand command,
         CancellationToken cancellationToken,
         IProgress<OperatorProgress>? progress,
-        Stream? privateInput)
+        Stream? privateInput,
+        OperatorMutationTracker? propertyMutationTracker = null,
+        Action? deviceDispatchObserved = null)
     {
         progress?.Report(new OperatorProgress(
             command.Kind.ToString(),
@@ -1493,6 +1751,16 @@ public sealed class OperatorCommandExecutor
                         Require(command.OutputPath, nameof(command.OutputPath)),
                         cancellationToken).ConfigureAwait(false));
 
+            case OperatorCommandKind.LaunchDiagnoseInspectedApp:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkLaunchDiagnosticBundleResult: await client.LaunchAndCaptureInspectedApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.OutputPath, nameof(command.OutputPath)),
+                        deviceDispatchObserved,
+                        cancellationToken).ConfigureAwait(false));
+
             case OperatorCommandKind.StopPackage:
                 if (!command.OperatorConfirmed)
                 {
@@ -1504,6 +1772,19 @@ public sealed class OperatorCommandExecutor
                     PackageStopResult: await client.StopPackageAsync(
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.UninstallExactApk:
+                if (!command.OperatorConfirmed)
+                {
+                    throw new InvalidOperationException(
+                        "Exact inspected-APK uninstall requires explicit confirmation.");
+                }
+                return new OperatorExecutionResult(
+                    command,
+                    ExactApkUninstallResult: await client.UninstallExactApkAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InventoryAdbForwards:
@@ -1520,6 +1801,46 @@ public sealed class OperatorCommandExecutor
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.PackageName, nameof(command.PackageName)),
                         cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveExactApkProperties:
+                return new OperatorExecutionResult(
+                    command,
+                    ApkPropertyObservationResult: await client.ObserveExactApkPropertiesAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.PropertyManifestPath, nameof(command.PropertyManifestPath)),
+                        Require(command.OutputPath, nameof(command.OutputPath)),
+                        cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ClearExactApkProperties:
+                if (!command.OperatorConfirmed)
+                    throw new InvalidOperationException(
+                        "Exact inspected-APK property clear requires explicit confirmation.");
+                return new OperatorExecutionResult(
+                    command,
+                    ApkPropertyMutationResult: await client.ClearExactApkPropertiesAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.PropertyManifestPath, nameof(command.PropertyManifestPath)),
+                        Require(command.PropertySnapshotPath, nameof(command.PropertySnapshotPath)),
+                        cancellationToken,
+                        stage => ReportPropertyMutationStage(propertyMutationTracker, stage))
+                        .ConfigureAwait(false));
+
+            case OperatorCommandKind.RestoreExactApkProperties:
+                if (!command.OperatorConfirmed)
+                    throw new InvalidOperationException(
+                        "Exact inspected-APK property restore requires explicit confirmation.");
+                return new OperatorExecutionResult(
+                    command,
+                    ApkPropertyMutationResult: await client.RestoreExactApkPropertiesAsync(
+                        Require(command.Serial, nameof(command.Serial)),
+                        Require(command.LocalPath, nameof(command.LocalPath)),
+                        Require(command.PropertyManifestPath, nameof(command.PropertyManifestPath)),
+                        Require(command.PropertySnapshotPath, nameof(command.PropertySnapshotPath)),
+                        cancellationToken,
+                        stage => ReportPropertyMutationStage(propertyMutationTracker, stage))
+                        .ConfigureAwait(false));
 
             case OperatorCommandKind.LaunchInspectedApp:
                 return new OperatorExecutionResult(
@@ -1747,6 +2068,28 @@ public sealed class OperatorCommandExecutor
         }
     }
 
+    private static void ReportPropertyMutationStage(
+        OperatorMutationTracker? tracker,
+        OperatorMutationStage stage)
+    {
+        if (tracker is null)
+            throw new InvalidOperationException("The exact-property mutation tracker is missing.");
+        switch (stage)
+        {
+            case OperatorMutationStage.Sent:
+                tracker.Sent();
+                break;
+            case OperatorMutationStage.Pending:
+                tracker.Pending();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(stage),
+                    stage,
+                    "The exact-property mutation reported an unsupported dispatch stage.");
+        }
+    }
+
     private static string Require(string? value, string name) =>
         !string.IsNullOrWhiteSpace(value)
             ? value
@@ -1782,9 +2125,15 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.PreflightInspectedApp => "Checking APK and selected Quest readiness…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",
+        OperatorCommandKind.LaunchDiagnoseInspectedApp => "Launching one inspected APK under bounded UID diagnostics…",
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
+        OperatorCommandKind.UninstallExactApk =>
+            "Removing one exact inspected APK and its app-private data…",
         OperatorCommandKind.InventoryAdbForwards => "Reading the shared ADB forwarding inventory…",
         OperatorCommandKind.ObservePackagePermissions => "Reading bounded exact-package permission facts…",
+        OperatorCommandKind.ObserveExactApkProperties => "Reading the closed exact-APK property manifest…",
+        OperatorCommandKind.ClearExactApkProperties => "Clearing the closed exact-APK property manifest…",
+        OperatorCommandKind.RestoreExactApkProperties => "Restoring the closed exact-APK property snapshot…",
         OperatorCommandKind.InstallApkBundle => "Installing the complete APK package set…",
         OperatorCommandKind.EnableWifiAdb => "Preparing Wi-Fi ADB…",
         OperatorCommandKind.ConnectWifiAdb => "Connecting to Wi-Fi ADB…",

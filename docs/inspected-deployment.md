@@ -116,6 +116,42 @@ manifest is complete. The fixed capture set is documented in
 `apk-diagnostic-bundle.md`; callers cannot supply commands, tags, PIDs, log
 counts, or capture kinds.
 
+`apk uninstall --serial <quest-serial> --file <path-to.apk>
+--confirm-exact-apk-uninstall --json` is the destructive cleanup companion. It
+holds an immutable inspected APK, requires one exact matching installed base
+APK and one ready serial immediately before its single derived-package
+uninstall, and then reads both fixed unscoped and current-user package absence.
+Installed split sets, absent/different/unverified preimages, arbitrary package
+or user arguments, retries, and WPF/Local API projections are rejected. The
+route removes the app and may delete app-private data. `confirmed` proves only
+the two reported absence scopes; a caller needs a separately authenticated
+absent pre-run snapshot and run-owned install before calling that restoration.
+Dispatch or readback ambiguity remains `cleanupUnknown` in the mutation receipt.
+`apk properties observe|clear|restore` extends exact-artifact identity without
+extending deployment or readiness claims. It consumes one complete
+`rusty.quest.android_property_manifest.v1` owned by the APK package. Observe
+publishes schema `questionable.file_manager.apk_property_snapshot.v1` through
+one no-overwrite local file. Public result envelopes are
+`questionable.file_manager.apk_property_observation_result.v1` and
+`questionable.file_manager.apk_property_mutation_result.v1`. Clear requires
+the live preimage to equal the snapshot; restore consumes the snapshot as the
+only value source. Successful mutation receipts bind exact property and
+installed-base-APK readback. These facts do not prove application readiness,
+OpenXR readiness, app effect, or wearer visibility.
+
+`apk launch-diagnose --serial <quest-serial> --file <path-to.apk> --output
+<new-folder> --json` is a distinct agent-only mutation plus evidence route.
+It retains immutable artifact admission and exact installed-byte/launcher
+proof, derives the current-user UID, reads a device epoch fence, pre-arms one
+fixed UID-filtered epoch log stream at that fence, rechecks the exact ready
+serial and installed bytes, and dispatches the resolved launcher exactly once.
+After the fixed post-action window it kills and drains the capture tree,
+rechecks installed bytes and UID, and atomically publishes one no-overwrite
+private bundle. It accepts no caller package, UID, PID, tag, filter, duration,
+component, intent, shell fragment, or raw ADB argument. Its typed result does
+not claim app readiness, OpenXR readiness, semantic acceptance, screenshots,
+recording, or wearer visibility. See `apk-launch-diagnostic.md`.
+
 `operator-actions --json` advertises the preflight-result,
 inspected-deployment, launch-result, deploy-result, diagnostic-result,
 launcher-export-proof, and runtime-observation contract revisions without

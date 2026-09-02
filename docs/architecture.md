@@ -14,7 +14,8 @@ general Quest runtime console or fleet manager.
 - Browsing, pulling, and explicit pushing on shell-accessible paths.
 - Third-party package listing, single-APK export, inspected/hash-bound
   single-APK install, constrained resolved launch, structured runtime
-  observation, and atomic folder-based split APK set install.
+  observation, one agent-only pre-armed bounded UID launch diagnostic, and
+  atomic folder-based split APK set install.
 - Explicit Wi-Fi ADB enable/connect/disconnect with no ADB daemon lifecycle.
 - Bounded parallel single-APK and complete split-set installation across
   distinct Wi-Fi ADB endpoints, with one result per target.
@@ -45,6 +46,9 @@ general Quest runtime console or fleet manager.
 - General remote-path deletion, package uninstall, clear-data, or ADB daemon
   lifecycle. Deletion inside Rusty Kiosk's explicitly bounded app-owned staging
   area is supported.
+- Caller-selected log filters, tags, UIDs, PIDs, capture durations, components,
+  shell text, or raw ADB arguments. The launch diagnostic derives and fixes all
+  applicable dimensions and exposes no generic filter.
 - TLS, network scanning, fleet discovery, online relays, or multi-device direct
   orchestration.
 - Fleet target scheduling, Fleet identity inference, multi-target file
@@ -243,6 +247,22 @@ reconcilable on later refresh.
 Direct commands use the same desired/effective-state matcher. Direct file
 mutations confirm only after signed byte/hash readback; local installs stay
 pending until the matching Android receipt reports installed or failed.
+The exact inspected-APK uninstall is the reviewed destructive cleanup
+exception. Its immutable artifact and full installed identity are preconditions,
+not proof of run ownership. It may delete app-private data; only dual fixed
+package-absence readback confirms, while still-present remains pending and any
+dispatch/readback ambiguity is terminal cleanup-unknown without replay.
+
+The exact-APK property owner is an additive AgentRoutes-only Core/CLI contract.
+Its immutable inputs are APK, closed property manifest, exact serial, and—for
+clear/restore—the create-new observation snapshot. Only `observe` writes local
+evidence. Clear and restore retain the standard sent/pending transition and
+emit `sent` only at the first fixed property dispatch. `pending` begins only
+once an effect may exist and exact readback is awaited or unavailable; it is
+preserved in failure envelopes for later reconciliation. Confirmation requires
+every manifest property and the installed APK bytes to read back exactly.
+The contract is intentionally absent from WPF and Local API and cannot project
+arbitrary property names, values, shell commands, or retries.
 
 Each dedicated provider host admits `--describe-json` as one exact,
 case-sensitive vector separate from its existing execution vector. That branch

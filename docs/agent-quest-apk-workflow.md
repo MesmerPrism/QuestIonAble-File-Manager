@@ -26,6 +26,11 @@ and the choice of build output.
    checks against the same artifact. When a durable evidence pack is useful,
    use `apk diagnose --serial <serial> --file <apk> --output <new-folder>
    --json` instead.
+   When the app's first post-launch UID log bytes must be retained, use the
+   separate exact-once `apk launch-diagnose --serial <serial> --file <apk>
+   --output <new-folder> --json` route. It is state-changing, never retries,
+   and returns only QFM transport/effect evidence; the app owner still reduces
+   readiness and semantics.
 8. When one exact installed package must be made quiescent after a QFM-managed
    run, use `apk stop --serial <serial> --package <package>
    --confirm-package-stop --json`. It is a fixed current-user request, not a
@@ -40,6 +45,21 @@ and the choice of build output.
    It preserves reported, absent, empty, malformed, unknown, unavailable, and
    package-not-installed source states. QFM neither grants/revokes permissions
    nor decides whether those facts admit a launch or feature.
+10. When the source-owned run capsule requires complete property isolation, use
+    `apk properties observe --serial <serial> --file <apk> --manifest
+    <complete-manifest.json> --output <new-private-snapshot.json> --json` before
+    mutation. Then use the confirmed `clear` route with that same immutable
+    snapshot and, in cleanup, the confirmed `restore` route. Do not hand-edit or
+    reuse snapshots across serial, APK, or manifest identities. Both mutations
+    require `--confirm-exact-apk-property-mutation`; neither accepts a property
+    name or value flag. A non-confirmed clear/restore is a cleanup blocker, not
+    authority to retry.
+11. When the pre-run snapshot proved the package absent and this run owns the
+    exact install, restore that absence with `apk uninstall --serial <serial>
+    --file <apk> --confirm-exact-apk-uninstall --json`. This deletes the app and
+    may delete app-private data. Exact installed-byte equality is necessary but
+    is not ownership authority. A confirmed receipt proves package absence only;
+    `pending` or `cleanupUnknown` requires owner adjudication and must not replay.
 
 For a release candidate, add the source repository's release gates before
 step 4. The QFM device boundary stays the same; validation depth is selected by
@@ -50,8 +70,25 @@ the source/release lane rather than by accepting broader ADB commands.
 QFM provides typed routes for device discovery, file transfer, APK inspection,
 read-only APK/device preflight, exact install, composite deploy, resolved
 launch, runtime observation, package export, bounded power/performance control,
-Wi-Fi ADB setup, and the documented Kiosk/Fleet integrations. Prefer those
+closed exact-APK property snapshot/clear/restore, Wi-Fi ADB setup, and the
+documented Kiosk/Fleet integrations. Prefer those
 routes over reimplementing their ADB sequences.
+
+## Exact property transaction boundary
+
+The property route accepts only schema
+`rusty.quest.android_property_manifest.v1` with canonical root/property order,
+ordinally sorted unique `debug.rustyquest.*` names, closed declared prefixes,
+and `owner_package` equal to the immutable inspected APK. Observation requires
+the exact APK to be installed, reads only those names, and publishes a
+create-new snapshot bound to APK digest/size/package/version/signer, serial,
+manifest digest/size, and every exact value. Clear re-reads all values and
+rejects a stale snapshot before mutation. Restore may recover a partially
+cleared run, but can use values only from that bound snapshot. Both rediscover
+one exact ready serial immediately before fixed serial-scoped commands and
+emit `sent` only when the first fixed command dispatch begins. `pending` is
+created only after an effect may exist and is retained when property or
+installed-byte readback is unavailable. There is no automatic retry.
 
 ## Permission observation boundary
 

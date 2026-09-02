@@ -1,0 +1,26 @@
+{
+  "schema": "questionable.file_manager.apk_property_contract_fixture.v1",
+  "input_manifest_schema": "rusty.quest.android_property_manifest.v1",
+  "snapshot_schema": "questionable.file_manager.apk_property_snapshot.v1",
+  "observation_result_schema": "questionable.file_manager.apk_property_observation_result.v1",
+  "mutation_result_schema": "questionable.file_manager.apk_property_mutation_result.v1",
+  "actions": [
+    "observe",
+    "clear",
+    "restore"
+  ],
+  "mutation_stages": [
+    "sent",
+    "pending",
+    "confirmed"
+  ],
+  "non_confirmed_outcomes": [
+    "still-divergent",
+    "cleanup-unknown"
+  ],
+  "caller_supplied_property_names": false,
+  "caller_supplied_property_values": false,
+  "automatic_retry": false,
+  "wpf_projection": false,
+  "local_api_projection": false
+}

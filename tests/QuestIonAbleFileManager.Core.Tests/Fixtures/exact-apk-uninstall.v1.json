@@ -1,0 +1,24 @@
+{
+  "schema": "questionable.file_manager.exact_apk_uninstall_fixture.v1",
+  "serial": "QUEST123",
+  "package": "com.example.app",
+  "required_preimage": "exact-single-base",
+  "terminal_outcomes": [
+    "confirmed-absent",
+    "still-present",
+    "cleanup-unknown"
+  ],
+  "rejected_preimages": [
+    "absent",
+    "different-bytes",
+    "unverified",
+    "installed-split-set",
+    "serial-absent",
+    "serial-offline",
+    "serial-duplicate"
+  ],
+  "post_readback_scopes": [
+    "unscoped",
+    "current-user"
+  ]
+}

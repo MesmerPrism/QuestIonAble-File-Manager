@@ -124,10 +124,46 @@ user, component, activity, shell fragment, or raw-ADB input. These agent routes
 are advertised separately by `operator-actions --json`; none is a WPF parity
 claim or a general ADB or shell command.
 
+`apk uninstall --serial <quest-serial> --file <apk>
+--confirm-exact-apk-uninstall --json` is another AgentRoutes-only mutation. It
+derives the package from an immutable APK, requires full single-base installed
+identity equality, and removes the app and may delete app-private data. It has
+no caller package/user/flags, WPF action, or Local API projection. Confirmation
+is limited to fixed unscoped and current-user package absence; separate workflow
+evidence must prove an absent pre-run snapshot and ownership of the install.
+Post-dispatch uncertainty emits `pending` or `cleanupUnknown`, never a false
+restoration claim or automatic retry.
+The same agent-only inventory advertises `apk properties observe`, `clear`, and
+`restore`. They are exact APK plus closed-manifest routes, not WPF actions.
+Observation creates a private no-overwrite snapshot. Clear and restore require
+the explicit property-mutation confirmation, rediscover the exact ready serial
+at the final pre-dispatch boundary, emit `sent` only at first fixed dispatch,
+and retain `pending` whenever an effect may exist without exact property and
+installed-byte readback. `confirmed` requires both readbacks. There is no
+caller-selected property/value, generic `setprop`, Local API, or retry route.
+
 `operator-actions` agent-route entries are dynamically checked against the CLI
 classifier and `--help` output. An advertised route must be executable through
 that classifier or explicitly marked non-executable; registry text alone is
 not evidence of a dispatch path.
+
+`apk launch-diagnose --serial <quest-serial> --file <local-apk> --output
+<new-private-folder> --json` is the separately reviewed agent-only launch
+diagnostic route. It admits one immutable inspected APK only when its complete
+installed byte identity matches, pre-arms one bounded derived-UID log capture,
+dispatches the exact resolved launcher once, and publishes a CreateNew evidence
+bundle with host/device fences and post-capture UID/PID/installed-byte
+readbacks. It accepts no caller-selected package, UID, PID, tag, duration,
+shell fragment, raw ADB argument, retry, screenshot, recording, or bugreport.
+An output race after dispatch retains the closed bundle in its unique sibling
+and returns typed uncertainty instead of overwriting or deleting evidence.
+Its mutation receipt emits no `sent`/`pending` state until the exact launcher
+dispatch boundary; a predispatch refusal is terminal `rejected`, while any
+postdispatch ambiguity remains `pending`. Stream cleanup has a bounded terminal
+join after cancellation and pipe revocation and cannot publish a still-mutating
+capture.
+It has no WPF or local-API projection and does not claim application/OpenXR
+readiness or wearer visibility.
 
 `apk permissions --serial <quest-serial> --package <package> --json` is another
 agent-only route. It uses one strict immutable Core command and only bounded
@@ -177,6 +213,7 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' apk preflight --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk deploy --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk diagnose --serial <quest-serial> --file <local-apk> --output <new-private-folder> --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' apk launch-diagnose --serial <quest-serial> --file <local-apk> --output <new-private-folder> --json
 & '.\questionable-file-manager.exe' apk install-bundle --serial <quest-serial> --folder <apk-folder> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
