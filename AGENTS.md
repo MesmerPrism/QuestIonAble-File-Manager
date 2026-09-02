@@ -68,6 +68,18 @@ documented.
 - Initial file management is limited to list, pull, and explicit push.
 - Do not add delete, uninstall, clear-data, or ADB server lifecycle operations
   without a separate safety and UX review.
+- The reviewed agent-only property exception accepts only an immutable inspected
+  APK, one exact ready serial, and a closed
+  `rusty.quest.android_property_manifest.v1` file whose owner package equals the
+  APK. `observe` writes one create-new snapshot. Confirmed `clear` and `restore`
+  consume that exact snapshot and manifest; callers cannot supply property names
+  or values. Clear rejects a stale snapshot before dispatch. Both mutations
+  rediscover the exact ready serial immediately before their fixed `setprop`
+  loop. `sent` begins only at the first fixed dispatch; `pending` begins only
+  once an effect may exist and exact readback is awaited or unavailable. They
+  confirm only exact manifest readback while the same APK bytes remain installed.
+  They are AgentRoutes-only: no WPF, Local API, arbitrary shell,
+  generic property, retry, or overwrite surface is admitted.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes
@@ -321,6 +333,9 @@ questionable-file-manager.exe apk export --serial <quest-serial> --package <pack
 questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
 questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
 questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk properties observe --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --output <new-snapshot.json> --json
+questionable-file-manager.exe apk properties clear --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
+questionable-file-manager.exe apk properties restore --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
 questionable-file-manager.exe apk install-bundle --serial <quest-serial> --folder <apk-folder>
 questionable-file-manager.exe wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
 questionable-file-manager.exe wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb

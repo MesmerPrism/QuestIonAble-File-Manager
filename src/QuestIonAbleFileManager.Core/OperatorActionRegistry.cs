@@ -57,6 +57,24 @@ public static class OperatorActionRegistry
                 true,
                 "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility"),
             new(
+                "apk_property_observe",
+                "apk properties observe --serial --file --manifest --output --json",
+                "OperatorCommands.ObserveExactApkProperties",
+                false,
+                "immutable exact APK and complete closed property-manifest identity, exact installed bytes, and create-new property snapshot evidence; values never come from caller flags"),
+            new(
+                "apk_property_clear",
+                "apk properties clear --serial --file --manifest --snapshot --confirm-exact-apk-property-mutation --json",
+                "OperatorCommands.ClearExactApkProperties",
+                true,
+                "stale-snapshot rejection, immediate exact-ready-serial discovery, fixed manifest-only clear dispatch, and exact unset plus installed-APK readback"),
+            new(
+                "apk_property_restore",
+                "apk properties restore --serial --file --manifest --snapshot --confirm-exact-apk-property-mutation --json",
+                "OperatorCommands.RestoreExactApkProperties",
+                true,
+                "immutable snapshot/APK/manifest/serial binding, immediate exact-ready-serial discovery, fixed snapshot-only restore dispatch, and exact value plus installed-APK readback"),
+            new(
                 "apk_permission_observation",
                 "apk permissions --serial --package --json",
                 "OperatorCommands.ObservePackagePermissions",

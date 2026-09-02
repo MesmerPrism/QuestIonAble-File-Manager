@@ -116,6 +116,18 @@ manifest is complete. The fixed capture set is documented in
 `apk-diagnostic-bundle.md`; callers cannot supply commands, tags, PIDs, log
 counts, or capture kinds.
 
+`apk properties observe|clear|restore` extends exact-artifact identity without
+extending deployment or readiness claims. It consumes one complete
+`rusty.quest.android_property_manifest.v1` owned by the APK package. Observe
+publishes schema `questionable.file_manager.apk_property_snapshot.v1` through
+one no-overwrite local file. Public result envelopes are
+`questionable.file_manager.apk_property_observation_result.v1` and
+`questionable.file_manager.apk_property_mutation_result.v1`. Clear requires
+the live preimage to equal the snapshot; restore consumes the snapshot as the
+only value source. Successful mutation receipts bind exact property and
+installed-base-APK readback. These facts do not prove application readiness,
+OpenXR readiness, app effect, or wearer visibility.
+
 `operator-actions --json` advertises the preflight-result,
 inspected-deployment, launch-result, deploy-result, diagnostic-result,
 launcher-export-proof, and runtime-observation contract revisions without

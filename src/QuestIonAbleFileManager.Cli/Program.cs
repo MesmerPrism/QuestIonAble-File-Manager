@@ -14,6 +14,10 @@ internal static class CliApplication
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
     private const string ApkPermissionObservationSchema =
         "questionable.file_manager.apk_permission_observation.v1";
+    private const string ApkPropertyObservationSchema =
+        "questionable.file_manager.apk_property_observation_result.v1";
+    private const string ApkPropertyMutationSchema =
+        "questionable.file_manager.apk_property_mutation_result.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
     private const string InspectedDeploymentContract =
         "questionable.file_manager.inspected_deployment.v5";
@@ -48,6 +52,12 @@ internal static class CliApplication
             ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
         new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
             ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
+        new("apk_property_observe", "apk properties observe --serial <serial> --file <apk> --manifest <manifest> --output <new-snapshot> --json",
+            ["apk", "properties", "observe", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--output", "snapshot.json", "--json"], true),
+        new("apk_property_clear", "apk properties clear --serial <serial> --file <apk> --manifest <manifest> --snapshot <snapshot> --confirm-exact-apk-property-mutation --json",
+            ["apk", "properties", "clear", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--snapshot", "snapshot.json", "--confirm-exact-apk-property-mutation", "--json"], true),
+        new("apk_property_restore", "apk properties restore --serial <serial> --file <apk> --manifest <manifest> --snapshot <snapshot> --confirm-exact-apk-property-mutation --json",
+            ["apk", "properties", "restore", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--snapshot", "snapshot.json", "--confirm-exact-apk-property-mutation", "--json"], true),
         new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
             ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app", "--json"], true),
         new("adb_forward_inventory", "adb forwards --serial <serial> --json",
@@ -68,6 +78,18 @@ internal static class CliApplication
 
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
         {
+            if (string.Equals(arguments[1], "properties", StringComparison.OrdinalIgnoreCase) &&
+                arguments.Count > 2)
+            {
+                routeId = arguments[2].ToLowerInvariant() switch
+                {
+                    "observe" => "apk_property_observe",
+                    "clear" => "apk_property_clear",
+                    "restore" => "apk_property_restore",
+                    _ => string.Empty
+                };
+                return routeId.Length > 0;
+            }
             if (string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
             {
                 routeId = "apk_stop";
@@ -126,6 +148,8 @@ internal static class CliApplication
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
+                        apkPropertyObservationResult = ApkPropertyObservationSchema,
+                        apkPropertyMutationResult = ApkPropertyMutationSchema,
                         apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
@@ -196,6 +220,8 @@ internal static class CliApplication
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
         "apk_stop" => RunApkStopJsonAsync(arguments),
+        "apk_property_observe" or "apk_property_clear" or "apk_property_restore" =>
+            RunExactApkPropertiesJsonAsync(arguments),
         "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
@@ -1970,6 +1996,128 @@ internal static class CliApplication
             1);
     }
 
+    private static async Task<int> RunExactApkPropertiesJsonAsync(string[] arguments)
+    {
+        var mutationRequested = arguments.Length > 2 &&
+            (string.Equals(arguments[2], "clear", StringComparison.Ordinal) ||
+             string.Equals(arguments[2], "restore", StringComparison.Ordinal));
+        try
+        {
+            var command = OperatorCommands.ParseExactApkPropertyCliArguments(arguments);
+            var execution = await new OperatorCommandExecutor(AdbClient.CreateDefault())
+                .ExecuteAsync(command);
+            if (command.Kind == OperatorCommandKind.ObserveExactApkProperties)
+            {
+                var observation = execution.ApkPropertyObservationResult ??
+                    throw new InvalidOperationException("Exact APK property observation returned no result.");
+                WriteJson(new
+                {
+                    schema = ApkPropertyObservationSchema,
+                    succeeded = true,
+                    result = observation,
+                    failure = (object?)null
+                });
+                return 0;
+            }
+
+            var mutation = execution.ApkPropertyMutationResult ??
+                throw new InvalidOperationException("Exact APK property mutation returned no result.");
+            WriteJson(new
+            {
+                schema = ApkPropertyMutationSchema,
+                succeeded = mutation.Confirmed,
+                mutation = execution.MutationReceipt,
+                result = mutation,
+                failure = mutation.Confirmed
+                    ? (object?)null
+                    : new
+                    {
+                        code = mutation.Disposition == ApkPropertyMutationDisposition.StillDivergent
+                            ? "property_readback_divergent"
+                            : "cleanup_unknown",
+                        message = mutation.Detail,
+                        state_change_possible = true
+                    }
+            });
+            return mutation.Confirmed ? 0 : 1;
+        }
+        catch (Exception exception)
+        {
+            return WriteExactApkPropertyFailureJson(exception, mutationRequested);
+        }
+    }
+
+    internal static int WriteExactApkPropertyFailureJson(
+        Exception exception,
+        bool mutationRequested)
+    {
+        var dispatched = exception as OperatorMutationExecutionException;
+        var failure = dispatched is null
+            ? ClassifyExactApkPropertyFailure(exception, mutationRequested)
+            : (
+                Code: "cleanup_unknown",
+                Message: "Property mutation was dispatched, but exact terminal readback is unavailable.",
+                StateChangePossible: true,
+                ExitCode: 1);
+        WriteJson(new
+        {
+            schema = mutationRequested ? ApkPropertyMutationSchema : ApkPropertyObservationSchema,
+            succeeded = false,
+            mutation = dispatched?.MutationReceipt,
+            result = (object?)null,
+            failure = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                state_change_possible = failure.StateChangePossible
+            }
+        });
+        return failure.ExitCode;
+    }
+
+    private static (string Code, string Message, bool StateChangePossible, int ExitCode)
+        ClassifyExactApkPropertyFailure(Exception exception, bool mutationRequested)
+    {
+        if (exception is ArgumentException or FileNotFoundException or DirectoryNotFoundException or
+            IOException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The exact APK property input was rejected before device mutation.",
+                false,
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "exact_apk_absent",
+                "The exact inspected APK is not installed on the selected serial.",
+                false,
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_dispatch_proof_rejected",
+                "Exact serial, APK, closed manifest, snapshot, or installed-byte proof was rejected.",
+                false,
+                1);
+        }
+        if (exception is AdbCommandException or OperationCanceledException or TimeoutException)
+        {
+            return (
+                "pre_dispatch_read_failed",
+                "A fixed serial-scoped APK property precondition readback did not complete.",
+                false,
+                1);
+        }
+        return (
+            "property_operation_failed",
+            "The exact APK property operation did not complete.",
+            mutationRequested,
+            1);
+    }
+
     private static async Task<int> RunApkPermissionObservationJsonAsync(string[] arguments)
     {
         try
@@ -2641,6 +2789,9 @@ internal static class CliApplication
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk properties observe --serial <serial> --file <file.apk> --manifest <manifest.json> --output <new-snapshot.json> --json
+              questionable-file-manager apk properties clear --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
+              questionable-file-manager apk properties restore --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
               questionable-file-manager apk permissions --serial <serial> --package <package> --json
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
