@@ -249,6 +249,17 @@ not proof of run ownership. It may delete app-private data; only dual fixed
 package-absence readback confirms, while still-present remains pending and any
 dispatch/readback ambiguity is terminal cleanup-unknown without replay.
 
+The exact-APK property owner is an additive AgentRoutes-only Core/CLI contract.
+Its immutable inputs are APK, closed property manifest, exact serial, and—for
+clear/restore—the create-new observation snapshot. Only `observe` writes local
+evidence. Clear and restore retain the standard sent/pending transition and
+emit `sent` only at the first fixed property dispatch. `pending` begins only
+once an effect may exist and exact readback is awaited or unavailable; it is
+preserved in failure envelopes for later reconciliation. Confirmation requires
+every manifest property and the installed APK bytes to read back exactly.
+The contract is intentionally absent from WPF and Local API and cannot project
+arbitrary property names, values, shell commands, or retries.
+
 Each dedicated provider host admits `--describe-json` as one exact,
 case-sensitive vector separate from its existing execution vector. That branch
 runs before stdin, controller/provider factories, profile stores, ADB, Kiosk,

@@ -164,6 +164,9 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk stop --serial <quest
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk uninstall --serial <quest-serial> --file ./example.apk --confirm-exact-apk-uninstall --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk properties observe --serial <quest-serial> --file ./example.apk --manifest ./property-manifest.json --output ./private-property-snapshot.json --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk properties clear --serial <quest-serial> --file ./example.apk --manifest ./property-manifest.json --snapshot ./private-property-snapshot.json --confirm-exact-apk-property-mutation --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk properties restore --serial <quest-serial> --file ./example.apk --manifest ./property-manifest.json --snapshot ./private-property-snapshot.json --confirm-exact-apk-property-mutation --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk permissions --serial <quest-serial> --package <package> --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install-bundle --serial <quest-serial> --folder ./example-apk-set
 dotnet run --project src/QuestIonAbleFileManager.Cli -- wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
@@ -270,6 +273,18 @@ derived-package uninstall, and confirms only fixed unscoped and current-user
 package absence. It removes the app and may delete app-private data. Use it only
 when a separately bound pre-run snapshot was absent and the current run owns
 the install; exact-byte equality alone is not cleanup authority.
+`apk properties observe|clear|restore` is a separate AgentRoutes-only property
+transaction for an exact installed APK and complete closed
+`rusty.quest.android_property_manifest.v1`. Observation writes one create-new,
+no-overwrite private snapshot. Clear rejects if current values no longer equal
+that snapshot; clear and restore rediscover the exact ready serial immediately
+before dispatch, take names only from the manifest and values only from the
+snapshot, emit `sent` only at first fixed dispatch, retain `pending` whenever a
+possible effect lacks exact readback, and confirm only exact readback plus
+unchanged installed APK bytes. The
+routes expose no caller property/value, generic shell, WPF, Local API, or retry
+surface. Snapshot values and serials are private evidence and must not be
+committed.
 `apk permissions` is a separate agent-only, read-only contract for one exact
 serial and installed package. It returns only bounded manifest-declared
 permissions, Android-reported effective install/runtime grant bits, and

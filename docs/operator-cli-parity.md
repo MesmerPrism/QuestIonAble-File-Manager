@@ -133,6 +133,14 @@ is limited to fixed unscoped and current-user package absence; separate workflow
 evidence must prove an absent pre-run snapshot and ownership of the install.
 Post-dispatch uncertainty emits `pending` or `cleanupUnknown`, never a false
 restoration claim or automatic retry.
+The same agent-only inventory advertises `apk properties observe`, `clear`, and
+`restore`. They are exact APK plus closed-manifest routes, not WPF actions.
+Observation creates a private no-overwrite snapshot. Clear and restore require
+the explicit property-mutation confirmation, rediscover the exact ready serial
+at the final pre-dispatch boundary, emit `sent` only at first fixed dispatch,
+and retain `pending` whenever an effect may exist without exact property and
+installed-byte readback. `confirmed` requires both readbacks. There is no
+caller-selected property/value, generic `setprop`, Local API, or retry route.
 
 `operator-actions` agent-route entries are dynamically checked against the CLI
 classifier and `--help` output. An advertised route must be executable through

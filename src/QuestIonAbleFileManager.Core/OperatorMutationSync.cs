@@ -40,6 +40,22 @@ public sealed record OperatorMutationReceipt(
         OperatorMutationStage.CleanupUnknown;
 }
 
+public sealed class OperatorMutationExecutionException : InvalidOperationException
+{
+    public OperatorMutationExecutionException(
+        OperatorMutationReceipt mutationReceipt,
+        Exception innerException)
+        : base(
+            "A dispatched headset mutation did not produce a trustworthy terminal readback.",
+            innerException)
+    {
+        MutationReceipt = mutationReceipt ??
+            throw new ArgumentNullException(nameof(mutationReceipt));
+    }
+
+    public OperatorMutationReceipt MutationReceipt { get; }
+}
+
 public static class OperatorMutationReconciler
 {
     public static OperatorMutationReceipt Reconcile(
@@ -99,6 +115,12 @@ internal sealed class OperatorMutationTracker
 
     public string OperationId { get; }
 
+    public bool HasSent => _transitions.Any(static transition =>
+        transition.Stage == OperatorMutationStage.Sent);
+
+    public bool HasPending => _transitions.Any(static transition =>
+        transition.Stage == OperatorMutationStage.Pending);
+
     public void Sent()
     {
         var message = $"Sent {OperatorMutations.DesiredState(_command)} to the headset.";
@@ -114,6 +136,28 @@ internal sealed class OperatorMutationTracker
     public OperatorMutationReceipt Complete(OperatorMutationObservation observation)
     {
         Add(observation.Stage, observation.Message);
+        return CreateReceipt(observation);
+    }
+
+    public OperatorMutationReceipt CompleteAfterReportedDispatch(
+        OperatorMutationObservation observation)
+    {
+        if (observation.Stage != OperatorMutationStage.Pending || !HasPending)
+            Add(observation.Stage, observation.Message);
+        return CreateReceipt(observation);
+    }
+
+    public OperatorMutationReceipt PreservePending(Exception exception)
+    {
+        if (!HasPending)
+            Pending();
+        return CreateReceipt(OperatorMutationObservation.Pending(
+            "No matching effective state was confirmed.",
+            $"A dispatched mutation remains pending because terminal readback failed: {exception.GetType().Name}."));
+    }
+
+    private OperatorMutationReceipt CreateReceipt(OperatorMutationObservation observation)
+    {
         return new OperatorMutationReceipt(
             OperationId,
             _command.Kind,
@@ -176,6 +220,8 @@ internal static class OperatorMutations
         OperatorCommandKind.LaunchInspectedApp or
         OperatorCommandKind.StopPackage or
         OperatorCommandKind.UninstallExactApk or
+        OperatorCommandKind.ClearExactApkProperties or
+        OperatorCommandKind.RestoreExactApkProperties or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
         OperatorCommandKind.DisconnectWifiAdb or
@@ -203,6 +249,10 @@ internal static class OperatorMutations
             $"exact package {command.PackageName} quiescent for the current Android user on {command.Serial}",
         OperatorCommandKind.UninstallExactApk =>
             $"exact inspected APK absent after destructive cleanup on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
+        OperatorCommandKind.ClearExactApkProperties =>
+            $"every closed manifest property unset for the exact inspected APK on {command.Serial}",
+        OperatorCommandKind.RestoreExactApkProperties =>
+            $"every closed manifest property restored from the exact snapshot on {command.Serial}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
         OperatorCommandKind.EnableWifiAdb => $"Wi-Fi ADB enabled on port {command.WifiPort}",
         OperatorCommandKind.DisconnectWifiAdb => "Wi-Fi ADB endpoint disconnected from this PC",
@@ -249,6 +299,8 @@ internal static class OperatorMutations
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
             OperatorCommandKind.StopPackage => ObservePackageStop(result),
             OperatorCommandKind.UninstallExactApk => ObserveExactApkUninstall(result),
+            OperatorCommandKind.ClearExactApkProperties or
+            OperatorCommandKind.RestoreExactApkProperties => ObserveExactApkPropertyMutation(result),
             OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
                     "Android Package Manager completed the install and the installed-package inventory was read back."),
@@ -311,6 +363,27 @@ internal static class OperatorMutations
             uninstall.Detail,
             HeadsetReadback: uninstall.UnscopedPackageAbsent is not null ||
                              uninstall.CurrentUserPackageAbsent is not null);
+    }
+
+    private static OperatorMutationObservation ObserveExactApkPropertyMutation(
+        OperatorExecutionResult result)
+    {
+        var mutation = result.ApkPropertyMutationResult ??
+            throw new InvalidOperationException(
+                "Exact inspected-APK property mutation returned no structured readback.");
+        if (mutation.Confirmed)
+        {
+            return OperatorMutationObservation.Confirmed(mutation.Detail);
+        }
+        if (mutation.Disposition == ApkPropertyMutationDisposition.StillDivergent)
+        {
+            return OperatorMutationObservation.Pending(
+                $"Divergent property count={mutation.DivergentProperties.Count}.",
+                "The fixed property commands completed, but exact manifest readback remains divergent.");
+        }
+        return OperatorMutationObservation.Pending(
+            mutation.Detail,
+            "Property mutation may have changed headset state, but exact manifest readback is unavailable.");
     }
 
     private static OperatorMutationObservation ObserveInspectedDeployment(
