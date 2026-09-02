@@ -12,6 +12,8 @@ internal static class CliApplication
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v3";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
+    private const string ExactApkUninstallResultSchema =
+        "questionable.file_manager.apk_uninstall_result.v1";
     private const string ApkPermissionObservationSchema =
         "questionable.file_manager.apk_permission_observation.v1";
     private const string AdbForwardInventoryResultSchema = "questionable.file_manager.adb_forward_inventory_result.v1";
@@ -48,6 +50,8 @@ internal static class CliApplication
             ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
         new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
             ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
+        new("apk_exact_uninstall", "apk uninstall --serial <serial> --file <file.apk> --confirm-exact-apk-uninstall --json",
+            ["apk", "uninstall", "--serial", "QUEST123", "--file", "example.apk", "--confirm-exact-apk-uninstall", "--json"], true),
         new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
             ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app", "--json"], true),
         new("adb_forward_inventory", "adb forwards --serial <serial> --json",
@@ -71,6 +75,11 @@ internal static class CliApplication
             if (string.Equals(arguments[1], "stop", StringComparison.OrdinalIgnoreCase))
             {
                 routeId = "apk_stop";
+                return true;
+            }
+            if (string.Equals(arguments[1], "uninstall", StringComparison.OrdinalIgnoreCase))
+            {
+                routeId = "apk_exact_uninstall";
                 return true;
             }
             if (HasFlag(arguments.ToArray(), "--json"))
@@ -126,6 +135,7 @@ internal static class CliApplication
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
+                        exactApkUninstallResult = ExactApkUninstallResultSchema,
                         apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         apkLaunchResult = ApkLaunchResultSchema,
@@ -196,6 +206,7 @@ internal static class CliApplication
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
         "apk_stop" => RunApkStopJsonAsync(arguments),
+        "apk_exact_uninstall" => RunExactApkUninstallJsonAsync(arguments),
         "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
@@ -1970,6 +1981,92 @@ internal static class CliApplication
             1);
     }
 
+    private static async Task<int> RunExactApkUninstallJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseExactApkUninstallCliArguments(arguments);
+            var client = AdbClient.CreateDefault();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var result = execution.ExactApkUninstallResult ??
+                throw new InvalidOperationException("Exact inspected-APK uninstall returned no result.");
+            var confirmed = result.Confirmed;
+            WriteJson(new
+            {
+                schema = ExactApkUninstallResultSchema,
+                succeeded = confirmed,
+                mutation = execution.MutationReceipt,
+                result,
+                failure = confirmed
+                    ? (object?)null
+                    : new
+                    {
+                        code = result.Disposition == ExactApkUninstallDisposition.StillPresent
+                            ? "still_present"
+                            : "cleanup_unknown",
+                        message = result.Detail,
+                        state_change_possible = true
+                    }
+            });
+            return confirmed ? 0 : 1;
+        }
+        catch (Exception exception)
+        {
+            var failure = ClassifyExactApkUninstallFailure(exception);
+            WriteJson(new
+            {
+                schema = ExactApkUninstallResultSchema,
+                succeeded = false,
+                mutation = (object?)null,
+                result = (object?)null,
+                failure = new
+                {
+                    code = failure.Code,
+                    message = failure.Message,
+                    state_change_possible = false
+                }
+            });
+            return failure.ExitCode;
+        }
+    }
+
+    private static (string Code, string Message, int ExitCode)
+        ClassifyExactApkUninstallFailure(Exception exception)
+    {
+        if (exception is ArgumentException or FileNotFoundException or IOException or SplitPackageException)
+        {
+            return (
+                "input_rejected",
+                "The exact inspected-APK uninstall input was rejected before device dispatch.",
+                2);
+        }
+        if (exception is PackageNotInstalledException)
+        {
+            return (
+                "preimage_absent",
+                "The inspected package was absent before dispatch; uninstall is not an idempotent success.",
+                1);
+        }
+        if (exception is InvalidDataException)
+        {
+            return (
+                "pre_dispatch_proof_rejected",
+                "Exact serial, immutable artifact, or installed-identity proof was rejected before dispatch.",
+                1);
+        }
+        if (exception is AdbCommandException or OperationCanceledException or TimeoutException)
+        {
+            return (
+                "pre_dispatch_read_failed",
+                "A fixed serial-scoped uninstall precondition readback did not complete before dispatch.",
+                1);
+        }
+        return (
+            "pre_dispatch_failed",
+            "Exact inspected-APK uninstall did not reach device dispatch.",
+            1);
+    }
+
     private static async Task<int> RunApkPermissionObservationJsonAsync(string[] arguments)
     {
         try
@@ -2642,6 +2739,11 @@ internal static class CliApplication
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk permissions --serial <serial> --package <package> --json
+              questionable-file-manager apk preflight --serial <serial> --file <file.apk> --json
+              questionable-file-manager apk deploy --serial <serial> --file <file.apk> --json
+              questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json
+              questionable-file-manager apk stop --serial <serial> --package <package> --confirm-package-stop --json
+              questionable-file-manager apk uninstall --serial <serial> --file <file.apk> --confirm-exact-apk-uninstall --json
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]
               questionable-file-manager apk install-many --serial <host:port> --serial <host:port> --file <file.apk> [options]
               questionable-file-manager apk install-bundle-many --serial <host:port> --serial <host:port> --folder <apk-folder> [options]
@@ -2736,6 +2838,11 @@ internal static class CliApplication
             input; serials, endpoints, and pairing codes are never command-line arguments
             or output. Replacement and revocation require their explicit confirmation flags.
             Split APK packages are refused by the single-APK export command.
+            Exact inspected-APK uninstall is a destructive agent-only cleanup
+            primitive: it removes the app and may delete its app-private data.
+            It is valid only when a separate pre-run snapshot proves absence and
+            the current run owns the exact install. Exact-byte equality alone is
+            not cleanup authority, and the route proves only fixed package absence.
             Fleet integration is optional and disabled by default. The normal executable
             exposes one exact-device read-only list or staged pull under adb-shared.
             Bounded push is advertised only by a host that injects current Quest identity

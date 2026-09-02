@@ -57,6 +57,12 @@ public static class OperatorActionRegistry
                 true,
                 "fixed --user current dispatch followed only by exact-package installed, process, foreground-component, and top-resumed-component quiescence readback; it does not prove application readiness, OpenXR readiness, app effect, or wearer visibility"),
             new(
+                "apk_exact_uninstall",
+                "apk uninstall --serial --file --confirm-exact-apk-uninstall --json",
+                "OperatorCommands.UninstallExactApk",
+                true,
+                "destructive cleanup only after immutable local-artifact and full installed-identity equality; removes the app and app-private data, then confirms both fixed unscoped and current-user package absence; it does not prove run ownership or broader snapshot restoration"),
+            new(
                 "apk_permission_observation",
                 "apk permissions --serial --package --json",
                 "OperatorCommands.ObservePackagePermissions",

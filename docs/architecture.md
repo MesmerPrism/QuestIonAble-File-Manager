@@ -243,6 +243,11 @@ reconcilable on later refresh.
 Direct commands use the same desired/effective-state matcher. Direct file
 mutations confirm only after signed byte/hash readback; local installs stay
 pending until the matching Android receipt reports installed or failed.
+The exact inspected-APK uninstall is the reviewed destructive cleanup
+exception. Its immutable artifact and full installed identity are preconditions,
+not proof of run ownership. It may delete app-private data; only dual fixed
+package-absence readback confirms, while still-present remains pending and any
+dispatch/readback ambiguity is terminal cleanup-unknown without replay.
 
 Each dedicated provider host admits `--describe-json` as one exact,
 case-sensitive vector separate from its existing execution vector. That branch
