@@ -84,6 +84,22 @@ public static class OperatorMutationReconciler
     }
 }
 
+public sealed class OperatorMutationExecutionException : InvalidOperationException
+{
+    public OperatorMutationExecutionException(
+        OperatorMutationReceipt mutationReceipt,
+        Exception innerException)
+        : base(
+            "A dispatched headset mutation did not produce a trustworthy terminal readback.",
+            innerException)
+    {
+        MutationReceipt = mutationReceipt ??
+            throw new ArgumentNullException(nameof(mutationReceipt));
+    }
+
+    public OperatorMutationReceipt MutationReceipt { get; }
+}
+
 internal sealed class OperatorMutationTracker
 {
     private readonly OperatorCommand _command;
@@ -98,6 +114,20 @@ internal sealed class OperatorMutationTracker
     }
 
     public string OperationId { get; }
+
+    public bool DispatchObserved { get; private set; }
+
+    public bool HasPending => _transitions.Any(static transition =>
+        transition.Stage == OperatorMutationStage.Pending);
+
+    public void Dispatched()
+    {
+        if (DispatchObserved)
+            return;
+        DispatchObserved = true;
+        Sent();
+        Pending();
+    }
 
     public void Sent()
     {
@@ -114,6 +144,20 @@ internal sealed class OperatorMutationTracker
     public OperatorMutationReceipt Complete(OperatorMutationObservation observation)
     {
         Add(observation.Stage, observation.Message);
+        return CreateReceipt(observation);
+    }
+
+    public OperatorMutationReceipt PreservePending(Exception exception)
+    {
+        if (!HasPending)
+            Pending();
+        return CreateReceipt(OperatorMutationObservation.Pending(
+            "No matching effective state was confirmed.",
+            $"A dispatched mutation remains pending because terminal readback failed: {exception.GetType().Name}."));
+    }
+
+    private OperatorMutationReceipt CreateReceipt(OperatorMutationObservation observation)
+    {
         return new OperatorMutationReceipt(
             OperationId,
             _command.Kind,
@@ -164,6 +208,9 @@ internal sealed record OperatorMutationObservation(
 
     public static OperatorMutationObservation Pending(string observedState, string message) =>
         new(OperatorMutationStage.Pending, message, observedState, HeadsetReadback: true);
+
+    public static OperatorMutationObservation Rejected(string observedState, string message) =>
+        new(OperatorMutationStage.Rejected, message, observedState, HeadsetReadback: true);
 }
 
 internal static class OperatorMutations
@@ -174,6 +221,7 @@ internal static class OperatorMutations
         OperatorCommandKind.InstallApk or
         OperatorCommandKind.DeployInspectedApp or
         OperatorCommandKind.LaunchInspectedApp or
+        OperatorCommandKind.LaunchDiagnoseInspectedApp or
         OperatorCommandKind.StopPackage or
         OperatorCommandKind.InstallApkBundle or
         OperatorCommandKind.EnableWifiAdb or
@@ -198,6 +246,8 @@ internal static class OperatorMutations
         OperatorCommandKind.DeployInspectedApp =>
             $"inspected APK installed and resolved launcher effect observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}; application and OpenXR readiness remain app-owned",
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
+        OperatorCommandKind.LaunchDiagnoseInspectedApp =>
+            $"resolved exported launcher started once under bounded post-fence UID diagnostics on {command.Serial}",
         OperatorCommandKind.StopPackage =>
             $"exact package {command.PackageName} quiescent for the current Android user on {command.Serial}",
         OperatorCommandKind.InstallApkBundle => "APK package set installed",
@@ -244,6 +294,7 @@ internal static class OperatorMutations
             OperatorCommandKind.InstallApk => ObserveInspectedInstall(command, result),
             OperatorCommandKind.DeployInspectedApp => ObserveInspectedDeployment(command, result),
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
+            OperatorCommandKind.LaunchDiagnoseInspectedApp => ObserveLaunchDiagnostic(result),
             OperatorCommandKind.StopPackage => ObservePackageStop(result),
             OperatorCommandKind.InstallApkBundle =>
                 OperatorMutationObservation.Confirmed(
@@ -266,6 +317,26 @@ internal static class OperatorMutations
             : OperatorMutationObservation.Pending(
                 $"Resolved component {launch.Component} was not observed resumed.",
                 "Launch was sent, but exact resumed-activity readback is still pending.");
+    }
+
+    private static OperatorMutationObservation ObserveLaunchDiagnostic(OperatorExecutionResult result)
+    {
+        var diagnostic = result.ApkLaunchDiagnosticBundleResult ??
+            throw new InvalidOperationException("APK launch diagnostics returned no structured result.");
+        if (!diagnostic.Attempt.DispatchAttempted)
+        {
+            return OperatorMutationObservation.Rejected(
+                diagnostic.DispositionDetail,
+                "Launch diagnostics ended before the resolved launcher dispatch; headset state change was not possible.");
+        }
+        return diagnostic.Disposition switch
+        {
+            ApkLaunchDiagnosticDisposition.Completed => OperatorMutationObservation.Confirmed(
+                "Exact installed bytes and the resolved launcher effect were observed while bounded post-fence UID evidence was retained."),
+            _ => OperatorMutationObservation.Pending(
+                diagnostic.DispositionDetail,
+                "The resolved launcher was dispatched and launch diagnostics retained typed evidence, but the exact launcher effect is not fully confirmed.")
+        };
     }
 
     private static OperatorMutationObservation ObservePackageStop(OperatorExecutionResult result)

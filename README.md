@@ -160,6 +160,7 @@ dotnet run --project src/QuestIonAbleFileManager.Cli -- apk install --serial <qu
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk preflight --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk deploy --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk diagnose --serial <quest-serial> --file ./example.apk --output ./private-diagnostics --json
+dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch-diagnose --serial <quest-serial> --file ./example.apk --output ./private-launch-diagnostics --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk stop --serial <quest-serial> --package com.example.app --confirm-package-stop --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk launch --serial <quest-serial> --file ./example.apk --json
 dotnet run --project src/QuestIonAbleFileManager.Cli -- apk observe --serial <quest-serial> --file ./example.apk --json
@@ -259,6 +260,14 @@ optional bounded PID corroboration. Its public JSON is sanitized; the local
 bundle may contain private runtime data and must not be committed or published
 without review. Logs are raw facts, not readiness or crash conclusions. See
 [APK diagnostic bundle](docs/apk-diagnostic-bundle.md).
+`apk launch-diagnose` is a separate state-changing agent route. It pre-arms
+one fixed current-UID log window at a device-time fence, dispatches one
+resolved launcher, retains a bounded private no-overwrite bundle, and never
+retries. A post-dispatch output collision retains the closed bundle under its
+unique sibling and returns typed uncertainty instead of deleting evidence. Its
+transport/effect evidence remains separate from app-owned
+readiness and semantic acceptance. See
+[APK launch diagnostic](docs/apk-launch-diagnostic.md).
 `apk stop` is the separate exact-package, current-user force-stop route. It
 confirms only package/process/activity quiescence and makes no readiness,
 OpenXR, app-effect, or wearer-visibility claim.

@@ -11,6 +11,8 @@ internal static class CliApplication
     private const string ApkPreflightResultSchema = "questionable.file_manager.apk_preflight_result.v1";
     private const string ApkDeployResultSchema = "questionable.file_manager.apk_deploy_result.v1";
     private const string ApkDiagnosticResultSchema = "questionable.file_manager.apk_diagnostic_result.v3";
+    private const string ApkLaunchDiagnosticResultSchema =
+        "questionable.file_manager.apk_launch_diagnostic_result.v1";
     private const string ApkStopResultSchema = "questionable.file_manager.apk_stop_result.v1";
     private const string ApkPermissionObservationSchema =
         "questionable.file_manager.apk_permission_observation.v1";
@@ -46,6 +48,8 @@ internal static class CliApplication
             ["apk", "deploy", "--serial", "QUEST123", "--file", "example.apk", "--json"], true),
         new("apk_diagnose", "apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json",
             ["apk", "diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
+        new("apk_launch_diagnose", "apk launch-diagnose --serial <serial> --file <file.apk> --output <new-folder> --json",
+            ["apk", "launch-diagnose", "--serial", "QUEST123", "--file", "example.apk", "--output", "capture", "--json"], true),
         new("apk_stop", "apk stop --serial <serial> --package <package> --confirm-package-stop --json",
             ["apk", "stop", "--serial", "QUEST123", "--package", "com.example.app", "--confirm-package-stop", "--json"], true),
         new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
@@ -80,6 +84,7 @@ internal static class CliApplication
                     "preflight" => "apk_preflight",
                     "deploy" => "apk_deploy",
                     "diagnose" => "apk_diagnose",
+                    "launch-diagnose" => "apk_launch_diagnose",
                     "permissions" => "apk_permission_observation",
                     _ => string.Empty
                 };
@@ -125,6 +130,7 @@ internal static class CliApplication
                         apkPreflightResult = ApkPreflightResultSchema,
                         apkDeployResult = ApkDeployResultSchema,
                         apkDiagnosticResult = ApkDiagnosticResultSchema,
+                        apkLaunchDiagnosticResult = ApkLaunchDiagnosticResultSchema,
                         apkStopResult = ApkStopResultSchema,
                         apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
@@ -195,6 +201,7 @@ internal static class CliApplication
         "apk_preflight" => RunApkPreflightJsonAsync(arguments),
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
+        "apk_launch_diagnose" => RunApkLaunchDiagnoseJsonAsync(arguments),
         "apk_stop" => RunApkStopJsonAsync(arguments),
         "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
@@ -1213,6 +1220,9 @@ internal static class CliApplication
             case "diagnose":
                 return await RunApkDiagnoseAsync(executor, arguments);
 
+            case "launch-diagnose":
+                return await RunApkLaunchDiagnoseAsync(executor, arguments);
+
             case "launch":
                 return await RunApkLaunchAsync(executor, arguments);
 
@@ -1483,6 +1493,125 @@ internal static class CliApplication
         {
             return WriteApkDiagnosticFailure(exception);
         }
+    }
+
+    private static async Task<int> RunApkLaunchDiagnoseAsync(
+        OperatorCommandExecutor executor,
+        string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseLaunchDiagnosticCliArguments(arguments);
+            var execution = await executor.ExecuteAsync(command).ConfigureAwait(false);
+            var result = execution.ApkLaunchDiagnosticBundleResult ??
+                throw new InvalidOperationException("APK launch diagnostics returned no result.");
+            var completed = result.Disposition == ApkLaunchDiagnosticDisposition.Completed;
+            WriteJson(new
+            {
+                schema = ApkLaunchDiagnosticResultSchema,
+                succeeded = completed,
+                complete = completed,
+                mutation = execution.MutationReceipt,
+                result = CreateSanitizedApkLaunchDiagnosticResult(result),
+                failure = completed ? null : new
+                {
+                    code = result.Disposition.ToString().ToLowerInvariant(),
+                    message = result.DispositionDetail,
+                    state_change_possible = result.Attempt.DispatchAttempted
+                }
+            });
+            return result.Disposition switch
+            {
+                ApkLaunchDiagnosticDisposition.Completed => 0,
+                ApkLaunchDiagnosticDisposition.RejectedBeforeDispatch => 2,
+                ApkLaunchDiagnosticDisposition.LaunchPending => 3,
+                _ => 4
+            };
+        }
+        catch (Exception exception)
+        {
+            return WriteApkLaunchDiagnosticFailure(exception);
+        }
+    }
+
+    private static async Task<int> RunApkLaunchDiagnoseJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            return await RunApkLaunchDiagnoseAsync(
+                new OperatorCommandExecutor(client),
+                arguments).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            return WriteApkLaunchDiagnosticFailure(exception);
+        }
+    }
+
+    private static object CreateSanitizedApkLaunchDiagnosticResult(
+        ApkLaunchDiagnosticBundleResult result) => new
+    {
+        diagnosticContract = result.DiagnosticContract,
+        disposition = result.Disposition,
+        dispositionDetail = result.DispositionDetail,
+        dispatchAttempted = result.Attempt.DispatchAttempted,
+        componentObservedResumed = result.Attempt.Launch?.ComponentObservedResumed,
+        currentPackageProcessCount = result.Attempt.CurrentPackageProcessIds.Count,
+        capture = new
+        {
+            result.Capture.SizeBytes,
+            result.Capture.Sha256,
+            result.Capture.PostActionWindowElapsed,
+            result.Capture.OutputLimitReached,
+            result.Capture.CaptureExitedEarly,
+            result.Capture.ProcessTreeCleanupSucceeded,
+            result.Capture.CaptureExitCode
+        },
+        manifest = new
+        {
+            result.ManifestSizeBytes,
+            result.ManifestSha256,
+            result.PublishedAtRequestedPath,
+            result.BundleLeafName
+        },
+        limitations = new
+        {
+            applicationReadiness = "unknown",
+            openXrReadiness = "unknown",
+            wearerVisibility = "unknown",
+            appSemanticAcceptance = false,
+            screenshotOrRecording = false,
+            retryPerformed = false
+        }
+    };
+
+    internal static int WriteApkLaunchDiagnosticFailure(Exception exception)
+    {
+        var dispatched = exception as OperatorMutationExecutionException;
+        var inputRejected = exception is ArgumentException or FileNotFoundException or
+            DirectoryNotFoundException or SplitPackageException;
+        WriteJson(new
+        {
+            schema = ApkLaunchDiagnosticResultSchema,
+            succeeded = false,
+            complete = false,
+            mutation = dispatched?.MutationReceipt,
+            result = (object?)null,
+            failure = new
+            {
+                code = dispatched is not null
+                    ? "launch_pending"
+                    : inputRejected ? "input_rejected" : "launch_diagnostic_failed",
+                message = dispatched is not null
+                    ? "Launch was dispatched, but exact terminal evidence is unavailable."
+                    : inputRejected
+                        ? "The exact launch-diagnostic input or new output directory was rejected."
+                        : "Launch diagnostics failed without exposing private artifact, target, or log details.",
+                state_change_possible = dispatched is not null || !inputRejected
+            }
+        });
+        return dispatched is not null ? 3 : inputRejected ? 2 : 1;
     }
 
     private static int WriteApkDiagnosticFailure(Exception exception)
@@ -2640,6 +2769,7 @@ internal static class CliApplication
               questionable-file-manager apk export --serial <serial> --package <package> --output <file.apk> [--overwrite] [--json]
               questionable-file-manager apk install --serial <serial> --file <file.apk> [options]
               questionable-file-manager apk launch --serial <serial> --file <file.apk> [--json]
+              questionable-file-manager apk launch-diagnose --serial <serial> --file <file.apk> --output <new-folder> --json
               questionable-file-manager apk observe --serial <serial> --file <file.apk> [--json]
               questionable-file-manager apk permissions --serial <serial> --package <package> --json
               questionable-file-manager apk install-bundle --serial <serial> --folder <apk-folder> [options]

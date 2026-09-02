@@ -129,6 +129,24 @@ classifier and `--help` output. An advertised route must be executable through
 that classifier or explicitly marked non-executable; registry text alone is
 not evidence of a dispatch path.
 
+`apk launch-diagnose --serial <quest-serial> --file <local-apk> --output
+<new-private-folder> --json` is the separately reviewed agent-only launch
+diagnostic route. It admits one immutable inspected APK only when its complete
+installed byte identity matches, pre-arms one bounded derived-UID log capture,
+dispatches the exact resolved launcher once, and publishes a CreateNew evidence
+bundle with host/device fences and post-capture UID/PID/installed-byte
+readbacks. It accepts no caller-selected package, UID, PID, tag, duration,
+shell fragment, raw ADB argument, retry, screenshot, recording, or bugreport.
+An output race after dispatch retains the closed bundle in its unique sibling
+and returns typed uncertainty instead of overwriting or deleting evidence.
+Its mutation receipt emits no `sent`/`pending` state until the exact launcher
+dispatch boundary; a predispatch refusal is terminal `rejected`, while any
+postdispatch ambiguity remains `pending`. Stream cleanup has a bounded terminal
+join after cancellation and pipe revocation and cannot publish a still-mutating
+capture.
+It has no WPF or local-API projection and does not claim application/OpenXR
+readiness or wearer visibility.
+
 `apk permissions --serial <quest-serial> --package <package> --json` is another
 agent-only route. It uses one strict immutable Core command and only bounded
 fixed package-manager/app-ops observation sources for that exact installed
@@ -177,6 +195,7 @@ Example shapes use placeholders rather than live device or local identities:
 & '.\questionable-file-manager.exe' apk preflight --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk deploy --serial <quest-serial> --file <local-apk> --json --adb <path-to-adb>
 & '.\questionable-file-manager.exe' apk diagnose --serial <quest-serial> --file <local-apk> --output <new-private-folder> --json --adb <path-to-adb>
+& '.\questionable-file-manager.exe' apk launch-diagnose --serial <quest-serial> --file <local-apk> --output <new-private-folder> --json
 & '.\questionable-file-manager.exe' apk install-bundle --serial <quest-serial> --folder <apk-folder> --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb --adb <path-to-adb>
 & '.\questionable-file-manager.exe' wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb --adb <path-to-adb>

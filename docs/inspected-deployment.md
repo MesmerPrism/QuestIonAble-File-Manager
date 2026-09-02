@@ -116,6 +116,19 @@ manifest is complete. The fixed capture set is documented in
 `apk-diagnostic-bundle.md`; callers cannot supply commands, tags, PIDs, log
 counts, or capture kinds.
 
+`apk launch-diagnose --serial <quest-serial> --file <path-to.apk> --output
+<new-folder> --json` is a distinct agent-only mutation plus evidence route.
+It retains immutable artifact admission and exact installed-byte/launcher
+proof, derives the current-user UID, reads a device epoch fence, pre-arms one
+fixed UID-filtered epoch log stream at that fence, rechecks the exact ready
+serial and installed bytes, and dispatches the resolved launcher exactly once.
+After the fixed post-action window it kills and drains the capture tree,
+rechecks installed bytes and UID, and atomically publishes one no-overwrite
+private bundle. It accepts no caller package, UID, PID, tag, filter, duration,
+component, intent, shell fragment, or raw ADB argument. Its typed result does
+not claim app readiness, OpenXR readiness, semantic acceptance, screenshots,
+recording, or wearer visibility. See `apk-launch-diagnostic.md`.
+
 `operator-actions --json` advertises the preflight-result,
 inspected-deployment, launch-result, deploy-result, diagnostic-result,
 launcher-export-proof, and runtime-observation contract revisions without

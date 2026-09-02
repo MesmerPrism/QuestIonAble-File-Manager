@@ -4,7 +4,7 @@ using System.Text;
 
 namespace QuestIonAbleFileManager.Core;
 
-public sealed class CommandRunner : IStreamingCommandRunner, ISensitiveCommandRunner
+public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveCommandRunner
 {
     private const int StreamBufferBytes = 64 * 1024;
     private const int MaximumStandardErrorCharacters = 64 * 1024;
@@ -274,6 +274,117 @@ public sealed class CommandRunner : IStreamingCommandRunner, ISensitiveCommandRu
             Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant());
     }
 
+    public async Task<ArmedCaptureCommandResult<T>> RunArmedCaptureAsync<T>(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        Stream destination,
+        long maximumBytes,
+        TimeSpan postActionWindow,
+        Func<CancellationToken, Task<T>> armedAction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(postActionWindow, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(armedAction);
+        if (!destination.CanWrite)
+        {
+            throw new ArgumentException("The armed capture destination must be writable.", nameof(destination));
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var startInfo = CreateStartInfo(fileName, arguments);
+        using var process = new Process { StartInfo = startInfo };
+        var stopwatch = Stopwatch.StartNew();
+        StartProcess(process, fileName);
+
+        var outputLimitReached = false;
+        var bytesWritten = 0L;
+        using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        using var drainSource = new CancellationTokenSource();
+        var outputTask = ReadArmedCaptureAsync(
+            process.StandardOutput.BaseStream,
+            destination,
+            maximumBytes,
+            hasher,
+            () => outputLimitReached = true,
+            value => bytesWritten = value,
+            drainSource.Token);
+        var errorTask = ReadBoundedStandardErrorAsync(
+            process.StandardError,
+            drainSource.Token);
+        T actionResult;
+        var postActionWindowElapsed = false;
+        var captureExitedEarly = false;
+        var cleanupSucceeded = true;
+        try
+        {
+            // Process.Start is the host-side armed boundary. Device-side gap
+            // closure belongs to the caller's fixed capture arguments.
+            actionResult = await armedAction(cancellationToken).ConfigureAwait(false);
+
+            var delay = Task.Delay(postActionWindow, CancellationToken.None);
+            var processExit = process.WaitForExitAsync();
+            var completed = await Task.WhenAny(delay, processExit, outputTask).ConfigureAwait(false);
+            postActionWindowElapsed = ReferenceEquals(completed, delay);
+            captureExitedEarly = ReferenceEquals(completed, processExit);
+        }
+        catch
+        {
+            cleanupSucceeded = TryKillForArmedCapture(process);
+            cleanupSucceeded &= await CompleteArmedCaptureCleanupAsync(
+                process,
+                outputTask,
+                errorTask,
+                drainSource,
+                destination,
+                hasher).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            cleanupSucceeded &= TryKillForArmedCapture(process);
+        }
+
+        cleanupSucceeded &= await CompleteArmedCaptureCleanupAsync(
+            process,
+            outputTask,
+            errorTask,
+            drainSource,
+            destination,
+            hasher).ConfigureAwait(false);
+        await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        string standardError;
+        try
+        {
+            standardError = await errorTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            cleanupSucceeded = false;
+            standardError = "[capture standard error drain did not complete]";
+        }
+        stopwatch.Stop();
+        var exitCode = process.HasExited ? process.ExitCode : -1;
+        return new ArmedCaptureCommandResult<T>(
+            actionResult,
+            new CommandResult(
+                fileName,
+                arguments.ToArray(),
+                exitCode,
+                string.Empty,
+                standardError,
+                stopwatch.Elapsed),
+            bytesWritten,
+            Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant(),
+            postActionWindowElapsed,
+            outputLimitReached,
+            captureExitedEarly,
+            cleanupSucceeded);
+    }
+
     public async Task<SensitiveCommandResult<T>> RunSensitiveAsync<T>(
         string fileName,
         IReadOnlyList<string> arguments,
@@ -471,6 +582,170 @@ public sealed class CommandRunner : IStreamingCommandRunner, ISensitiveCommandRu
             {
                 CryptographicOperations.ZeroMemory(segment.Array);
             }
+        }
+    }
+
+    private static async Task ReadArmedCaptureAsync(
+        Stream source,
+        Stream destination,
+        long maximumBytes,
+        IncrementalHash hasher,
+        Action markLimitReached,
+        Action<long> reportBytes,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[StreamBufferBytes];
+        long written = 0;
+        try
+        {
+            while (true)
+            {
+                var count = await source.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (count == 0)
+                    return;
+                var remaining = maximumBytes - written;
+                if (remaining <= 0)
+                {
+                    markLimitReached();
+                    return;
+                }
+                var accepted = (int)Math.Min(count, remaining);
+                await destination.WriteAsync(
+                    buffer.AsMemory(0, accepted),
+                    cancellationToken).ConfigureAwait(false);
+                hasher.AppendData(buffer, 0, accepted);
+                written += accepted;
+                if (accepted != count)
+                {
+                    markLimitReached();
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            reportBytes(written);
+        }
+    }
+
+    private static bool TryKillForArmedCapture(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            return true;
+        }
+        catch
+        {
+            return process.HasExited;
+        }
+    }
+
+    private static async Task<bool> CompleteArmedCaptureCleanupAsync(
+        Process process,
+        Task outputTask,
+        Task errorTask,
+        CancellationTokenSource drainSource,
+        Stream destination,
+        IncrementalHash hasher)
+    {
+        var succeeded = true;
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch
+        {
+            succeeded = false;
+            succeeded &= TryKillForArmedCapture(process);
+            try
+            {
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            catch
+            {
+                succeeded = false;
+            }
+        }
+
+        succeeded &= await JoinArmedCaptureDrainsAsync(
+            Task.WhenAll(outputTask, errorTask),
+            drainSource,
+            () =>
+            {
+                TryDispose(process.StandardOutput);
+                TryDispose(process.StandardError);
+                TryDispose(destination);
+                TryDispose(hasher);
+            },
+            TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        return succeeded;
+    }
+
+    internal static async Task<bool> JoinArmedCaptureDrainsAsync(
+        Task drains,
+        CancellationTokenSource drainSource,
+        Action revokePipeOwnership,
+        TimeSpan terminalJoinTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(drains);
+        ArgumentNullException.ThrowIfNull(drainSource);
+        ArgumentNullException.ThrowIfNull(revokePipeOwnership);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(terminalJoinTimeout, TimeSpan.Zero);
+        try
+        {
+            await drains.WaitAsync(terminalJoinTimeout).ConfigureAwait(false);
+            return true;
+        }
+        catch when (drains.IsCompleted)
+        {
+            await IgnoreFailureAsync(drains).ConfigureAwait(false);
+            return false;
+        }
+        catch (TimeoutException)
+        {
+            drainSource.Cancel();
+            revokePipeOwnership();
+            try
+            {
+                await drains.WaitAsync(terminalJoinTimeout).ConfigureAwait(false);
+                return false;
+            }
+            catch when (drains.IsCompleted)
+            {
+                await IgnoreFailureAsync(drains).ConfigureAwait(false);
+                return false;
+            }
+            catch (TimeoutException)
+            {
+                ObserveDetachedDrain(drains);
+                throw new TimeoutException(
+                    "Armed capture stream drains did not terminate after bounded cancellation and stream-ownership revocation.");
+            }
+        }
+    }
+
+    private static void ObserveDetachedDrain(Task drains)
+    {
+        _ = drains.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void TryDispose(IDisposable disposable)
+    {
+        try
+        {
+            disposable.Dispose();
+        }
+        catch
+        {
+            // Typed cleanup uncertainty is retained by the caller.
         }
     }
 

@@ -14,7 +14,8 @@ general Quest runtime console or fleet manager.
 - Browsing, pulling, and explicit pushing on shell-accessible paths.
 - Third-party package listing, single-APK export, inspected/hash-bound
   single-APK install, constrained resolved launch, structured runtime
-  observation, and atomic folder-based split APK set install.
+  observation, one agent-only pre-armed bounded UID launch diagnostic, and
+  atomic folder-based split APK set install.
 - Explicit Wi-Fi ADB enable/connect/disconnect with no ADB daemon lifecycle.
 - Bounded parallel single-APK and complete split-set installation across
   distinct Wi-Fi ADB endpoints, with one result per target.
@@ -45,6 +46,9 @@ general Quest runtime console or fleet manager.
 - General remote-path deletion, package uninstall, clear-data, or ADB daemon
   lifecycle. Deletion inside Rusty Kiosk's explicitly bounded app-owned staging
   area is supported.
+- Caller-selected log filters, tags, UIDs, PIDs, capture durations, components,
+  shell text, or raw ADB arguments. The launch diagnostic derives and fixes all
+  applicable dimensions and exposes no generic filter.
 - TLS, network scanning, fleet discovery, online relays, or multi-device direct
   orchestration.
 - Fleet target scheduling, Fleet identity inference, multi-target file
