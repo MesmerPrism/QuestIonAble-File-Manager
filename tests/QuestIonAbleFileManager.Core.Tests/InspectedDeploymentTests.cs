@@ -470,6 +470,103 @@ public sealed class InspectedDeploymentTests
     }
 
     [Fact]
+    public async Task Preflight_ConcurrentCallersRemainSerialScopedAfterAdmissionSerialization()
+    {
+        const string firstSerial = "QUEST_A";
+        const string secondSerial = "QUEST_B";
+        var discovery =
+            "List of devices attached\n" +
+            "QUEST_A device product:eureka model:Quest_3 transport_id:1\n" +
+            "QUEST_B device product:eureka model:Quest_3 transport_id:2\n";
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstApk = await CreateApkAsync();
+        var secondApk = await CreateApkAsync();
+        var firstRunner = CreatePreflightRunner(
+            firstApk,
+            installed: false,
+            deviceApiLevel: 32,
+            serial: firstSerial,
+            discoveryOutput: discovery,
+            afterCall: (file, _) =>
+            {
+                if (file != "aapt2") return;
+                firstEntered.TrySetResult();
+                releaseFirst.Task.GetAwaiter().GetResult();
+            });
+        var secondRunner = CreatePreflightRunner(
+            secondApk,
+            installed: true,
+            deviceApiLevel: 32,
+            serial: secondSerial,
+            discoveryOutput: discovery);
+        Task<ApkPreflightResult>? first = null;
+        Task<ApkPreflightResult>? second = null;
+        Exception? bodyFailure = null;
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            first = Task.Run(
+                () => new AdbClient("adb", firstRunner, new("aapt2", "apksigner"))
+                    .PreflightInspectedApkAsync(firstSerial, firstApk, lifetime.Token),
+                lifetime.Token);
+            await firstEntered.Task.WaitAsync(lifetime.Token);
+            second = new AdbClient("adb", secondRunner, new("aapt2", "apksigner"))
+                .PreflightInspectedApkAsync(secondSerial, secondApk, lifetime.Token);
+            Assert.Empty(secondRunner.Calls);
+            releaseFirst.TrySetResult();
+
+            var results = await Task.WhenAll(first, second).WaitAsync(lifetime.Token);
+
+            Assert.Equal(firstSerial, results[0].Serial);
+            Assert.Equal(secondSerial, results[1].Serial);
+            Assert.Equal(InstalledApkMatch.Absent, results[0].InstalledMatch);
+            Assert.Equal(InstalledApkMatch.Exact, results[1].InstalledMatch);
+            AssertSerialScopedPreflightCalls(firstRunner, firstSerial);
+            AssertSerialScopedPreflightCalls(secondRunner, secondSerial);
+        }
+        catch (Exception exception)
+        {
+            bodyFailure = exception;
+            throw;
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            lifetime.Cancel();
+            var settled = false;
+            try
+            {
+                var started = new[] { first, second }.Where(static task => task is not null).Cast<Task>();
+                var completion = Task.WhenAll(started);
+                using var completionTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                try
+                {
+                    await completion.WaitAsync(completionTimeout.Token);
+                    settled = true;
+                }
+                catch when (bodyFailure is not null)
+                {
+                    settled = completion.IsCompleted;
+                }
+                catch when (completion.IsCompleted)
+                {
+                    settled = true;
+                    throw;
+                }
+            }
+            finally
+            {
+                if (settled)
+                {
+                    File.Delete(firstApk);
+                    File.Delete(secondApk);
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task Preflight_TreatsAbsentInstallAsDeployReadyButNotLaunchOrDiagnoseReady()
     {
         var apk = await CreateApkAsync();
@@ -2395,7 +2492,10 @@ public sealed class InspectedDeploymentTests
         bool installed,
         int deviceApiLevel,
         CommandResult? packagePathResult = null,
-        CommandResult? packageListResult = null)
+        CommandResult? packageListResult = null,
+        string serial = "QUEST123",
+        string? discoveryOutput = null,
+        Action<string, IReadOnlyList<string>>? afterCall = null)
     {
         return new FakeRunner((file, arguments) =>
         {
@@ -2414,22 +2514,23 @@ public sealed class InspectedDeploymentTests
             if (arguments.SequenceEqual(["devices", "-l"]))
             {
                 return Success(
-                    "List of devices attached\n" +
-                    "QUEST123 device product:eureka model:Quest_3 transport_id:1\n");
+                    discoveryOutput ??
+                    ("List of devices attached\n" +
+                     $"{serial} device product:eureka model:Quest_3 transport_id:1\n"));
             }
             if (arguments.SequenceEqual(
-                    ["-s", "QUEST123", "shell", "getprop", "ro.build.version.sdk"]))
+                    ["-s", serial, "shell", "getprop", "ro.build.version.sdk"]))
             {
                 return Success(deviceApiLevel.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
             }
             if (arguments.SequenceEqual(
-                    ["-s", "QUEST123", "shell", "pm path 'com.example.app'"]))
+                    ["-s", serial, "shell", "pm path 'com.example.app'"]))
             {
                 return packagePathResult ??
                     Success(installed ? "package:/data/app/example/base.apk\n" : "");
             }
             if (arguments.SequenceEqual(
-                    ["-s", "QUEST123", "shell", "pm list packages 'com.example.app'"]))
+                    ["-s", serial, "shell", "pm list packages 'com.example.app'"]))
             {
                 return packageListResult ?? Success("");
             }
@@ -2438,14 +2539,31 @@ public sealed class InspectedDeploymentTests
                 return Success("com.example.app/.Main\n");
             }
             if (arguments.SequenceEqual(
-                    ["-s", "QUEST123", "shell", "dumpsys", "package", "com.example.app"]))
+                    ["-s", serial, "shell", "dumpsys", "package", "com.example.app"]))
             {
                 return Success(
                     "  Activity #0 ActivityInfo{abc com.example.app/.Main}\n" +
                     "    exported=true\n");
             }
             return Success("unexpected\n");
-        }, File.ReadAllBytes(sourceApk));
+        }, File.ReadAllBytes(sourceApk), afterCall: afterCall);
+    }
+
+    private static void AssertSerialScopedPreflightCalls(FakeRunner runner, string serial)
+    {
+        var adbCalls = runner.Calls.Where(call => call.FileName == "adb").ToArray();
+        Assert.Contains(adbCalls, call => call.Arguments.SequenceEqual(["devices", "-l"]));
+        Assert.All(
+            adbCalls.Where(call => !call.Arguments.SequenceEqual(["devices", "-l"])),
+            call => Assert.True(
+                call.Arguments.Count >= 2 &&
+                call.Arguments[0] == "-s" &&
+                call.Arguments[1] == serial,
+                $"Expected only serial-scoped ADB calls for {serial}."));
+        Assert.DoesNotContain(adbCalls, call =>
+            call.Arguments.Contains("install") ||
+            call.Arguments.Contains("am") ||
+            call.Arguments.Contains("logcat"));
     }
 
     private static async Task<string> CreateApkAsync(byte[]? bytes = null)

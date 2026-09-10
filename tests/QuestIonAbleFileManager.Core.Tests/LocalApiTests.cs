@@ -322,6 +322,81 @@ public sealed class LocalApiTests
     }
 
     [Fact]
+    public async Task Preflight_AdmitsExactPerArtifactLimit()
+    {
+        var root = NewStateRoot();
+        var apk = await CreateApkAsync();
+        await File.WriteAllBytesAsync(apk, new byte[6]);
+        try
+        {
+            var settings = LocalApiStateSettings.CreateForTests(root,
+                new LocalApiStateLimits(
+                    MaximumStagedBytes: 16,
+                    MaximumSingleArtifactBytes: 6));
+            using var registry = new LocalApiCommandRegistry(
+                CreateClient(CreateRunner()), stateSettings: settings);
+
+            var preflight = await registry.PreflightAsync(Preflight("apk.inspect", apk));
+
+            Assert.Equal(LocalApiOperationStage.Preflighted,
+                registry.GetStatus(Operation(preflight.OperationId)).Stage);
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Preflight_OneByteOverPerArtifactLimitRejectsBeforeCopyAndLeavesNoStagedArtifact()
+    {
+        var root = NewStateRoot();
+        var apk = await CreateApkAsync();
+        await File.WriteAllBytesAsync(apk, new byte[7]);
+        try
+        {
+            var settings = LocalApiStateSettings.CreateForTests(root,
+                new LocalApiStateLimits(
+                    MaximumStagedBytes: 16,
+                    MaximumSingleArtifactBytes: 6));
+            using var registry = new LocalApiCommandRegistry(
+                CreateClient(CreateRunner()), stateSettings: settings);
+
+            var exception = await Assert.ThrowsAsync<LocalApiException>(
+                () => registry.PreflightAsync(Preflight("apk.inspect", apk)));
+
+            Assert.Equal("staged_artifact_capacity", exception.Code);
+            Assert.Equal(new LocalApiStagingCapacity(7, 6, 6), exception.StagingCapacity);
+            Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "staged"), "*.apk"));
+        }
+        finally
+        {
+            File.Delete(apk);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(0L, 1L, 1)]
+    [InlineData(-1L, 1L, 1)]
+    [InlineData(1L, 0L, 1)]
+    [InlineData(1L, -1L, 1)]
+    [InlineData(2147483649L, 1L, 1)]
+    [InlineData(1L, 1073741825L, 1)]
+    [InlineData(1L, 1L, 257)]
+    public void StateLimits_RejectZeroNegativeAndUnboundedStorageConfiguration(
+        long aggregateBytes,
+        long singleArtifactBytes,
+        int stagedFiles)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LocalApiStateLimits(
+            MaximumStagedBytes: aggregateBytes,
+            MaximumSingleArtifactBytes: singleArtifactBytes,
+            MaximumStagedFiles: stagedFiles).Validate());
+    }
+
+    [Fact]
     public async Task ConsumePersistenceFailure_RollsBackWithoutDispatch()
     {
         var root = NewStateRoot();

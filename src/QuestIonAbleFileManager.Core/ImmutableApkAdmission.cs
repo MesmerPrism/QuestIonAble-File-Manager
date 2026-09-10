@@ -56,8 +56,9 @@ internal sealed class ImmutableApkAdmission : IDisposable
                 new LocalApiStateLimits(
                     MaximumRetainedOperations: 1,
                     MaximumRunningOperations: 1,
-                    MaximumStagedBytes: 512L * 1024 * 1024,
-                    MaximumStagedFiles: sources.Length));
+                    MaximumStagedBytes: LocalApiStateLimits.DefaultMaximumStagedBytes,
+                    MaximumStagedFiles: sources.Length,
+                    MaximumSingleArtifactBytes: LocalApiStateLimits.DefaultMaximumSingleArtifactBytes));
             var deadline = DateTimeOffset.UtcNow + OwnerWait;
             while (stager is null)
             {

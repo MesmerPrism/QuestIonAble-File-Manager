@@ -9,14 +9,38 @@ namespace QuestIonAbleFileManager.Core;
 public sealed record LocalApiStateLimits(
     int MaximumRetainedOperations = 256,
     int MaximumRunningOperations = 4,
-    long MaximumStagedBytes = 512L * 1024 * 1024,
-    int MaximumStagedFiles = 256,
+    long MaximumStagedBytes = LocalApiStateLimits.DefaultMaximumStagedBytes,
+    int MaximumStagedFiles = LocalApiStateLimits.DefaultMaximumStagedFiles,
     int MaximumResultBytes = 64 * 1024,
     int MaximumOutputCharacters = 4 * 1024,
     long MaximumJournalBytes = 4L * 1024 * 1024,
-    TimeSpan? TerminalRetention = null)
+    TimeSpan? TerminalRetention = null,
+    long MaximumSingleArtifactBytes = LocalApiStateLimits.DefaultMaximumSingleArtifactBytes)
 {
+    public const long DefaultMaximumSingleArtifactBytes = 1024L * 1024 * 1024;
+    public const long DefaultMaximumStagedBytes = 2L * 1024 * 1024 * 1024;
+    public const int DefaultMaximumStagedFiles = 256;
+
     public TimeSpan EffectiveTerminalRetention => TerminalRetention ?? TimeSpan.FromHours(24);
+    public long EffectiveMaximumSingleArtifactBytes =>
+        Math.Min(MaximumSingleArtifactBytes, MaximumStagedBytes);
+
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumRetainedOperations, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumRunningOperations, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumStagedBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumStagedBytes, DefaultMaximumStagedBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumStagedFiles, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumStagedFiles, DefaultMaximumStagedFiles);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumResultBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumOutputCharacters, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumJournalBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumSingleArtifactBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(
+            MaximumSingleArtifactBytes,
+            DefaultMaximumSingleArtifactBytes);
+    }
 }
 
 public sealed record LocalApiStateSettings(
@@ -109,6 +133,7 @@ internal sealed class LocalApiArtifactStager : IDisposable
 
     public LocalApiArtifactStager(LocalApiStateSettings settings)
     {
+        settings.Limits.Validate();
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The local API secure state boundary requires Windows.");
         if (!Path.IsPathFullyQualified(settings.StateDirectory) ||
@@ -160,17 +185,38 @@ internal sealed class LocalApiArtifactStager : IDisposable
         var stagedFiles = Directory.EnumerateFiles(_stageDirectory, "*.apk").Take(_limits.MaximumStagedFiles + 1).ToArray();
         if (stagedFiles.Length >= _limits.MaximumStagedFiles)
             throw new LocalApiException("staged_file_capacity", "The staged-file capacity is exhausted.");
-        var stagedBytes = stagedFiles.Sum(path => new FileInfo(path).Length);
+        long stagedBytes = 0;
+        foreach (var path in stagedFiles)
+        {
+            var length = new FileInfo(path).Length;
+            if (length > _limits.MaximumStagedBytes - stagedBytes)
+            {
+                stagedBytes = _limits.MaximumStagedBytes;
+                break;
+            }
+            stagedBytes += length;
+        }
 
         await using var source = FleetWindowsFileSafety.OpenReadOnlyFile(fullSource);
         FleetWindowsFileSafety.ValidateFile(source.SafeFileHandle, fullSource, requireSingleLink: true);
         var before = FleetWindowsFileSafety.GetIdentity(source.SafeFileHandle);
         if (before.NumberOfLinks != 1)
             throw new LocalApiException("source_hardlink_rejected", "The APK source must have exactly one hard link.");
-        if (source.Length <= 0 || source.Length > _limits.MaximumStagedBytes - stagedBytes)
-            throw new LocalApiException("staged_byte_capacity", "The staged-byte capacity is exhausted.");
+        if (source.Length <= 0)
+            throw new LocalApiException("staged_artifact_invalid", "The staged APK must contain at least one byte.");
+        var availableBytes = stagedBytes >= _limits.MaximumStagedBytes
+            ? 0
+            : _limits.MaximumStagedBytes - stagedBytes;
+        if (source.Length > _limits.EffectiveMaximumSingleArtifactBytes)
+            throw Capacity("staged_artifact_capacity", source.Length,
+                Math.Min(_limits.EffectiveMaximumSingleArtifactBytes, availableBytes),
+                _limits.EffectiveMaximumSingleArtifactBytes);
+        if (source.Length > availableBytes)
+            throw Capacity("staged_byte_capacity", source.Length, availableBytes,
+                _limits.MaximumStagedBytes);
         if (reserveBytes is not null && !reserveBytes(source.Length))
-            throw new LocalApiException("staged_byte_capacity", "The staged-byte capacity is exhausted.");
+            throw Capacity("staged_byte_capacity", source.Length, availableBytes,
+                _limits.MaximumStagedBytes);
 
         var stagedPath = Path.Combine(_stageDirectory, Guid.NewGuid().ToString("N") + ".apk");
         FileStream? staged = null;
@@ -245,7 +291,14 @@ internal sealed class LocalApiArtifactStager : IDisposable
         {
             using var stream = FleetWindowsFileSafety.OpenReadOnlyFile(path);
             FleetWindowsFileSafety.ValidateFile(stream.SafeFileHandle, path, requireSingleLink: true);
-            checked { bytes += stream.Length; }
+            if (stream.Length > _limits.MaximumStagedBytes - bytes)
+            {
+                bytes = _limits.MaximumStagedBytes;
+            }
+            else
+            {
+                bytes += stream.Length;
+            }
         }
         return new LocalApiStageInventory(paths.Length, bytes);
     }
@@ -327,6 +380,16 @@ internal sealed class LocalApiArtifactStager : IDisposable
         _ownerLease.Dispose();
         _stageGate.Dispose();
     }
+
+    private static LocalApiException Capacity(
+        string code,
+        long requestedBytes,
+        long availableBytes,
+        long limitBytes) =>
+        new(
+            code,
+            $"Staging requests {requestedBytes} bytes; {availableBytes} bytes are available within the {limitBytes}-byte limit.",
+            new LocalApiStagingCapacity(requestedBytes, availableBytes, limitBytes));
 
     private static FileStream AcquireOwnerLease(string path)
     {

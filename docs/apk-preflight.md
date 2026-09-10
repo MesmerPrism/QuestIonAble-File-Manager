@@ -11,6 +11,12 @@ version, signer, SHA-256, size, split state, minSdk, targetSdk, and declared
 launcher activities. ADB discovery must return exactly the requested serial.
 For a ready serial, a fixed property read supplies the Android API level.
 
+Immutable admission accepts one artifact up to 1 GiB and at most 2 GiB across
+the active admission workspace. Capacity failures occur before APK inspection
+or any ADB command, retain no artifact, and return a typed no-effect preflight
+failure with requested, available, and limit bytes. The limits are fixed QFM
+defaults, not caller-configurable input.
+
 Installed state is one of:
 
 - `absent`: Package Manager reports no installed package;

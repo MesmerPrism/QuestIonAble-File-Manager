@@ -30,6 +30,9 @@ their argument arrays. It never installs, starts an activity, captures logs, or
 invokes a project build. Its manifest inspection requires exactly one positive
 numeric minimum-SDK Build Tools fact; missing, malformed, duplicated, or
 conflicting values fail preflight rather than becoming a default.
+The fixed immutable admission limit is 1 GiB per artifact and 2 GiB across the
+active workspace. Capacity rejection is a typed no-effect failure and does not
+diagnose SDK or Java availability.
 
 `apk deploy --serial <quest-serial> --file <path-to.apk>` composes the common
 single-base-APK agent loop without opening a generic execution surface. One
