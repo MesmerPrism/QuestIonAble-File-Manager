@@ -644,9 +644,9 @@ public sealed class OperatorActionRegistryTests
             source,
             "private static int WriteApkPreflightFailure",
             "private static (string Code, string Message, int ExitCode)");
-        Assert.Contains("state_change_possible = false", failureMethod, StringComparison.Ordinal);
-        Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
-        Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
+          Assert.Contains("state_change_possible = false", failureMethod, StringComparison.Ordinal);
+          Assert.Single(Regex.Matches(failureMethod, "WriteJson\\(").Cast<Match>());
+          Assert.DoesNotContain("exception.Message", failureMethod, StringComparison.Ordinal);
 
         var core = File.ReadAllText(Path.Combine(
             root,

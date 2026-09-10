@@ -1445,6 +1445,39 @@ internal static class CliApplication
                 "The inspected APK preflight input could not be admitted.",
                 2);
         }
+        if (exception is LocalApiException { Code: "staged_artifact_invalid" })
+        {
+            return (
+                "input_rejected",
+                "The inspected APK preflight input could not be admitted.",
+                2);
+        }
+        if (exception is LocalApiException
+            {
+                Code: "staged_artifact_capacity",
+                StagingCapacity: { } artifactCapacity
+            })
+        {
+            return (
+                "artifact_capacity_exceeded",
+                $"The APK requests {artifactCapacity.RequestedBytes} bytes, exceeding the " +
+                $"{artifactCapacity.LimitBytes}-byte immutable-artifact limit; " +
+                $"{artifactCapacity.AvailableBytes} bytes are available.",
+                1);
+        }
+        if (exception is LocalApiException
+            {
+                Code: "staged_byte_capacity",
+                StagingCapacity: { } stagingCapacity
+            })
+        {
+            return (
+                "staging_capacity_exhausted",
+                $"The APK requests {stagingCapacity.RequestedBytes} bytes; " +
+                $"{stagingCapacity.AvailableBytes} bytes are available within the " +
+                $"{stagingCapacity.LimitBytes}-byte immutable-staging limit.",
+                1);
+        }
         if (exception is AdbCommandException or TimeoutException)
         {
             return (

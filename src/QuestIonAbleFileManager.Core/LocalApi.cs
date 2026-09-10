@@ -26,9 +26,18 @@ public static class LocalApiContract
     ];
 }
 
-public sealed class LocalApiException(string code, string message) : InvalidOperationException(message)
+public sealed record LocalApiStagingCapacity(
+    long RequestedBytes,
+    long AvailableBytes,
+    long LimitBytes);
+
+public sealed class LocalApiException(
+    string code,
+    string message,
+    LocalApiStagingCapacity? stagingCapacity = null) : InvalidOperationException(message)
 {
     public string Code { get; } = code;
+    public LocalApiStagingCapacity? StagingCapacity { get; } = stagingCapacity;
 }
 
 public static class LocalApiSecurity
@@ -232,9 +241,15 @@ public sealed class LocalApiCommandRegistry : IDisposable
         {
             SweepLocked(_timeProvider.GetUtcNow());
             var inventory = _stager.GetInventory();
-            if (_operations.Count + _reservedPreflights >= _settings.Limits.MaximumRetainedOperations)
+            if (CapacityExhausted(
+                    _operations.Count,
+                    _reservedPreflights,
+                    _settings.Limits.MaximumRetainedOperations))
                 throw Input("operation_capacity", "The retained-operation capacity is exhausted.");
-            if (inventory.FileCount + _reservedPreflights >= _settings.Limits.MaximumStagedFiles)
+            if (CapacityExhausted(
+                    inventory.FileCount,
+                    _reservedPreflights,
+                    _settings.Limits.MaximumStagedFiles))
                 throw Input("staged_file_capacity", "The staged-file capacity is exhausted.");
             var retainedBytes = _operations.Values.Sum(static operation => operation.Artifact.SizeBytes);
             untrackedStagedBytes = Math.Max(0, inventory.SizeBytes - retainedBytes);
@@ -342,6 +357,9 @@ public sealed class LocalApiCommandRegistry : IDisposable
             throw;
         }
     }
+
+    private static bool CapacityExhausted(int used, int reserved, int capacity) =>
+        used >= capacity || reserved >= capacity - used;
 
     public Task<LocalApiOperationStatus> ExecuteAsync(
         ReadOnlyMemory<byte> body,

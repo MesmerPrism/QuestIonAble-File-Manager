@@ -69,7 +69,11 @@ read-only work fails; an interrupted dispatched mutation becomes
 `outcomeUnknownRecoveryRequired` for typed readback reconciliation.
 
 Operation/file/byte reservations are serialized across the full concurrent
-preflight and include physical orphan files already present in staging.
+preflight and include physical orphan files already present in staging. One
+retained artifact is bounded to 1 GiB and all retained staged artifacts are
+bounded to 2 GiB. A per-artifact or aggregate rejection reports only the
+requested, available, and configured-limit byte counts; it does not project the
+state root or an artifact path.
 Terminal pruning first durably records cleanup debt, then closes the immutable
 read handle and deletes only the same identity through a delete-only handle.
 Failed deletion remains explicit and is retried after restart; a missing
