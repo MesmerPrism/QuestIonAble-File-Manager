@@ -68,6 +68,24 @@
       }
     },
     {
+      "id": "runtime_grants_end_at_next_user_record",
+      "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
+      "package_dump": {
+        "exit_code": 0,
+        "stdout": "  requested permissions:\n    android.permission.CAMERA\n  install permissions:\n    android.permission.INTERNET: granted=true\n  User 0: installed=true\n    runtime permissions:\n      android.permission.CAMERA: granted=true, flags=[ USER_SET ]\n  User 10: installed=false\n"
+      },
+      "app_ops": { "exit_code": 0, "stdout": "No operations.\n" },
+      "expected": {
+        "package_state": "Reported",
+        "manifest_state": "Reported",
+        "grant_state": "Reported",
+        "app_op_state": "Absent",
+        "manifest_permissions": [ "android.permission.CAMERA" ],
+        "grants": [ "android.permission.CAMERA|True|runtime", "android.permission.INTERNET|True|install" ],
+        "app_ops": []
+      }
+    },
+    {
       "id": "malformed",
       "package_path": { "exit_code": 0, "stdout": "package:/data/app/example/base.apk\n" },
       "package_dump": { "exit_code": 0, "stdout": "  requested permissions:\n    not a permission\n  runtime permissions:\n    android.permission.CAMERA: not-a-grant\n" },
