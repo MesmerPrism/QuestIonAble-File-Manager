@@ -335,53 +335,10 @@ In a published Windows archive, invoke `questionable-file-manager.exe` directly.
 The former `meta-quest-file-manager.exe` name is a deprecated release-only
 compatibility alias; new documentation, tests, and automation use the canonical
 executable.
-Start with read-only discovery, select one ready serial explicitly, and then
-run the narrow operation:
-
-```powershell
-questionable-file-manager.exe devices --json
-questionable-file-manager.exe files list --serial <quest-serial> --path /sdcard --json
-questionable-file-manager.exe files pull --serial <quest-serial> --remote <remote-path> --output <local-path>
-questionable-file-manager.exe files push --serial <quest-serial> --file <local-path> --remote <remote-path>
-questionable-file-manager.exe apk list --serial <quest-serial> --json
-questionable-file-manager.exe apk inspect --file <path-to.apk> --json
-questionable-file-manager.exe apk export --serial <quest-serial> --package <package> --output <local-apk>
-questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
-questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
-questionable-file-manager.exe apk launch-diagnose --serial <quest-serial> --file <path-to.apk> --output <new-private-folder> --json
-questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
-questionable-file-manager.exe apk properties observe --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --output <new-snapshot.json> --json
-questionable-file-manager.exe apk properties clear --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
-questionable-file-manager.exe apk properties restore --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
-questionable-file-manager.exe apk install-bundle --serial <quest-serial> --folder <apk-folder>
-questionable-file-manager.exe wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
-questionable-file-manager.exe wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
-questionable-file-manager.exe wifi disconnect --host <quest-ip> --port 5555 --confirm-wifi-adb
-questionable-file-manager.exe apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json
-questionable-file-manager.exe apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json
-questionable-file-manager.exe kiosk status --serial <quest-serial> --json
-questionable-file-manager.exe kiosk install --serial <usb-serial> --product-channel stable --confirm-kiosk-setup
-questionable-file-manager.exe kiosk command --serial <quest-serial> --command request-wifi-adb --confirm-kiosk-control --json
-questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json
-questionable-file-manager.exe kiosk-direct status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --json
-questionable-file-manager.exe kiosk-direct command --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
-questionable-file-manager.exe kiosk-direct request-status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --request-id <request-id> --json
-questionable-file-manager.exe operator-actions --json
-questionable-file-manager.exe device status --serial <quest-serial> --json
-questionable-file-manager.exe device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
-questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
-questionable-file-manager.exe integration capabilities --json
-questionable-file-manager.exe integration observe --serial <quest-serial> --json
-questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
-questionable-file-manager.exe integration status --operation <operation-id> --json
-questionable-file-manager.exe fleet status --json
-questionable-file-manager.exe fleet install --confirm-fleet-install --json
-questionable-file-manager.exe connectivity-profile status --device-id <fleet-device-id> --json
-questionable-file-manager.exe connectivity-profile list --json
-questionable-file-manager.exe connectivity-profile import --file <private-profile.json> --confirm-profile-write --json
-questionable-file-manager.exe connectivity-profile import --stdin --confirm-profile-write --json
-questionable-file-manager.exe connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
-```
+Start with read-only discovery and select one ready serial explicitly.
+Use the illustrative [CLI command examples](docs/operator-cli-parity.md#cli-command-examples)
+for the narrow operation; the code-owned `OperatorActionRegistry` remains
+the route inventory.
 
 The WPF buttons map to those routes exactly. Both install actions accept
 `--no-replace`, `--downgrade`, `--grant-runtime-permissions`, and `--test-only`.
@@ -411,6 +368,21 @@ contract.
 ## Build And Validation
 
 Use PowerShell 7.6 or newer through `pwsh` for maintained scripts.
+Select local checks by the changed surface; CI still runs its complete required
+build, test, CLI smoke, public-boundary, branding, SDK, release-configuration,
+and Kiosk-bundle gates for every pull request. Live device validation and
+signed release validation remain separate, explicitly scoped gates.
+
+| Changed surface | Focused local checks |
+| --- | --- |
+| Documentation or instructions | `git diff --check`; `tools/Test-PublicBoundary.ps1`; verify changed links and commands against their owners. |
+| Core, CLI, or WPF behavior | Release build and solution tests; CLI help smoke; `tools/Test-PublicBoundary.ps1`. |
+| Branding | `tools/Test-BrandingContract.ps1` and `tools/app/Test-BrandAssets.ps1` after building the affected executables. |
+| Dedicated Fleet provider | Its corresponding `tools/Test-Fleet*ProviderArtifact.ps1`; add `tools/Test-ProviderCapabilityDiscovery.ps1` when the shared discovery contract changes. |
+| Fleet installer configuration or signed release | `tools/Test-FleetInstallerReleaseConfiguration.ps1`; follow `docs/release-workflow.md` for the release build, private lifecycle input, consumer install, and asset gates. |
+
+The commands below are entrypoints for those scopes, not an instruction to run
+every specialized or release gate for an unrelated edit.
 
 ```powershell
 dotnet build QuestIonAbleFileManager.slnx --configuration Release

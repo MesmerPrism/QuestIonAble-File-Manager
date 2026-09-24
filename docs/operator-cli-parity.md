@@ -67,6 +67,56 @@ and independently recomputes Kiosk's v1 binding SHA-256 before projection.
 Nonblank opaque ids are preserved ordinally, including leading or trailing
 whitespace; File Manager does not normalize an app-defined identifier.
 
+## CLI command examples
+
+Start with read-only discovery, select one ready serial explicitly, and then
+run the narrow operation:
+
+```powershell
+questionable-file-manager.exe devices --json
+questionable-file-manager.exe files list --serial <quest-serial> --path /sdcard --json
+questionable-file-manager.exe files pull --serial <quest-serial> --remote <remote-path> --output <local-path>
+questionable-file-manager.exe files push --serial <quest-serial> --file <local-path> --remote <remote-path>
+questionable-file-manager.exe apk list --serial <quest-serial> --json
+questionable-file-manager.exe apk inspect --file <path-to.apk> --json
+questionable-file-manager.exe apk export --serial <quest-serial> --package <package> --output <local-apk>
+questionable-file-manager.exe apk install --serial <quest-serial> --file <local-apk>
+questionable-file-manager.exe apk launch --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk launch-diagnose --serial <quest-serial> --file <path-to.apk> --output <new-private-folder> --json
+questionable-file-manager.exe apk observe --serial <quest-serial> --file <path-to.apk> --json
+questionable-file-manager.exe apk properties observe --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --output <new-snapshot.json> --json
+questionable-file-manager.exe apk properties clear --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
+questionable-file-manager.exe apk properties restore --serial <quest-serial> --file <path-to.apk> --manifest <property-manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
+questionable-file-manager.exe apk install-bundle --serial <quest-serial> --folder <apk-folder>
+questionable-file-manager.exe wifi enable --serial <usb-serial> --port 5555 --confirm-wifi-adb
+questionable-file-manager.exe wifi connect --host <quest-ip> --port 5555 --confirm-wifi-adb
+questionable-file-manager.exe wifi disconnect --host <quest-ip> --port 5555 --confirm-wifi-adb
+questionable-file-manager.exe apk install-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --file <local-apk> --parallelism 2 --json
+questionable-file-manager.exe apk install-bundle-many --serial <quest-a-ip>:5555 --serial <quest-b-ip>:5555 --folder <apk-folder> --parallelism 2 --json
+questionable-file-manager.exe kiosk status --serial <quest-serial> --json
+questionable-file-manager.exe kiosk install --serial <usb-serial> --product-channel stable --confirm-kiosk-setup
+questionable-file-manager.exe kiosk command --serial <quest-serial> --command request-wifi-adb --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk tags import --serial <quest-serial> --file <tag-file> --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk-direct status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --json
+questionable-file-manager.exe kiosk-direct command --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --command launch-kiosk --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk-direct request-status --serial <usb-serial> --product-channel <stable|labs> --confirm-kiosk-direct-bootstrap --request-id <request-id> --json
+questionable-file-manager.exe operator-actions --json
+questionable-file-manager.exe device status --serial <quest-serial> --json
+questionable-file-manager.exe device keep-awake --serial <quest-serial> --on --confirm-device-settings --json
+questionable-file-manager.exe device performance --serial <quest-serial> --cpu 3 --gpu 3 --confirm-device-settings --json
+questionable-file-manager.exe integration capabilities --json
+questionable-file-manager.exe integration observe --serial <quest-serial> --json
+questionable-file-manager.exe integration invoke --request <operation-request.v1.json> --json
+questionable-file-manager.exe integration status --operation <operation-id> --json
+questionable-file-manager.exe fleet status --json
+questionable-file-manager.exe fleet install --confirm-fleet-install --json
+questionable-file-manager.exe connectivity-profile status --device-id <fleet-device-id> --json
+questionable-file-manager.exe connectivity-profile list --json
+questionable-file-manager.exe connectivity-profile import --file <private-profile.json> --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile import --stdin --confirm-profile-write --json
+questionable-file-manager.exe connectivity-profile revoke --device-id <fleet-device-id> --confirm-profile-revoke --json
+```
+
 ## Operation Map
 
 | WPF operation | Equivalent CLI route |
