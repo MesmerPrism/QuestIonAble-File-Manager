@@ -278,7 +278,9 @@ public sealed partial class AdbClient
             }
             if (trimmed.Length == 0)
                 continue;
-            if (indent <= headerIndent && trimmed.EndsWith(':'))
+            // Package dumps can leave a permission section with a peer user
+            // record such as "User 10: installed=false", not just a header.
+            if (indent <= headerIndent)
             {
                 inSection = false;
                 continue;
