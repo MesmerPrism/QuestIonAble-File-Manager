@@ -278,7 +278,7 @@ public sealed partial class AdbClient
             }
             if (trimmed.Length == 0)
                 continue;
-            if (indent <= headerIndent && trimmed.EndsWith(':'))
+            if (indent <= headerIndent)
             {
                 inSection = false;
                 continue;

@@ -125,6 +125,41 @@
         "grants": [],
         "app_ops": []
       }
+    },
+    {
+      "id": "native-user-header-ends-install-permissions",
+      "package_path": {
+        "exit_code": 0,
+        "stdout": "package:/data/app/example/base.apk\n"
+      },
+      "package_dump": {
+        "exit_code": 0,
+        "stdout": "    requested permissions:\n      android.permission.CAMERA\n      horizonos.permission.HEADSET_CAMERA\n      horizonos.permission.USE_SCENE\n    install permissions:\n      android.permission.INTERNET: granted=true\n    User 0: installed=true hidden=false suspended=false stopped=false enabled=0\n      installReason=0\n      firstInstallTime=2026-01-01 00:00:00\n      gids=[3003]\n      runtime permissions:\n        android.permission.CAMERA: granted=true, flags=[ USER_SET ]\n        horizonos.permission.HEADSET_CAMERA: granted=true, flags=[ USER_SET ]\n        horizonos.permission.USE_SCENE: granted=true, flags=[ USER_SET ]\n\nQueries:\n  system apps queryable: false\n"
+      },
+      "app_ops": {
+        "exit_code": 0,
+        "stdout": "CAMERA: allow; time=+1m\n"
+      },
+      "expected": {
+        "manifest_state": "Reported",
+        "package_state": "Reported",
+        "grants": [
+          "android.permission.CAMERA|True|runtime",
+          "android.permission.INTERNET|True|install",
+          "horizonos.permission.HEADSET_CAMERA|True|runtime",
+          "horizonos.permission.USE_SCENE|True|runtime"
+        ],
+        "grant_state": "Reported",
+        "app_op_state": "Reported",
+        "app_ops": [
+          "CAMERA|allow"
+        ],
+        "manifest_permissions": [
+          "android.permission.CAMERA",
+          "horizonos.permission.HEADSET_CAMERA",
+          "horizonos.permission.USE_SCENE"
+        ]
+      }
     }
   ]
 }

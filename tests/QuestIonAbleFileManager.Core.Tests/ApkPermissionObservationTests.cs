@@ -71,6 +71,32 @@ public sealed class ApkPermissionObservationTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeUserBoundaryStillRejectsMalformedOrExcessGrantRecords(bool excessRecords)
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+            FindRepositoryRoot(), "tests", "QuestIonAbleFileManager.Core.Tests",
+            "Fixtures", "apk-permission-observation.v1.json")));
+        var nativeCase = fixture.RootElement.GetProperty("cases").EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "native-user-header-ends-install-permissions");
+        var scenario = System.Text.Json.Nodes.JsonNode.Parse(nativeCase.GetRawText())!;
+        var grants = excessRecords
+            ? string.Join("\n", Enumerable.Range(0, 129)
+                .Select(index => $"      example.permission.P{index}: granted=true"))
+            : "      android.permission.INTERNET: nonsense=true";
+        scenario["package_dump"]!["stdout"] =
+            $"    install permissions:\n{grants}\n    User 0: installed=true\n" +
+            "      runtime permissions:\n        android.permission.CAMERA: granted=true\n";
+        using var damaged = JsonDocument.Parse(scenario.ToJsonString());
+        var observation = await new AdbClient("adb", new FixtureRunner(damaged.RootElement))
+            .ObservePackagePermissionsAsync(Serial, Package);
+
+        Assert.Equal(ApkPermissionObservationState.Malformed, observation.EffectiveGrantState);
+        Assert.Empty(observation.EffectiveGrants);
+    }
+
     [Fact]
     public void AgentRouteIsStrictAndReadOnly()
     {
