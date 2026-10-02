@@ -707,14 +707,30 @@ public sealed partial class AdbClient
             artifact.Identity.PackageName,
             cancellationToken).ConfigureAwait(false);
 
-        var start = await RunForDeviceAsync(
-            serial, ["shell", "am", "start", "-n", component.Wire],
-            InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        CommandResult start;
+        try
+        {
+            start = await RunForDeviceAsync(
+                serial, ["shell", "am", "start", "-n", component.Wire],
+                InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            throw new InspectedAppLaunchException(InspectedAppLaunchStage.Dispatch, exception);
+        }
         start.EnsureSuccess("Start resolved launcher activity");
-        var activities = await RunForDeviceAsync(
-            serial, ["shell", "dumpsys", "activity", "activities"],
-            InspectionTimeout, cancellationToken).ConfigureAwait(false);
-        activities.EnsureSuccess("Read back launched activity");
+        CommandResult activities;
+        try
+        {
+            activities = await RunForDeviceAsync(
+                serial, ["shell", "dumpsys", "activity", "activities"],
+                InspectionTimeout, cancellationToken).ConfigureAwait(false);
+            activities.EnsureSuccess("Read back launched activity");
+        }
+        catch (Exception exception)
+        {
+            throw new InspectedAppLaunchException(InspectedAppLaunchStage.Readback, exception);
+        }
         var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
             .Any(line =>
                 (line.Contains("mResumedActivity", StringComparison.Ordinal) ||

@@ -2014,6 +2014,31 @@ internal static class CliApplication
     private static (string Code, string Message, bool DispatchAttempted, int ExitCode)
         ClassifyApkLaunchFailure(Exception exception)
     {
+        if (exception is InspectedAppLaunchException launchFailure)
+        {
+            var code = (launchFailure.Stage, launchFailure.InnerException) switch
+            {
+                (InspectedAppLaunchStage.Dispatch, TimeoutException) => "launch_dispatch_timeout",
+                (InspectedAppLaunchStage.Dispatch, OperationCanceledException) => "launch_dispatch_cancelled",
+                (InspectedAppLaunchStage.Readback, TimeoutException) => "launch_readback_timeout",
+                (InspectedAppLaunchStage.Readback, OperationCanceledException) => "launch_readback_cancelled",
+                (InspectedAppLaunchStage.Readback, _) => "launch_readback_failed",
+                _ => "launch_dispatch_failed"
+            };
+            return (
+                code,
+                "The fixed launcher dispatch or its readback did not complete; its effect is unconfirmed.",
+                launchFailure.DispatchAttempted,
+                1);
+        }
+        if (exception is TimeoutException or OperationCanceledException)
+        {
+            return (
+                exception is TimeoutException ? "pre_dispatch_timeout" : "pre_dispatch_cancelled",
+                "The inspected-app launch did not reach fixed-component dispatch.",
+                false,
+                1);
+        }
         if (exception is ArgumentException or FileNotFoundException or IOException or SplitPackageException)
         {
             return (
