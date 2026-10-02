@@ -1805,6 +1805,7 @@ public sealed class InspectedDeploymentTests
                     .LaunchInspectedAppAsync("QUEST123", apk));
 
             Assert.Equal(1, failure.Result.ExitCode);
+            AssertLaunchFailureJson(failure, "launch_dispatch_failed", true);
             Assert.True(failure.Result.Arguments.Count >= 6);
             Assert.Equal("am", failure.Result.Arguments[3]);
             Assert.Equal("start", failure.Result.Arguments[4]);
@@ -1815,6 +1816,114 @@ public sealed class InspectedDeploymentTests
         {
             File.Delete(apk);
         }
+    }
+
+    [Theory]
+    [InlineData(false, "timeout", "launch_dispatch_timeout")]
+    [InlineData(false, "cancel", "launch_dispatch_cancelled")]
+    [InlineData(false, "command", "launch_dispatch_failed")]
+    [InlineData(true, "timeout", "launch_readback_timeout")]
+    [InlineData(true, "cancel", "launch_readback_cancelled")]
+    [InlineData(true, "command", "launch_readback_failed")]
+    [InlineData(true, "io", "launch_readback_failed")]
+    public async Task Launch_PostDispatchFailureRetainsStageAndSanitizedJson(
+        bool readback, string failureKind, string expectedCode)
+    {
+        var apk = await CreateApkAsync();
+        var original = LaunchTestFailure(failureKind);
+        var runner = CreateDeploymentRunner(apk, commandFailure: (file, arguments) =>
+            file == "adb" && (readback
+                ? arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"])
+                : arguments.Contains("start")) ? original : null);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<InspectedAppLaunchException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.Equal(readback ? InspectedAppLaunchStage.Readback : InspectedAppLaunchStage.Dispatch, failure.Stage);
+            Assert.Same(original, failure.InnerException);
+            Assert.True(failure.DispatchAttempted);
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("start"));
+            Assert.Equal(readback ? 1 : 0, runner.Calls.Count(call => call.Arguments.SequenceEqual(
+                ["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"])));
+            AssertLaunchFailureJson(failure, expectedCode, true);
+        }
+        finally { File.Delete(apk); }
+    }
+
+    [Theory]
+    [InlineData("timeout", "pre_dispatch_timeout")]
+    [InlineData("cancel", "pre_dispatch_cancelled")]
+    public async Task Launch_PreProofInterruptionReportsNoDispatch(
+        string failureKind, string expectedCode)
+    {
+        var apk = await CreateApkAsync();
+        var original = LaunchTestFailure(failureKind);
+        var runner = CreateDeploymentRunner(apk, commandFailure: (file, arguments) =>
+            file == "adb" && arguments.Contains("query-activities") ? original : null);
+        try
+        {
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.Same(original, failure);
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("start"));
+            AssertLaunchFailureJson(failure, expectedCode, false);
+        }
+        finally { File.Delete(apk); }
+    }
+
+    [Fact]
+    public async Task Launch_ReadbackCommandExitFailureReportsAttemptedDispatch()
+    {
+        var apk = await CreateApkAsync();
+        var runner = CreateDeploymentRunner(apk, activitiesResult: new("adb", [], 1, "", "private-error-witness", TimeSpan.Zero));
+        try
+        {
+            var failure = await Assert.ThrowsAsync<InspectedAppLaunchException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchInspectedAppAsync("QUEST123", apk));
+            Assert.Equal(InspectedAppLaunchStage.Readback, failure.Stage);
+            var original = Assert.IsType<AdbCommandException>(failure.InnerException);
+            Assert.Equal(1, original.Result.ExitCode);
+            AssertLaunchFailureJson(failure, "launch_readback_failed", true);
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("start"));
+        }
+        finally { File.Delete(apk); }
+    }
+
+    private static Exception LaunchTestFailure(string kind) => kind switch
+    {
+        "timeout" => new TimeoutException("private-error-witness"),
+        "cancel" => new OperationCanceledException("private-error-witness"),
+        "command" => new AdbCommandException("private-error-witness", new("adb", [], 1, "", "private-error-witness", TimeSpan.Zero)),
+        "io" => new IOException("private-error-witness"),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    private static void AssertLaunchFailureJson(Exception failure, string code, bool dispatched)
+    {
+        // Exercise the production one-document projection without creating a real ADB client.
+        var writer = typeof(CliApplication).GetMethod("WriteApkLaunchFailure",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            Assert.Equal(1, (int)writer.Invoke(null, [failure])!);
+        }
+        finally { Console.SetOut(originalOut); }
+        using var json = JsonDocument.Parse(output.ToString());
+        var envelope = json.RootElement;
+        Assert.Equal("questionable.file_manager.apk_launch_result.v1", envelope.GetProperty("schema").GetString());
+        Assert.False(envelope.GetProperty("succeeded").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, envelope.GetProperty("mutation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, envelope.GetProperty("result").ValueKind);
+        Assert.Equal(code, envelope.GetProperty("failure").GetProperty("code").GetString());
+        Assert.Equal(dispatched, envelope.GetProperty("failure").GetProperty("dispatch_attempted").GetBoolean());
+        Assert.DoesNotContain("private-error-witness", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("QUEST123", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2391,6 +2500,7 @@ public sealed class InspectedDeploymentTests
         string? splitName = null,
         string? launcherOutput = null,
         string activities = "",
+        CommandResult? activitiesResult = null,
         string windowFocus = "",
         CommandResult? windowFocusResult = null,
         bool launcherExported = true,
@@ -2469,7 +2579,7 @@ public sealed class InspectedDeploymentTests
             }
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"]))
             {
-                return Success(activities);
+                return activitiesResult ?? Success(activities);
             }
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "window", "windows"]))
             {

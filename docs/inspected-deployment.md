@@ -81,6 +81,12 @@ its retained alias target.
 success or failure. Failure documents contain a stable sanitized reason and
 whether fixed-component dispatch was attempted; they do not mirror command
 output to standard error or claim successful dispatch after `am start` fails.
+Timeout or cancellation before fixed-component dispatch reports no attempt.
+Once the fixed dispatch is entered, timeout/cancellation retains an attempted
+but unconfirmed effect; failed post-launch readback also reports an attempt.
+Stable `launch_dispatch_*` and `launch_readback_*` reasons distinguish those
+stages without publishing raw command output. Callers must reconcile an
+uncertain effect before another launch; File Manager does not retry it.
 
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
 installed package and byte facts, foreground/top-resumed flags, exact observed
