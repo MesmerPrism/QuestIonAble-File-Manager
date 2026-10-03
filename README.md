@@ -122,6 +122,21 @@ portable installer before caching it, and emits a content-addressed CLI build
 receipt. It never chooses a .NET SDK from ambient `PATH`. See [Pinned SDK
 bootstrap](docs/pinned-sdk-bootstrap.md).
 
+### Retaining validation evidence
+
+When retaining a multi-project test run, record the source revision, command,
+native exit and every project's outcome. Do not combine a fixed
+`trx;LogFileName=...` with one solution-wide results directory: a later project
+can overwrite an earlier report. Give fixed-name project reports separate
+fresh result directories, or omit the fixed filename for solution logging.
+Retain the complete console log beside the reports and state each report's
+project coverage.
+
+A surviving TRX file does not prove an overwritten project's outcome. Cite
+retained per-project console results separately when available; otherwise
+report the evidence gap. Do not repeat unchanged tests merely to present a
+combined report when the original outcomes remain available.
+
 ## Install
 
 The [project download page](https://mesmerprism.com/QuestIonAble-File-Manager/)
