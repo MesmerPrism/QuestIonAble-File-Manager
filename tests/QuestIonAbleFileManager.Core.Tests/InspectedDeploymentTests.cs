@@ -1892,6 +1892,56 @@ public sealed class InspectedDeploymentTests
         finally { File.Delete(apk); }
     }
 
+    [Theory]
+    [InlineData(false, "timeout", "launch_dispatch_timeout")]
+    [InlineData(false, "cancel", "launch_dispatch_cancelled")]
+    [InlineData(false, "command", "launch_dispatch_failed")]
+    [InlineData(true, "timeout", "launch_readback_timeout")]
+    [InlineData(true, "cancel", "launch_readback_cancelled")]
+    [InlineData(true, "command", "launch_readback_failed")]
+    [InlineData(true, "io", "launch_readback_failed")]
+    public async Task Deploy_PostInstallLaunchFailureRetainsStageAndSanitizedJson(
+        bool readback, string failureKind, string expectedCode)
+    {
+        var apk = await CreateApkAsync();
+        var original = LaunchTestFailure(failureKind);
+        var runner = CreateDeploymentRunner(apk, commandFailure: (file, arguments) =>
+            file == "adb" && (readback
+                ? arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"])
+                : arguments.Contains("start")) ? original : null);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<InspectedAppLaunchException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .DeployInspectedApkAsync("QUEST123", apk));
+            Assert.Same(original, failure.InnerException);
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("install"));
+            Assert.Single(runner.Calls, call => call.Arguments.Contains("start"));
+
+            var writer = typeof(CliApplication).GetMethod("WriteApkDeployFailure",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var originalOut = Console.Out;
+            using var output = new StringWriter();
+            try
+            {
+                Console.SetOut(output);
+                Assert.Equal(1, (int)writer.Invoke(null, [failure])!);
+            }
+            finally { Console.SetOut(originalOut); }
+            using var json = JsonDocument.Parse(output.ToString());
+            var envelope = json.RootElement;
+            Assert.Equal("questionable.file_manager.apk_deploy_result.v1", envelope.GetProperty("schema").GetString());
+            Assert.False(envelope.GetProperty("succeeded").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, envelope.GetProperty("mutation").ValueKind);
+            Assert.Equal(JsonValueKind.Null, envelope.GetProperty("result").ValueKind);
+            Assert.Equal(expectedCode, envelope.GetProperty("failure").GetProperty("code").GetString());
+            Assert.True(envelope.GetProperty("failure").GetProperty("state_change_possible").GetBoolean());
+            Assert.DoesNotContain("private-error-witness", output.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("QUEST123", output.ToString(), StringComparison.Ordinal);
+        }
+        finally { File.Delete(apk); }
+    }
+
     private static Exception LaunchTestFailure(string kind) => kind switch
     {
         "timeout" => new TimeoutException("private-error-witness"),

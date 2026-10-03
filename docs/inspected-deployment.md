@@ -88,6 +88,12 @@ Stable `launch_dispatch_*` and `launch_readback_*` reasons distinguish those
 stages without publishing raw command output. Callers must reconcile an
 uncertain effect before another launch; File Manager does not retry it.
 
+`apk deploy ... --json` preserves those same `launch_dispatch_*` and
+`launch_readback_*` reasons when the post-install launch fails. Its failure
+envelope retains `state_change_possible: true`, null mutation/result fields,
+and a nonzero exit; it does not turn completed installation into confirmed
+deployment or retry the uncertain launch.
+
 `apk observe --serial <quest-serial> --file <path-to.apk>` returns matching
 installed package and byte facts, foreground/top-resumed flags, exact observed
 foreground and top-resumed component sets, known blocking Quest system

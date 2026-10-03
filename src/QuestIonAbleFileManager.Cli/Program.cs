@@ -1885,6 +1885,15 @@ internal static class CliApplication
     private static (string Code, string Message, bool StateChangePossible, int ExitCode)
         ClassifyApkDeployFailure(Exception exception)
     {
+        if (exception is InspectedAppLaunchException)
+        {
+            var classifiedLaunch = ClassifyApkLaunchFailure(exception);
+            return (
+                classifiedLaunch.Code,
+                "The fixed launcher dispatch or its readback did not complete after installation; its effect is unconfirmed.",
+                true,
+                classifiedLaunch.ExitCode);
+        }
         if (exception is ArgumentException or FileNotFoundException or SplitPackageException)
         {
             return (
