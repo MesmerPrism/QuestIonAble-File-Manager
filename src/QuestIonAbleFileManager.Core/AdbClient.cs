@@ -1664,7 +1664,8 @@ public sealed partial class AdbClient
         ApkInstallOptions? options = null,
         int maxParallelism = 4,
         CancellationToken cancellationToken = default,
-        IProgress<OperatorProgress>? progress = null)
+        IProgress<OperatorProgress>? progress = null,
+        Action? deviceDispatchObserved = null)
     {
         var targets = ValidateWifiInstallTargets(serials);
         var normalizedPath = ValidateInstallApkPath(apkPath);
@@ -1676,7 +1677,8 @@ public sealed partial class AdbClient
             arguments,
             maxParallelism,
             cancellationToken,
-            progress).ConfigureAwait(false);
+            progress,
+            deviceDispatchObserved).ConfigureAwait(false);
     }
 
     public async Task<ParallelApkInstallResult> InstallApkBundleOnManyWifiDevicesAsync(
@@ -1685,7 +1687,8 @@ public sealed partial class AdbClient
         ApkInstallOptions? options = null,
         int maxParallelism = 4,
         CancellationToken cancellationToken = default,
-        IProgress<OperatorProgress>? progress = null)
+        IProgress<OperatorProgress>? progress = null,
+        Action? deviceDispatchObserved = null)
     {
         var targets = ValidateWifiInstallTargets(serials);
         ArgumentNullException.ThrowIfNull(apkPaths);
@@ -1708,7 +1711,8 @@ public sealed partial class AdbClient
             arguments,
             maxParallelism,
             cancellationToken,
-            progress).ConfigureAwait(false);
+            progress,
+            deviceDispatchObserved).ConfigureAwait(false);
     }
 
     public async Task<ApkExportResult> ExportSingleApkAsync(
@@ -2541,16 +2545,22 @@ public sealed partial class AdbClient
         IReadOnlyList<string> installArguments,
         int maxParallelism,
         CancellationToken cancellationToken,
-        IProgress<OperatorProgress>? progress)
+        IProgress<OperatorProgress>? progress,
+        Action? deviceDispatchObserved)
     {
         maxParallelism = AndroidInput.RequireParallelism(maxParallelism);
+        using var gate = new SemaphoreSlim(Math.Min(maxParallelism, serials.Count));
+        await RequireDistinctWifiDeviceIdentitiesAsync(serials, gate, cancellationToken)
+            .ConfigureAwait(false);
         progress?.Report(new OperatorProgress(
             "parallel-install",
             $"Starting installation on {serials.Count} headsets…",
             0,
             serials.Count));
-        using var gate = new SemaphoreSlim(Math.Min(maxParallelism, serials.Count));
         var progressGate = new object();
+        var dispatchGate = new object();
+        var dispatchReported = false;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? dispatchFailure = null;
         var completedCount = 0;
         var tasks = serials.Select(InstallOneAsync).ToArray();
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -2562,6 +2572,23 @@ public sealed partial class AdbClient
             TargetApkInstallResult targetResult;
             try
             {
+                lock (dispatchGate)
+                {
+                    dispatchFailure?.Throw();
+                    if (!dispatchReported)
+                    {
+                        try
+                        {
+                            deviceDispatchObserved?.Invoke();
+                            dispatchReported = true;
+                        }
+                        catch (Exception exception)
+                        {
+                            dispatchFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception);
+                            throw;
+                        }
+                    }
+                }
                 var result = await RunForDeviceAsync(
                     serial,
                     installArguments,
@@ -2601,6 +2628,42 @@ public sealed partial class AdbClient
             }
             return targetResult;
         }
+    }
+
+    private async Task RequireDistinctWifiDeviceIdentitiesAsync(
+        IReadOnlyList<string> serials,
+        SemaphoreSlim gate,
+        CancellationToken cancellationToken)
+    {
+        foreach (var property in new[] { "ro.serialno", "ro.boot.serialno" })
+        {
+            // One property domain for the entire batch; never compare mixed identities.
+            var identities = await Task.WhenAll(serials.Select(ReadIdentityAsync))
+                .ConfigureAwait(false);
+            if (identities.Any(static identity => identity.Length == 0))
+                continue;
+            if (identities.Distinct(StringComparer.Ordinal).Count() != serials.Count)
+                throw new InvalidOperationException(
+                    "Selected Wi-Fi ADB endpoints must identify distinct physical headsets.");
+            return;
+
+            async Task<string> ReadIdentityAsync(string serial)
+            {
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    return await ReadStableDeviceIdentityPropertyAsync(
+                        serial, property, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Every selected Wi-Fi headset must expose the same stable identity property.");
     }
 
     private Task<CommandResult> RunAsync(

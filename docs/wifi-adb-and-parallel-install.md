@@ -11,6 +11,13 @@ disconnecting a previously enabled endpoint without resetting the ADB server.
 
 Install fan-out is a bounded set of independent, serial-scoped ADB requests.
 One failed headset does not cancel or hide results from the others.
+Before any install, all selected endpoints must expose distinct stable headset
+identities through one common property: `ro.serialno`, or `ro.boot.serialno` if
+the first property is unavailable on any target. Probes use the requested
+concurrency bound. Missing, malformed, failed, or duplicate identities reject
+the whole batch before installation. Endpoint arguments remain unchanged;
+this check does not choose another transport or grant identity authority
+beyond the current readback.
 
 ## Scope
 
@@ -178,3 +185,8 @@ Add optional TLS pairing-code support only after a separate compatibility and
 authorization review. A future durable connection profile may remember friendly
 labels, but it must not store private pairing material or scan networks without
 an explicit operator action.
+
+The shared operator route reports `sent` only when the first native install is
+about to be dispatched, after artifact and identity preflight. Concurrent target
+installs share one dispatch notification. Preflight rejection reports no sent
+mutation; a dispatched install whose result is uncertain remains pending.

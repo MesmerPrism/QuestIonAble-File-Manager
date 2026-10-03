@@ -1534,7 +1534,9 @@ public sealed class OperatorCommandExecutor
             OperatorCommandKind.ClearExactApkProperties or
             OperatorCommandKind.RestoreExactApkProperties;
         var launchReportsDispatch = command.Kind == OperatorCommandKind.LaunchDiagnoseInspectedApp;
-        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch;
+        var parallelReportsDispatch = command.Kind is
+            OperatorCommandKind.InstallApkMany or OperatorCommandKind.InstallApkBundleMany;
+        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch || parallelReportsDispatch;
         if (!reportsDispatch)
         {
             tracker.Dispatched();
@@ -1547,7 +1549,7 @@ public sealed class OperatorCommandExecutor
                 progress,
                 privateInput,
                 propertyReportsDispatch ? tracker : null,
-                launchReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
+                launchReportsDispatch || parallelReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
             var observation = OperatorMutations.Observe(command, result);
             var receipt = propertyReportsDispatch
                 ? tracker.CompleteAfterReportedDispatch(observation)
@@ -1912,7 +1914,8 @@ public sealed class OperatorCommandExecutor
                         command.InstallOptions,
                         command.MaxParallelism,
                         cancellationToken,
-                        progress).ConfigureAwait(false));
+                        progress,
+                        deviceDispatchObserved).ConfigureAwait(false));
 
             case OperatorCommandKind.InstallApkBundleMany:
                 {
@@ -1926,7 +1929,8 @@ public sealed class OperatorCommandExecutor
                             command.InstallOptions,
                             command.MaxParallelism,
                             cancellationToken,
-                            progress).ConfigureAwait(false));
+                            progress,
+                            deviceDispatchObserved).ConfigureAwait(false));
                 }
 
             case OperatorCommandKind.InstallRustyKiosk:
