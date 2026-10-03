@@ -59,24 +59,33 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         var outputTask = process.StandardOutput.ReadToEndAsync(linkedSource.Token);
         var errorTask = process.StandardError.ReadToEndAsync(linkedSource.Token);
 
+        string standardOutput;
+        string standardError;
         try
         {
             await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            standardOutput = await outputTask.ConfigureAwait(false);
+            standardError = await errorTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
             timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(outputTask).ConfigureAwait(false);
+            await IgnoreFailureAsync(errorTask).ConfigureAwait(false);
             throw new TimeoutException($"{Path.GetFileName(fileName)} timed out after {timeout}.");
         }
         catch
         {
+            linkedSource.Cancel();
             TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(outputTask).ConfigureAwait(false);
+            await IgnoreFailureAsync(errorTask).ConfigureAwait(false);
             throw;
         }
 
-        var standardOutput = await outputTask.ConfigureAwait(false);
-        var standardError = await errorTask.ConfigureAwait(false);
         stopwatch.Stop();
 
         return new CommandResult(
@@ -120,6 +129,7 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[StreamBufferBytes];
         long bytesWritten = 0;
+        string standardError;
 
         try
         {
@@ -150,6 +160,7 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
 
             await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
             await destination.FlushAsync(linkedSource.Token).ConfigureAwait(false);
+            standardError = await errorTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
             timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -167,7 +178,6 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
             throw;
         }
 
-        var standardError = await errorTask.ConfigureAwait(false);
         stopwatch.Stop();
         var commandResult = new CommandResult(
             fileName,
@@ -213,6 +223,8 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[StreamBufferBytes];
         long bytesWritten = 0;
+        string standardOutput;
+        string standardError;
 
         try
         {
@@ -240,6 +252,8 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
             await process.StandardInput.BaseStream.FlushAsync(linkedSource.Token).ConfigureAwait(false);
             process.StandardInput.Close();
             await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            standardOutput = await outputTask.ConfigureAwait(false);
+            standardError = await errorTask.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
             timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
@@ -259,8 +273,6 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
             throw;
         }
 
-        var standardOutput = await outputTask.ConfigureAwait(false);
-        var standardError = await errorTask.ConfigureAwait(false);
         stopwatch.Stop();
         return new StreamingCommandResult(
             new CommandResult(
