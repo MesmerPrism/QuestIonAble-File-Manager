@@ -311,6 +311,7 @@ public sealed class AdbClientTests
         await File.WriteAllBytesAsync(tempFile, [1, 2, 3]);
         var runner = new ParallelCommandRunner("192.0.2.12:5555");
         var client = new AdbClient("adb-test", runner);
+        var dispatchCount = 0;
         var progress = new RecordingProgress<OperatorProgress>();
 
         try
@@ -325,8 +326,10 @@ public sealed class AdbClientTests
                 tempFile,
                 new ApkInstallOptions(ReplaceExisting: true),
                 maxParallelism: 2,
-                progress: progress);
+                progress: progress,
+                deviceDispatchObserved: () => Interlocked.Increment(ref dispatchCount));
 
+            Assert.Equal(1, dispatchCount);
             Assert.Equal(2, runner.MaxObservedConcurrency);
             Assert.Equal(3, result.SucceededCount);
             Assert.Equal(1, result.FailedCount);
@@ -364,14 +367,17 @@ public sealed class AdbClientTests
         await File.WriteAllBytesAsync(splitApk, [2]);
         var runner = new ParallelCommandRunner();
         var client = new AdbClient("adb-test", runner);
+        var dispatchCount = 0;
 
         try
         {
             var result = await client.InstallApkBundleOnManyWifiDevicesAsync(
                 ["192.0.2.20:5555", "192.0.2.21:5555"],
                 [baseApk, splitApk],
-                maxParallelism: 2);
+                maxParallelism: 2,
+                deviceDispatchObserved: () => Interlocked.Increment(ref dispatchCount));
 
+            Assert.Equal(1, dispatchCount);
             Assert.True(result.Succeeded);
             var installCalls = runner.Calls.Where(call => call[2] == "install-multiple").ToArray();
             Assert.Equal(2, installCalls.Length);
@@ -387,8 +393,115 @@ public sealed class AdbClientTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ParallelInstall_DoesNotRetryFailedDispatchObserver(bool bundle)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"qfm-dispatch-deny-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var first = Path.Combine(root, "base.apk");
+        var second = Path.Combine(root, "split.apk");
+        await File.WriteAllBytesAsync(first, [1]);
+        await File.WriteAllBytesAsync(second, [2]);
+        var runner = new ParallelCommandRunner();
+        var client = new AdbClient("adb-test", runner);
+        var callbacks = 0;
+        void Dispatch()
+        {
+            Interlocked.Increment(ref callbacks);
+            throw new IOException("Injected dispatch observer failure.");
+        }
+        try
+        {
+            var result = bundle
+                ? await client.InstallApkBundleOnManyWifiDevicesAsync(
+                    ["192.0.2.20:5555", "192.0.2.21:5555"], [first, second], deviceDispatchObserved: Dispatch)
+                : await client.InstallApkOnManyWifiDevicesAsync(
+                    ["192.0.2.20:5555", "192.0.2.21:5555"], first, deviceDispatchObserved: Dispatch);
+            Assert.Equal(1, callbacks);
+            Assert.Equal(2, result.FailedCount);
+            Assert.All(result.Targets, target => Assert.Null(target.CommandResult));
+            Assert.DoesNotContain(runner.Calls, call => call[2] is "install" or "install-multiple");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static CommandResult Success(string output) =>
         new("adb-test", Array.Empty<string>(), 0, output, string.Empty, TimeSpan.Zero);
+
+    [Theory]
+    [InlineData(false, "primary", true)]
+    [InlineData(true, "primary", true)]
+    [InlineData(false, "fallback", true)]
+    [InlineData(true, "fallback", true)]
+    [InlineData(false, "duplicate", false)]
+    [InlineData(true, "duplicate", false)]
+    [InlineData(false, "duplicate-fallback", false)]
+    [InlineData(true, "duplicate-fallback", false)]
+    [InlineData(false, "missing", false)]
+    [InlineData(true, "missing", false)]
+    [InlineData(false, "malformed", false)]
+    [InlineData(true, "native-failure", false)]
+    public async Task ParallelInstall_AuthenticatesCommonHardwareIdentityBeforeEveryBatch(
+        bool bundle, string scenario, bool accepted)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mqfm-identities-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var baseApk = Path.Combine(directory, "base.apk");
+        var splitApk = Path.Combine(directory, "split_config.en.apk");
+        await File.WriteAllBytesAsync(baseApk, [1]);
+        await File.WriteAllBytesAsync(splitApk, [2]);
+        var targets = new[] { "192.0.2.30:5555", "192.0.2.31:5555" };
+        var runner = new RecordingCommandRunner((fileName, arguments) =>
+        {
+            if (arguments.Count == 5 && arguments[2] == "shell" && arguments[3] == "getprop")
+            {
+                var second = arguments[1] == targets[1];
+                if (scenario == "native-failure" && second)
+                    return new CommandResult(fileName, arguments, 1, "", "fixture probe failed", TimeSpan.Zero);
+                if (scenario == "malformed" && !second)
+                    return Success("malformed identity\n");
+                if (arguments[4] == "ro.serialno" &&
+                    (scenario == "missing" || ((scenario == "fallback" || scenario == "duplicate-fallback") && second)))
+                    return Success("unknown\n");
+                if (arguments[4] == "ro.boot.serialno" && scenario == "missing" && second)
+                    return Success("\n");
+                return Success(scenario.StartsWith("duplicate", StringComparison.Ordinal)
+                    ? "TESTHEADSET30\n"
+                    : (second ? "TESTHEADSET31\n" : "TESTHEADSET30\n"));
+            }
+            return Success("Success\n");
+        });
+        var client = new AdbClient("adb-test", runner);
+        try
+        {
+            Task<ParallelApkInstallResult> Install() => bundle
+                ? client.InstallApkBundleOnManyWifiDevicesAsync(targets, [baseApk, splitApk], new ApkInstallOptions(), 2)
+                : client.InstallApkOnManyWifiDevicesAsync(targets, baseApk, new ApkInstallOptions(), 2);
+            if (accepted)
+                Assert.True((await Install()).Succeeded);
+            else
+                await Assert.ThrowsAnyAsync<Exception>(Install);
+            var installs = runner.Calls.Where(call => call.Arguments[2] is "install" or "install-multiple").ToArray();
+            Assert.Equal(accepted ? 2 : 0, installs.Length);
+            Assert.Contains(runner.Calls, call => call.Arguments.SequenceEqual(
+                ["-s", targets[0], "shell", "getprop", "ro.serialno"]));
+            if (accepted)
+            {
+                var firstInstall = runner.Calls.FindIndex(call => call.Arguments[2] is "install" or "install-multiple");
+                Assert.Equal(scenario == "fallback" ? 4 : 2, firstInstall);
+                if (scenario == "fallback")
+                    Assert.Equal(2, runner.Calls.Count(call => call.Arguments[^1] == "ro.boot.serialno"));
+                Assert.Equal(targets, installs.Select(call => call.Arguments[1]).Order().ToArray());
+                Assert.All(installs, call => Assert.Equal(bundle ? "install-multiple" : "install", call.Arguments[2]));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
 
     private static RecordingCommandRunner WifiIdentityRunner(
         string usbIdentity,
@@ -477,6 +590,8 @@ public sealed class AdbClientTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add(arguments.ToArray());
+            if (arguments.Count == 5 && arguments[2] == "shell" && arguments[3] == "getprop")
+                return Success("TESTHEADSET" + arguments[1].Split(':')[0].Split('.')[^1] + "\n");
             var active = Interlocked.Increment(ref _active);
             while (true)
             {

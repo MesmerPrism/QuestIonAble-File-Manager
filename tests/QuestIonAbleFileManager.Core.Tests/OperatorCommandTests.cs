@@ -242,6 +242,78 @@ public sealed class OperatorCommandTests
         }
     }
 
+    [Theory]
+    [InlineData(false, "alias")]
+    [InlineData(true, "alias")]
+    [InlineData(false, "artifact")]
+    [InlineData(true, "artifact")]
+    [InlineData(false, "success")]
+    [InlineData(true, "success")]
+    [InlineData(false, "partial")]
+    [InlineData(true, "partial")]
+    [InlineData(false, "uncertain")]
+    [InlineData(true, "uncertain")]
+    [InlineData(false, "cancel")]
+    [InlineData(true, "cancel")]
+    public async Task ParallelMutationProgressBeginsAtNativeDispatch(bool bundle, string scenario)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"qfm-progress-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var apk = Path.Combine(root, "base.apk");
+        await File.WriteAllBytesAsync(apk, [1]);
+        await File.WriteAllBytesAsync(Path.Combine(root, "split.apk"), [2]);
+        var progress = new RecordingProgress<OperatorProgress>();
+        var nativeInstalls = 0;
+        var runner = new RecordingCommandRunner((_, arguments) =>
+        {
+            if (arguments.Count == 5 && arguments[3] == "getprop")
+            {
+                Assert.DoesNotContain(progress.Values, value => value.Stage == "mutation-sent");
+                return Success(scenario == "alias" ? "TESTHEADSET\n" : arguments[1] + "\n");
+            }
+            if (arguments.Count > 2 && arguments[2] is "install" or "install-multiple")
+            {
+                Assert.Single(progress.Values, value => value.Stage == "mutation-sent");
+                Interlocked.Increment(ref nativeInstalls);
+                if (scenario == "uncertain") throw new IOException("Injected unknown native outcome.");
+                if (scenario == "cancel") throw new OperationCanceledException();
+                if (scenario == "partial" && arguments[1].Contains(".31:"))
+                    return new CommandResult("adb-test", arguments, 1, string.Empty, "Rejected", TimeSpan.Zero);
+            }
+            return Success("Success\n");
+        });
+        var executor = new OperatorCommandExecutor(new AdbClient("adb-test", runner));
+        try
+        {
+            var command = bundle
+                ? OperatorCommands.InstallApkBundleMany(["192.0.2.30:5555", "192.0.2.31:5555"], root, maxParallelism: 2)
+                : OperatorCommands.InstallApkMany(["192.0.2.30:5555", "192.0.2.31:5555"], apk, maxParallelism: 2);
+            if (scenario == "artifact") File.Delete(apk);
+            if (scenario is "alias" or "artifact")
+            {
+                await Assert.ThrowsAnyAsync<Exception>(() => executor.ExecuteAsync(command, progress: progress));
+                Assert.Equal(0, nativeInstalls);
+                Assert.DoesNotContain(progress.Values, value => value.Stage == "mutation-sent");
+            }
+            else if (scenario == "cancel")
+            {
+                var failure = await Assert.ThrowsAsync<OperatorMutationExecutionException>(() => executor.ExecuteAsync(command, progress: progress));
+                Assert.Equal(OperatorMutationStage.Pending, failure.MutationReceipt.Stage);
+                Assert.Single(progress.Values, value => value.Stage == "mutation-sent");
+            }
+            else
+            {
+                var result = await executor.ExecuteAsync(command, progress: progress);
+                Assert.Equal(2, nativeInstalls);
+                Assert.Single(progress.Values, value => value.Stage == "mutation-sent");
+                Assert.Equal(scenario == "success" ? OperatorMutationStage.Confirmed : OperatorMutationStage.Pending,
+                    result.MutationReceipt!.Stage);
+                Assert.Equal(scenario == "success", result.ParallelApkInstallResult!.Succeeded);
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Fact]
     public async Task ExecutorRunsWifiAndParallelGuiCommandsThroughTypedCliContracts()
     {
@@ -259,6 +331,9 @@ public sealed class OperatorCommandTests
         var disconnected = false;
         var runner = new RecordingCommandRunner((_, arguments) =>
         {
+            if (arguments.Count == 5 && arguments[2] == "shell" &&
+                arguments[3] == "getprop" && arguments[4] == "ro.serialno")
+                return Success(arguments[1] == "192.0.2.43:5555" ? "TESTHEADSET43\n" : "QUEST123\n");
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "ip route"]))
             {
                 return Success(
