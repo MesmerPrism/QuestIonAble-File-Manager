@@ -161,8 +161,11 @@ public sealed class CommandRunnerDeadlineTests
                 catch (ArgumentException) { }
                 catch (InvalidOperationException) { }
             }
+            // Windows may still deny deletion of the exited fixture executable.
+            // Disposable scratch removal is best-effort; retain it without retry.
             try { Directory.Delete(directory, recursive: true); }
             catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
         private const string HostSource = """
             using System;
