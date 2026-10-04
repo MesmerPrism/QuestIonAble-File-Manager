@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
+[Collection("Console output")]
 public sealed class InspectedDeploymentTests
 {
     [Theory]

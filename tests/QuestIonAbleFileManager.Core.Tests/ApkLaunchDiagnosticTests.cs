@@ -5,6 +5,7 @@ using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
+[Collection("Console output")]
 public sealed class ApkLaunchDiagnosticTests
 {
     [Fact]
