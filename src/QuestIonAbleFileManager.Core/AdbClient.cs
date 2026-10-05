@@ -646,6 +646,8 @@ public sealed partial class AdbClient
     {
         serial = AndroidInput.RequireSerial(serial);
         ArgumentNullException.ThrowIfNull(expectedArtifact);
+        if (expectedArtifact.SizeBytes is < 1 or > FleetIntegrationContract.MaximumPullBytes)
+            throw new ArgumentOutOfRangeException(nameof(expectedArtifact));
         var packageName = AndroidInput.RequirePackageName(expectedArtifact.Identity.PackageName);
         var package = await InspectPackageAsync(serial, packageName, cancellationToken).ConfigureAwait(false);
         var basePaths = package.ApkPaths.Where(path =>
@@ -656,19 +658,33 @@ public sealed partial class AdbClient
             throw new InvalidDataException("Installed package readback did not identify exactly one base APK.");
         }
 
-        var streamed = await StreamInstalledBaseApkAsync(
-            serial,
-            basePaths[0],
-            expectedArtifact.SizeBytes,
-            cancellationToken).ConfigureAwait(false);
-        var exactBytes = streamed.BytesWritten == expectedArtifact.SizeBytes &&
-            string.Equals(streamed.Sha256, expectedArtifact.Sha256, StringComparison.OrdinalIgnoreCase);
+        var digest = await ReadInstalledBaseDigestAsync(
+            serial, basePaths[0], cancellationToken).ConfigureAwait(false);
+        var method = "same-opened-handle-device-sha256";
+        if (digest is null)
+        {
+            var streamed = await StreamInstalledBaseApkAsync(
+                serial, basePaths[0], expectedArtifact.SizeBytes,
+                cancellationToken).ConfigureAwait(false);
+            digest = (streamed.Sha256, streamed.BytesWritten);
+            method = "host-streamed-sha256";
+        }
+        var packageAfter = await InspectPackageAsync(serial, packageName, cancellationToken).ConfigureAwait(false);
+        if (!package.ApkPaths.SequenceEqual(packageAfter.ApkPaths, StringComparer.Ordinal))
+            throw new InvalidDataException("Installed package paths changed during exact body verification.");
+        var exactBytes = digest.Value.Size == expectedArtifact.SizeBytes &&
+            string.Equals(digest.Value.Sha256, expectedArtifact.Sha256, StringComparison.OrdinalIgnoreCase);
         return new InstalledApkIdentity(
             serial,
             exactBytes ? expectedArtifact.Identity : null,
             package.ApkPaths,
-            streamed.Sha256,
-            streamed.BytesWritten);
+            digest.Value.Sha256,
+            digest.Value.Size)
+        {
+            VerificationMethod = method,
+            VerificationFallbackReason = method == "host-streamed-sha256"
+                ? "remote-handle-digest-capability-unsupported" : null
+        };
     }
 
     public async Task<ResolvedAppLaunchResult> LaunchInspectedAppAsync(

@@ -12,9 +12,17 @@ ADB receive only that retained copy. The fixed workspace is single-owner,
 bounded, and cleans any prior crash residue before reuse.
 
 `apk install` repeats inspection immediately before its serial-scoped install.
-It then reads package paths from that exact serial and streams the opened
-installed base APK through a hard byte bound without creating a host copy.
-Confirmation requires exact streamed base-APK SHA-256/size equality; only then
+It then reads package paths from that exact serial and computes the complete
+installed base APK's SHA-256 and size on the same opened remote handle. Only a
+small bounded digest record crosses ADB; file identity and package paths are
+rechecked after hashing. If that precise remote hashing/stat capability is
+unsupported, it retains the bounded full-body stream and host digest. Malformed
+readback, path substitution, command failure or timeout never becomes fallback.
+`Installed.VerificationMethod` distinguishes `same-opened-handle-device-sha256`
+from `host-streamed-sha256`; `VerificationFallbackReason` records explicit
+capability absence. Both methods read the complete body and trust the selected
+ADB connection. Neither is cached identity or application readiness.
+Confirmation requires exact base-APK SHA-256/size equality; only then
 is the already inspected package/version/signer identity projected as installed.
 ADB exit status alone is not confirmation. The receipt identifies the selected
 serial plus both expected and installed byte evidence.

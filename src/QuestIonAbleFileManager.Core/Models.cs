@@ -138,7 +138,11 @@ public sealed record InstalledApkIdentity(
     ApkArtifactIdentity? Identity,
     IReadOnlyList<string> ApkPaths,
     string BaseApkSha256,
-    long BaseApkSizeBytes);
+    long BaseApkSizeBytes)
+{
+    public string VerificationMethod { get; init; } = "host-streamed-sha256";
+    public string? VerificationFallbackReason { get; init; }
+}
 
 public sealed record InspectedApkInstallResult(
     ApkArtifactInspection Artifact,

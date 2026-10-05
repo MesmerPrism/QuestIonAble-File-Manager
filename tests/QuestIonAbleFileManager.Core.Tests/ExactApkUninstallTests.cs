@@ -414,6 +414,16 @@ public sealed class ExactApkUninstallTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add((fileName, arguments.ToArray()));
+            if (arguments.Count == 6 && arguments[2] == "exec-out" &&
+                arguments[5].Contains("qfm-installed-digest:v1", StringComparison.Ordinal))
+            {
+                var unsupported = System.Text.Encoding.UTF8.GetBytes("qfm-installed-digest:unsupported\n");
+                if (unsupported.LongLength > maximumBytes) throw new FleetTransferLimitException(maximumBytes);
+                await destination.WriteAsync(unsupported, cancellationToken);
+                return new StreamingCommandResult(
+                    new CommandResult(fileName, arguments.ToArray(), 90, "", "", TimeSpan.Zero),
+                    unsupported.LongLength, Convert.ToHexString(SHA256.HashData(unsupported)).ToLowerInvariant());
+            }
             var observedBytes = ReplaceInstalledAfterDeviceDiscovery && _deviceDiscoveryCompleted
                 ? new byte[] { 9, 9, 9, 9 }
                 : streamedBytes;
