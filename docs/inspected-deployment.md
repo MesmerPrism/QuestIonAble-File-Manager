@@ -3,6 +3,23 @@
 These routes are a bounded host/operator slice, not a general ADB, shell,
 intent, component, or MCP execution surface.
 
+For an explicitly trusted development installation, use the optional read-only
+`apk observe --serial <serial> --file <apk> --verification development-metadata
+--json [--reported-install-reference <opaque-reference>]` route. It compares
+the actual installed package/versionCode/versionName, standalone base path and
+last-update timestamp before and after ordinary activity/process observation.
+It never hashes or transfers the installed APK. The local APK remains immutable
+and inspected, but its bytes and signer are only expected artifact facts:
+installed bytes/signer remain unverified. A reported install reference is
+caller-supplied development provenance, not authenticated or current-byte proof.
+The distinct development observation contract cannot replace exact evidence.
+Matching versions and an unchanged update time do not identify a unique build;
+use a per-build versionName or app-owned build ID when the app provides one.
+Raw Android process/activity facts retain no application or OpenXR readiness
+authority. This option affects only observe: install, launch, deploy, diagnostics
+and cleanup retain exact verification. Omit the option for the default exact
+observe route. Unsupported policy values are rejected, without silent downgrade.
+
 `apk inspect --file <path-to.apk>` uses Android SDK Build Tools (`aapt2` and
 `apksigner`) to record file size/SHA-256 and exact package, version, signer, and
 split facts. Empty, malformed, ambiguous, multi-signer, and standalone split

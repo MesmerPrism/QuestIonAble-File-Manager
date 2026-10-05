@@ -46,7 +46,8 @@ public enum OperatorCommandKind
     ObservePackagePermissions,
     ObserveExactApkProperties,
     ClearExactApkProperties,
-    RestoreExactApkProperties
+    RestoreExactApkProperties,
+    ObserveDevelopmentApp
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -88,7 +89,8 @@ public sealed class OperatorCommand
         bool replaceExisting = false,
         string? outputPath = null,
         string? propertyManifestPath = null,
-        string? propertySnapshotPath = null)
+        string? propertySnapshotPath = null,
+        string? reportedInstallReference = null)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -121,9 +123,11 @@ public sealed class OperatorCommand
         OutputPath = outputPath;
         PropertyManifestPath = propertyManifestPath;
         PropertySnapshotPath = propertySnapshotPath;
+        ReportedInstallReference = reportedInstallReference;
     }
 
     public OperatorCommandKind Kind { get; }
+    public string? ReportedInstallReference { get; }
 
     public IReadOnlyList<string> CliArguments { get; }
 
@@ -975,6 +979,40 @@ public static class OperatorCommands
             localPath: fullPath);
     }
 
+    public static OperatorCommand ObserveDevelopmentApp(string serial, string apkPath, string? reportedInstallReference = null)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        AdbClient.ValidateReportedDevelopmentInstallReference(reportedInstallReference);
+        var fullPath = Path.GetFullPath(apkPath);
+        var arguments = new List<string> { "apk", "observe", "--serial", serial, "--file", fullPath,
+            "--verification", "development-metadata", "--json" };
+        if (reportedInstallReference is not null) arguments.AddRange(["--reported-install-reference", reportedInstallReference]);
+        return new(OperatorCommandKind.ObserveDevelopmentApp, arguments, serial: serial,
+            localPath: fullPath, reportedInstallReference: reportedInstallReference);
+    }
+
+    public static OperatorCommand ParseDevelopmentObservationCliArguments(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count < 9 || !arguments.Take(9).SequenceEqual(
+            ["apk", "observe", "--serial", arguments[3], "--file", arguments[5],
+             "--verification", "development-metadata", "--json"], StringComparer.Ordinal))
+            throw new ArgumentException("Use apk observe --serial <serial> --file <apk> --verification development-metadata --json.");
+        string? reference = null;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 9; index < arguments.Count; index += 2)
+        {
+            var option = arguments[index];
+            if (index + 1 >= arguments.Count || !seen.Add(option) ||
+                option is not ("--reported-install-reference" or "--adb") ||
+                string.IsNullOrWhiteSpace(arguments[index + 1]) || arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
+                throw new ArgumentException("Development observation options were malformed, unknown or duplicated.");
+            if (option == "--reported-install-reference") reference = arguments[index + 1];
+        }
+        return ObserveDevelopmentApp(arguments[3], arguments[5], reference);
+    }
+
     public static OperatorCommand InstallApkBundle(
         string serial,
         string folderPath,
@@ -1488,7 +1526,8 @@ public sealed record OperatorExecutionResult(
     AdbForwardInventoryResult? AdbForwardInventoryResult = null,
     ApkPermissionObservation? ApkPermissionObservation = null,
     ApkPropertyObservationResult? ApkPropertyObservationResult = null,
-    ApkPropertyMutationResult? ApkPropertyMutationResult = null);
+    ApkPropertyMutationResult? ApkPropertyMutationResult = null,
+    DevelopmentAppRuntimeObservation? DevelopmentAppRuntimeObservation = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1862,6 +1901,12 @@ public sealed class OperatorCommandExecutor
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveDevelopmentApp:
+                return new OperatorExecutionResult(command,
+                    DevelopmentAppRuntimeObservation: await client.ObserveDevelopmentAppAsync(
+                        Require(command.Serial, nameof(command.Serial)), Require(command.LocalPath, nameof(command.LocalPath)),
+                        command.ReportedInstallReference, cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InstallApkBundle:
                 {

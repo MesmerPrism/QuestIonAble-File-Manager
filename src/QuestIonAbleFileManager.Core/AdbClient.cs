@@ -852,6 +852,15 @@ public sealed partial class AdbClient
             EnsureSameArtifact(artifact, installed);
         }
 
+        return await ObservePackageRuntimeAsync(serial, reportedPath, artifact, installed,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<AppRuntimeObservation> ObservePackageRuntimeAsync(
+        string serial, string reportedPath, ApkArtifactInspection artifact,
+        InstalledApkIdentity? installed, CancellationToken cancellationToken)
+    {
+
         var activities = await RunForDeviceAsync(
             serial, ["shell", "dumpsys", "activity", "activities"],
             InspectionTimeout, cancellationToken).ConfigureAwait(false);

@@ -33,6 +33,12 @@ public static class OperatorActionRegistry
         new ReadOnlyCollection<OperatorActionRouteDescriptor>(
         [
             new(
+                "apk_development_observe",
+                "apk observe --serial --file --verification development-metadata --json",
+                "OperatorCommands.ObserveDevelopmentApp",
+                false,
+                "explicit development metadata and raw Android runtime facts; installed bytes/signer and reported install provenance remain unverified"),
+            new(
                 "apk_preflight",
                 "apk preflight --serial --file --json",
                 "OperatorCommands.PreflightInspectedApp",
