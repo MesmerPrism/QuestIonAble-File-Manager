@@ -89,7 +89,7 @@ internal static class CliApplication
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
         {
             if (string.Equals(arguments[1], "observe", StringComparison.OrdinalIgnoreCase) &&
-                (arguments.Contains("--verification") || arguments.Contains("--reported-install-reference")))
+                (HasFlag(arguments.ToArray(), "--verification") || HasFlag(arguments.ToArray(), "--reported-install-reference")))
             {
                 routeId = "apk_development_observe";
                 return true;
