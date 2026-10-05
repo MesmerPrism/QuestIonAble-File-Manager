@@ -171,6 +171,35 @@ public sealed class InstalledApkDigestTests
         Assert.True(destination.Length <= 4096);
     }
 
+    [Theory]
+    [InlineData("1|2|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000", true)]
+    [InlineData("1|2|4|2026-10-05 12:34:56 +0000|2026-10-05 12:34:56 +0000", false)]
+    [InlineData("1|2|4|%y|%z", false)]
+    [InlineData("1|inode|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000", false)]
+    [InlineData("1|2|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000|extra", false)]
+    [InlineData("1|2|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000\nextra", false)]
+    public async Task ProductionMetadataValidatorRequiresExactNanosecondFields(string metadata, bool accepted)
+    {
+        var bash = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe");
+        if (!File.Exists(bash)) return;
+        var recording = new DigestRunner(Digest());
+        await new AdbClient("adb", recording).ReadInstalledIdentityAsync(Serial, Artifact);
+        var digestCall = Assert.Single(recording.Calls, args => args.Count == 6 && args[2] == "exec-out");
+        var command = digestCall[5];
+        var capabilityOffset = command.IndexOf("command -v sha256sum", StringComparison.Ordinal);
+        Assert.True(capabilityOffset > 0);
+        var functions = command[..capabilityOffset];
+        Assert.Contains("valid_stamp()", functions, StringComparison.Ordinal);
+        Assert.Contains("valid_metadata()", functions, StringComparison.Ordinal);
+        // The exact production validators execute locally; all subsequent device commands are excluded.
+        var literal = "'" + metadata.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+        var result = await new CommandRunner().RunAsync(bash,
+            ["-c", functions + "valid_metadata " + literal], TimeSpan.FromSeconds(15));
+        Assert.Equal(accepted ? 0 : 1, result.ExitCode);
+        Assert.Equal("", result.StandardOutput);
+        Assert.Equal("", result.StandardError);
+    }
+
     private sealed class DigestRunner(string wire, int exitCode = 0, string error = "") : IStreamingCommandRunner
     {
         public bool ReplacePathOnRecheck { get; init; }
