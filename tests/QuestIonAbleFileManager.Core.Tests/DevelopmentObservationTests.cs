@@ -151,7 +151,7 @@ public sealed class DevelopmentObservationTests
     public async Task InvalidDevelopmentOptionsAreRejectedBeforeAdbResolution(string scenario)
     {
         var arguments = new List<string> { "apk", "observe", "--serial", "QUEST123", "--file", "example.apk" };
-        if (scenario != "reference-without-policy")
+        if (scenario is not ("reference-without-policy" or "mixed-case-reference"))
             arguments.AddRange(["--verification", "development-metadata", "--json"]);
         switch (scenario)
         {
@@ -159,7 +159,7 @@ public sealed class DevelopmentObservationTests
             case "duplicate-policy": arguments.AddRange(["--verification", "development-metadata"]); break;
             case "reference-without-policy": arguments.AddRange(["--reported-install-reference", "install-123", "--json"]); break;
             case "mixed-case-policy": arguments[arguments.IndexOf("--verification")] = "--Verification"; break;
-            case "mixed-case-reference": arguments.AddRange(["--Reported-install-reference", "install-123"]); break;
+            case "mixed-case-reference": arguments.AddRange(["--Reported-install-reference", "install-123", "--json"]); break;
         }
         arguments.AddRange(["--adb", "missing-adb.exe"]);
         var originalOut = Console.Out;
