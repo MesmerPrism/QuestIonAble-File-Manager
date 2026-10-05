@@ -230,6 +230,7 @@ internal static class OperatorMutations
     {
         OperatorCommandKind.PushFile or
         OperatorCommandKind.InstallApk or
+        OperatorCommandKind.InstallDevelopmentApk or
         OperatorCommandKind.DeployInspectedApp or
         OperatorCommandKind.LaunchInspectedApp or
         OperatorCommandKind.LaunchDiagnoseInspectedApp or
@@ -257,6 +258,7 @@ internal static class OperatorMutations
     {
         OperatorCommandKind.PushFile => $"file present at {command.RemotePath}",
         OperatorCommandKind.InstallApk => $"inspected APK installed on {command.Serial}: {Path.GetFileName(command.LocalPath)}",
+        OperatorCommandKind.InstallDevelopmentApk => $"development package/version metadata observed after installer success on {command.Serial}; bytes, signer, unique build and readiness remain unverified",
         OperatorCommandKind.DeployInspectedApp =>
             $"inspected APK installed and resolved launcher effect observed on {command.Serial}: {Path.GetFileName(command.LocalPath)}; application and OpenXR readiness remain app-owned",
         OperatorCommandKind.LaunchInspectedApp => $"resolved exported launcher started on {command.Serial}",
@@ -312,6 +314,7 @@ internal static class OperatorMutations
             OperatorCommandKind.PushFile => OperatorMutationObservation.Confirmed(
                 "Remote file size matches the local source."),
             OperatorCommandKind.InstallApk => ObserveInspectedInstall(command, result),
+            OperatorCommandKind.InstallDevelopmentApk => ObserveDevelopmentInstall(command, result),
             OperatorCommandKind.DeployInspectedApp => ObserveInspectedDeployment(command, result),
             OperatorCommandKind.LaunchInspectedApp => ObserveResolvedLaunch(result),
             OperatorCommandKind.LaunchDiagnoseInspectedApp => ObserveLaunchDiagnostic(result),
@@ -466,6 +469,32 @@ internal static class OperatorMutations
             $"current-focus={deployment.Runtime.GlobalFocus.CurrentFocus.State}, " +
             $"focused-app={deployment.Runtime.GlobalFocus.FocusedApp.State}, " +
             $"blocking-system-components={boundary.BlockingSystemComponents.Count}.");
+    }
+
+    private static OperatorMutationObservation ObserveDevelopmentInstall(OperatorCommand command, OperatorExecutionResult result)
+    {
+        var install = result.DevelopmentApkInstallResult;
+        var options = command.InstallOptions ?? new();
+        var nativeArguments = new List<string> { "-s", command.Serial!, "install" };
+        if (options.ReplaceExisting) nativeArguments.Add("-r");
+        if (options.AllowDowngrade) nativeArguments.Add("-d");
+        if (options.GrantRuntimePermissions) nativeArguments.Add("-g");
+        if (options.AllowTestPackages) nativeArguments.Add("-t");
+        return result.Command.Kind == OperatorCommandKind.InstallDevelopmentApk &&
+               result.Command.Serial == command.Serial && result.Command.LocalPath == command.LocalPath &&
+               result.Command.InstallOptions == command.InstallOptions &&
+               result.Command.CliArguments.SequenceEqual(command.CliArguments, StringComparer.Ordinal) &&
+               install is not null && install.InstallerCommandSucceeded && install.Serial == command.Serial &&
+               install.CommandResult.Arguments.Count == nativeArguments.Count + 1 &&
+               install.CommandResult.Arguments.Take(nativeArguments.Count).SequenceEqual(nativeArguments, StringComparer.Ordinal) &&
+               !string.IsNullOrWhiteSpace(install.CommandResult.Arguments[^1]) &&
+               install.LocalArtifact.Path == command.LocalPath &&
+               install.InstalledMetadata.PackageName == install.LocalArtifact.Identity.PackageName &&
+               install.InstalledMetadata.VersionCode == install.LocalArtifact.Identity.VersionCode &&
+               install.InstalledMetadata.VersionName == install.LocalArtifact.Identity.VersionName &&
+               install.InstalledMetadata.ApkPaths.Count == 1
+            ? OperatorMutationObservation.Confirmed("Installer command succeeded and matching package/version metadata was read back; current bytes, signer, unique build, transaction causality and readiness remain unverified.")
+            : OperatorMutationObservation.Pending("Development metadata confirmation unavailable.", "Waiting for explicit development metadata readback; never replay the installation automatically.");
     }
 
     private static OperatorMutationObservation ObserveInspectedInstall(

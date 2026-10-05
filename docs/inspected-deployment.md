@@ -238,3 +238,19 @@ routes through retained typed commands. See `local-api.md`.
 The preflight and composite deploy convenience routes are CLI-only in v1;
 local API clients retain the existing inspect/install/launch/observe
 primitives.
+
+For an explicitly trusted development install, the agent-only route
+`apk install --serial <serial> --file <apk> --verification development-metadata
+--json` retains immutable local APK admission and the usual install flags, but
+confirms an accepted installer command with two stable bounded package/version,
+base-path and last-update metadata reads. Its distinct
+`questionable.file_manager.development_apk_install.v1` result reports local APK
+identity separately from observed installed metadata. It does not read or hash
+the installed APK body. Installed bytes, signer, unique build identity,
+transaction causality and application readiness remain unverified, including
+when the mutation receipt is Confirmed under this metadata contract. Matching
+versions and timestamps cannot establish any of those claims. A unique source
+version name improves development identification but does not establish byte
+equality. Failed or ambiguous post-dispatch results remain Pending and are
+never retried automatically. Without the explicit flag, install retains exact
+verification. GUI, local API, deploy and launch policies remain exact.

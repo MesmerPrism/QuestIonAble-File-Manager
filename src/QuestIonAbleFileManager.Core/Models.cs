@@ -237,6 +237,21 @@ public sealed record InstalledPackageDevelopmentMetadata(
     string PackageName, long VersionCode, string? VersionName,
     IReadOnlyList<string> ApkPaths, string LastUpdateTime);
 
+public sealed record DevelopmentApkInstallResult(
+    string Serial, ApkArtifactInspection LocalArtifact,
+    InstalledPackageDevelopmentMetadata InstalledMetadata, CommandResult CommandResult)
+{
+    public string VerificationContract => "questionable.file_manager.development_apk_install.v1";
+    public string VerificationPolicy => "development-metadata";
+    public bool InstallerCommandSucceeded => CommandResult.Succeeded;
+    public bool InstalledBytesVerified => false;
+    public bool InstalledSignerVerified => false;
+    public bool UniqueBuildIdentityVerified => false;
+    public bool TransactionProvenanceVerified => false;
+    public bool ApplicationReadinessVerified => false;
+    public string ClaimBoundary => "Accepted installer command followed by matching package/version metadata; metadata does not prove current bytes, signer, unique build, transaction causality or readiness.";
+}
+
 public sealed record DevelopmentAppRuntimeObservation(
     ApkArtifactInspection ExpectedArtifact,
     InstalledPackageDevelopmentMetadata InstalledMetadata,
