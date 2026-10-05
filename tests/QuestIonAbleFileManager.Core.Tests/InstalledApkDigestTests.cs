@@ -57,7 +57,7 @@ public sealed class InstalledApkDigestTests
     [Theory]
     [InlineData("qfm-installed-digest:v1\n4\n", 0, "")]
     [InlineData("qfm-installed-digest:v1\n04\n", 0, "")]
-    [InlineData("qfm-installed-digest:unsupported\n", 0, "")]
+    [InlineData("qfm-installed-digest:unsupported\n", 1, "")]
     [InlineData("qfm-installed-digest:unsupported\n", 90, "permission denied")]
     [InlineData("qfm-installed-digest:unsupported\nextra\n", 90, "")]
     [InlineData("", 1, "permission denied")]
@@ -200,9 +200,81 @@ public sealed class InstalledApkDigestTests
         Assert.Equal("", result.StandardError);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeProductionWireIsAcceptedByProductionParser(bool unsupported)
+    {
+        var bash = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe");
+        if (!File.Exists(bash)) return;
+        var recording = new DigestRunner(Digest());
+        await new AdbClient("adb", recording).ReadInstalledIdentityAsync(Serial, Artifact);
+        var call = Assert.Single(recording.Calls, args => args.Count == 6 && args[2] == "exec-out");
+        var command = call[5];
+        string nativeCommand;
+        if (unsupported)
+        {
+            var functionEnd = command.IndexOf("valid_stamp()", StringComparison.Ordinal);
+            Assert.True(functionEnd > 0);
+            nativeCommand = command[..functionEnd] + "unsupported";
+        }
+        else
+        {
+            var printfOffset = command.LastIndexOf("printf 'qfm-installed-digest:v1", StringComparison.Ordinal);
+            Assert.True(printfOffset > 0);
+            nativeCommand = "size=4; digest='" + Hash + "'; " + command[printfOffset..];
+        }
+        using var wire = new MemoryStream();
+        var native = await new CommandRunner().RunToStreamAsync(bash, ["-c", nativeCommand], wire,
+            4096, TimeSpan.FromSeconds(15));
+        var expected = unsupported ? "qfm-installed-digest:unsupported\n" : Digest();
+        Assert.Equal(Encoding.UTF8.GetBytes(expected), wire.ToArray());
+        Assert.Equal(unsupported ? 90 : 0, native.CommandResult.ExitCode);
+        Assert.Equal("", native.CommandResult.StandardError);
+        Assert.Equal(wire.Length, native.BytesWritten);
+
+        // Replay bytes emitted by the real production printf through the public parser route.
+        var replay = new DigestRunner(Encoding.UTF8.GetString(wire.ToArray()), native.CommandResult.ExitCode);
+        var identity = await new AdbClient("adb", replay).ReadInstalledIdentityAsync(Serial, Artifact);
+        Assert.Equal(Artifact.Identity, identity.Identity);
+        Assert.Equal(Hash, identity.BaseApkSha256);
+        Assert.Equal(4, identity.BaseApkSizeBytes);
+        Assert.Equal(unsupported ? "host-streamed-sha256" : "same-opened-handle-device-sha256", identity.VerificationMethod);
+        Assert.Equal(unsupported ? 1 : 0, replay.ApkStreams);
+        Assert.Equal(2, replay.PackageReads);
+    }
+
+    [Fact]
+    public async Task AdbExecOutSuccessWithExactUnsupportedWireUsesExplicitFallback()
+    {
+        // adb exec-out can discard the remote shell's exit 90. The wire body remains decisive.
+        var runner = new DigestRunner("qfm-installed-digest:unsupported\n", 0);
+        var result = await new AdbClient("adb", runner).ReadInstalledIdentityAsync(Serial, Artifact);
+        Assert.Equal(Artifact.Identity, result.Identity);
+        Assert.Equal("host-streamed-sha256", result.VerificationMethod);
+        Assert.Equal("remote-handle-digest-capability-unsupported", result.VerificationFallbackReason);
+        Assert.Equal(1, runner.ApkStreams);
+    }
+
+    [Theory]
+    [InlineData(0, "qfm-installed-digest:unsupported\nextra", "", false)]
+    [InlineData(0, "qfm-installed-digest:unsupported\n", "error", false)]
+    [InlineData(1, "qfm-installed-digest:unsupported\n", "", false)]
+    [InlineData(42, "qfm-installed-digest:unsupported\n", "", false)]
+    [InlineData(0, "qfm-installed-digest:unsupported\n", "", true)]
+    public async Task UnsupportedClassificationRejectsAnythingOtherThanCompleteExactCapabilityWire(
+        int exitCode, string wire, string error, bool incomplete)
+    {
+        var runner = new DigestRunner(wire, exitCode, error) { IncompleteDigestCount = incomplete };
+        var failure = await Record.ExceptionAsync(() => new AdbClient("adb", runner).ReadInstalledIdentityAsync(Serial, Artifact));
+        Assert.True(failure is InvalidDataException or AdbCommandException);
+        Assert.Equal(0, runner.ApkStreams);
+    }
+
     private sealed class DigestRunner(string wire, int exitCode = 0, string error = "") : IStreamingCommandRunner
     {
         public bool ReplacePathOnRecheck { get; init; }
+        public bool IncompleteDigestCount { get; init; }
         public int PackageReads { get; private set; }
         public int ApkStreams { get; private set; }
         public List<long> DigestBounds { get; } = [];
@@ -240,7 +312,7 @@ public sealed class InstalledApkDigestTests
             if (bytes.LongLength > maximumBytes) throw new FleetTransferLimitException(maximumBytes);
             await destination.WriteAsync(bytes, cancellationToken);
             return new(new CommandResult(fileName, arguments, digest ? exitCode : 0, "", digest ? error : "", TimeSpan.Zero),
-                bytes.LongLength, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+                bytes.LongLength + (digest && IncompleteDigestCount ? 1 : 0), Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
         }
     }
 }

@@ -61,7 +61,9 @@ public sealed partial class AdbClient
         if (output.Length > InstalledDigestMaximumOutputBytes || result.BytesWritten != output.Length)
             throw new InvalidDataException("Installed digest output was incomplete or exceeded its bound.");
         var text = new UTF8Encoding(false, true).GetString(output.ToArray());
-        if (result.CommandResult.ExitCode == 90 && result.CommandResult.StandardError.Length == 0 &&
+        // adb exec-out may report success after a remote shell exits with the
+        // capability marker. Only the complete exact marker authorizes fallback.
+        if (result.CommandResult.ExitCode is 0 or 90 && result.CommandResult.StandardError.Length == 0 &&
             text == InstalledDigestUnsupported)
             return null;
         result.CommandResult.EnsureSuccess("Read exact installed APK digest");
