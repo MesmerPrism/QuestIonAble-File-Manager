@@ -7,15 +7,18 @@ internal sealed class ImmutableApkAdmission : IDisposable
     private static readonly TimeSpan OwnerRetry = TimeSpan.FromMilliseconds(50);
 
     private readonly LocalApiArtifactStager _stager;
+    private readonly LocalApiStateSettings _settings;
     private IReadOnlyList<LocalApiStagedArtifact> _artifacts;
     private bool _disposed;
 
     private ImmutableApkAdmission(
         LocalApiArtifactStager stager,
-        IReadOnlyList<LocalApiStagedArtifact> artifacts)
+        IReadOnlyList<LocalApiStagedArtifact> artifacts,
+        LocalApiStateSettings settings)
     {
         _stager = stager;
         _artifacts = artifacts;
+        _settings = settings;
     }
 
     public string Path => Paths.Single();
@@ -57,7 +60,7 @@ internal sealed class ImmutableApkAdmission : IDisposable
                     MaximumRetainedOperations: 1,
                     MaximumRunningOperations: 1,
                     MaximumStagedBytes: LocalApiStateLimits.DefaultMaximumStagedBytes,
-                    MaximumStagedFiles: sources.Length,
+                    MaximumStagedFiles: LocalApiStateLimits.DefaultMaximumStagedFiles,
                     MaximumSingleArtifactBytes: LocalApiStateLimits.DefaultMaximumSingleArtifactBytes));
             var deadline = DateTimeOffset.UtcNow + OwnerWait;
             while (stager is null)
@@ -73,14 +76,17 @@ internal sealed class ImmutableApkAdmission : IDisposable
                     await Task.Delay(OwnerRetry, cancellationToken).ConfigureAwait(false);
                 }
             }
-            stager.CleanupOrphanedArtifacts();
+            stager.CleanupTransientArtifacts();
             foreach (var sourcePath in sources)
             {
                 artifacts.Add(await stager.StageAsync(
                     sourcePath,
                     cancellationToken).ConfigureAwait(false));
             }
-            return new ImmutableApkAdmission(stager, artifacts);
+            // Retain immutable file and ancestor handles for the command, while
+            // releasing inventory ownership after the local copy phase.
+            stager.ReleaseTransientOwnerLease();
+            return new ImmutableApkAdmission(stager, artifacts, settings);
         }
         catch
         {
@@ -89,8 +95,11 @@ internal sealed class ImmutableApkAdmission : IDisposable
                 artifact.TryDelete(out _);
             }
             stager?.Dispose();
-            ProcessGate.Release();
             throw;
+        }
+        finally
+        {
+            ProcessGate.Release();
         }
     }
 
@@ -100,16 +109,24 @@ internal sealed class ImmutableApkAdmission : IDisposable
         _disposed = true;
         try
         {
-            foreach (var artifact in _artifacts)
-            {
-                artifact.TryDelete(out _);
-            }
-            _artifacts = [];
-            _stager.Dispose();
+            // Serialize deletion with admission inventories, including other
+            // processes. The original stager still pins the ancestor identities.
+            using var cleanup = new LocalApiArtifactStager(_settings);
+            foreach (var artifact in _artifacts) artifact.TryDelete(out _);
+        }
+        catch (Exception exception) when (exception is LocalApiException or
+            System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            // Cleanup contention cannot replace a command's authoritative result.
+            // Closing our handles makes this exact file reclaimable next admission.
         }
         finally
         {
-            ProcessGate.Release();
+            // A failed cleanup becomes deletable transient debt, not a held
+            // artifact or an attempt to delete another admission's files.
+            foreach (var artifact in _artifacts) artifact.Dispose();
+            _artifacts = [];
+            _stager.Dispose();
         }
     }
 }

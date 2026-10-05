@@ -1,5 +1,17 @@
 # Inspected single-device deployment
 
+Transient APK admission serializes only local staging and inventory cleanup.
+Independent CLI/Core operations retain separate immutable staged-file handles
+and pinned ancestor identities throughout their commands, so observation,
+installation and launch on independent headsets can overlap after staging.
+The shared transient inventory retains a closed 256-file and 2 GiB aggregate
+bound, with at most 1 GiB per APK and 16 APKs per admission. Sharing-protected
+active copies remain counted; deletable crash leftovers are reclaimed by the
+next admission. Cleanup contention leaves reclaimable debt and cannot replace
+an already observed command result. This Windows-only staging lease is not
+per-headset effect authority. The dedicated local API's configured owner lease,
+journal, capacity and strict recovery semantics are unchanged.
+
 These routes are a bounded host/operator slice, not a general ADB, shell,
 intent, component, or MCP execution surface.
 
