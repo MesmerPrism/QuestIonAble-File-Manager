@@ -173,6 +173,7 @@ public sealed class InstalledApkDigestTests
 
     [Theory]
     [InlineData("1|2|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000", true)]
+    [InlineData("16|983301|0|2026-10-05 18:52:50.915355577 +0200|2026-10-05 18:52:50.915355577 +0200", true)]
     [InlineData("1|2|4|2026-10-05 12:34:56 +0000|2026-10-05 12:34:56 +0000", false)]
     [InlineData("1|2|4|%y|%z", false)]
     [InlineData("1|inode|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000", false)]
@@ -191,6 +192,10 @@ public sealed class InstalledApkDigestTests
         var functions = command[..capabilityOffset];
         Assert.Contains("valid_stamp()", functions, StringComparison.Ordinal);
         Assert.Contains("valid_metadata()", functions, StringComparison.Ordinal);
+        // MKSH parameter-expansion patterns treat an unescaped pipe as alternation.
+        // Require literal delimiters in the same production function exercised below.
+        Assert.DoesNotContain("${value%%|*}", functions, StringComparison.Ordinal);
+        Assert.DoesNotContain("${value#*|}", functions, StringComparison.Ordinal);
         // The exact production validators execute locally; all subsequent device commands are excluded.
         var literal = "'" + metadata.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
         var result = await new CommandRunner().RunAsync(bash,

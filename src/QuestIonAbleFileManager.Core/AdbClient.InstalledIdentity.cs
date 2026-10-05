@@ -29,10 +29,10 @@ public sealed partial class AdbClient
             "unsupported() { printf 'qfm-installed-digest:unsupported\\n'; exit 90; }; " +
             "valid_stamp() { case \"$1\" in " + stampPattern + ") return 0;; *) return 1;; esac; }; " +
             "valid_metadata() { value=\"$1\"; for field in 1 2 3; do " +
-            "part=\"${value%%|*}\"; [ \"$part\" != \"$value\" ] || return 1; " +
-            "case \"$part\" in ''|*[!0-9]*) return 1;; esac; value=\"${value#*|}\"; done; " +
-            "part=\"${value%%|*}\"; [ \"$part\" != \"$value\" ] || return 1; " +
-            "valid_stamp \"$part\" || return 1; valid_stamp \"${value#*|}\"; }; " +
+            "part=\"${value%%\\|*}\"; [ \"$part\" != \"$value\" ] || return 1; " +
+            "case \"$part\" in ''|*[!0-9]*) return 1;; esac; value=\"${value#*\\|}\"; done; " +
+            "part=\"${value%%\\|*}\"; [ \"$part\" != \"$value\" ] || return 1; " +
+            "valid_stamp \"$part\" || return 1; valid_stamp \"${value#*\\|}\"; }; " +
             "command -v sha256sum >/dev/null 2>&1 || unsupported; " +
             "command -v stat >/dev/null 2>&1 || unsupported; " +
             "probe=$(stat -Lc '%d|%i|%s|%y|%z' /proc/$$ 2>/dev/null) || unsupported; " +
