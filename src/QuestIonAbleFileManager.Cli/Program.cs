@@ -2411,12 +2411,19 @@ internal static class CliApplication
             1);
     }
 
+    internal static (OperatorCommand Command, AdbClient Client) PreparePackagePermissionObservation(
+        string[] arguments,
+        ICommandRunner? runner = null)
+    {
+        var command = OperatorCommands.ParsePackagePermissionObservationCliArguments(arguments);
+        return (command, AdbClient.CreateDefault(GetOption(arguments, "--adb"), runner));
+    }
+
     private static async Task<int> RunApkPermissionObservationJsonAsync(string[] arguments)
     {
         try
         {
-            var command = OperatorCommands.ParsePackagePermissionObservationCliArguments(arguments);
-            var client = AdbClient.CreateDefault();
+            var (command, client) = PreparePackagePermissionObservation(arguments);
             var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
             var observation = execution.ApkPermissionObservation ??
                 throw new InvalidOperationException("Permission observation returned no result.");
@@ -3086,7 +3093,7 @@ internal static class CliApplication
               questionable-file-manager apk properties observe --serial <serial> --file <file.apk> --manifest <manifest.json> --output <new-snapshot.json> --json
               questionable-file-manager apk properties clear --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
               questionable-file-manager apk properties restore --serial <serial> --file <file.apk> --manifest <manifest.json> --snapshot <snapshot.json> --confirm-exact-apk-property-mutation --json
-              questionable-file-manager apk permissions --serial <serial> --package <package> --json
+              questionable-file-manager apk permissions --serial <serial> --package <package> --json [--adb <path>]
               questionable-file-manager apk preflight --serial <serial> --file <file.apk> --json
               questionable-file-manager apk deploy --serial <serial> --file <file.apk> --json
               questionable-file-manager apk diagnose --serial <serial> --file <file.apk> --output <new-folder> --json
