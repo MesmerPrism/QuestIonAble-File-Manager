@@ -920,18 +920,21 @@ public static class OperatorCommands
         IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (arguments.Count != 7 ||
-            !arguments.SequenceEqual(
+        if (arguments.Count is not (7 or 9) ||
+            !arguments.Take(7).SequenceEqual(
                 [
                     "apk", "permissions", "--serial",
                     arguments.Count > 3 ? arguments[3] : string.Empty,
                     "--package", arguments.Count > 5 ? arguments[5] : string.Empty,
                     "--json"
                 ],
-                StringComparer.Ordinal))
+                StringComparer.Ordinal) ||
+            (arguments.Count == 9 &&
+                (arguments[7] != "--adb" || string.IsNullOrWhiteSpace(arguments[8]) ||
+                 arguments[8].StartsWith("--", StringComparison.Ordinal))))
         {
             throw new ArgumentException(
-                "Use exactly apk permissions --serial <quest-serial> --package <package> --json.",
+                "Use exactly apk permissions --serial <quest-serial> --package <package> --json [--adb <path>].",
                 nameof(arguments));
         }
 

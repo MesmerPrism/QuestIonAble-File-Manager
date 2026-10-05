@@ -72,6 +72,56 @@ public sealed class ApkPermissionObservationTests
     }
 
     [Fact]
+    public async Task ExplicitAdbSelectionReachesTheFixedPermissionCommands()
+    {
+        var executable = Path.GetTempFileName();
+        try
+        {
+            using var fixture = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(
+                FindRepositoryRoot(), "tests", "QuestIonAbleFileManager.Core.Tests",
+                "Fixtures", "apk-permission-observation.v1.json")));
+            var runner = new FixtureRunner(fixture.RootElement.GetProperty("cases")[0]);
+            var (command, client) = CliApplication.PreparePackagePermissionObservation(
+                ["apk", "permissions", "--serial", Serial, "--package", Package,
+                 "--json", "--adb", executable], runner);
+
+            Assert.Equal(executable, client.AdbPath);
+            Assert.Equal(OperatorCommandKind.ObservePackagePermissions, command.Kind);
+            Assert.DoesNotContain("--adb", command.CliArguments);
+            var result = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+
+            Assert.NotNull(result.ApkPermissionObservation);
+            Assert.NotEmpty(runner.Calls);
+            Assert.All(runner.Calls, call => Assert.Equal(executable, call.FileName));
+        }
+        finally
+        {
+            File.Delete(executable);
+        }
+    }
+
+    [Fact]
+    public void ExplicitAdbOptionDoesNotBroadenTheClosedRoute()
+    {
+        string[] route = ["apk", "permissions", "--serial", Serial, "--package", Package, "--json"];
+        var rejected = new[]
+        {
+            route.Concat(["--adb"]).ToArray(),
+            route.Concat(["--adb", ""]).ToArray(),
+            route.Concat(["--adb", " "]).ToArray(),
+            route.Concat(["--adb", "--json"]).ToArray(),
+            route.Concat(["--adb", "adb.exe", "--adb", "other.exe"]).ToArray(),
+            route.Concat(["--command", "grant"]).ToArray(),
+            route.Concat(["--adb", "adb.exe", "--extra"]).ToArray(),
+            new[] { "apk", "permissions", "--serial", Serial, "--package", Package,
+                "--adb", "adb.exe", "--json" }
+        };
+        foreach (var arguments in rejected)
+            Assert.Throws<ArgumentException>(() =>
+                CliApplication.PreparePackagePermissionObservation(arguments));
+    }
+
+    [Fact]
     public void AgentRouteIsStrictAndReadOnly()
     {
         var command = OperatorCommands.ParsePackagePermissionObservationCliArguments(
