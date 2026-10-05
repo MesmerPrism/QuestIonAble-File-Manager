@@ -48,6 +48,8 @@ internal static class CliApplication
     };
     private static readonly IReadOnlyList<CliAgentRouteAdmission> AgentRouteAdmissions =
     [
+        new("apk_development_observe", "apk observe --serial <serial> --file <apk> --verification development-metadata --json [--reported-install-reference <opaque-reference>]",
+            ["apk", "observe", "--serial", "QUEST123", "--file", "example.apk", "--verification", "development-metadata", "--json"], true),
         new("apk_preflight", "apk preflight --serial <serial> --file <file.apk> --json",
             ["apk", "preflight", "--serial", "QUEST123", "--file", "example.apk", "--json"], true),
         new("apk_deploy", "apk deploy --serial <serial> --file <file.apk> [options] --json",
@@ -86,6 +88,12 @@ internal static class CliApplication
 
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
         {
+            if (string.Equals(arguments[1], "observe", StringComparison.OrdinalIgnoreCase) &&
+                (HasFlag(arguments.ToArray(), "--verification") || HasFlag(arguments.ToArray(), "--reported-install-reference")))
+            {
+                routeId = "apk_development_observe";
+                return true;
+            }
             if (string.Equals(arguments[1], "properties", StringComparison.OrdinalIgnoreCase) &&
                 arguments.Count > 2)
             {
@@ -142,6 +150,9 @@ internal static class CliApplication
         try
         {
             var command = arguments[0].ToLowerInvariant();
+            if ((HasFlag(arguments, "--verification") || HasFlag(arguments, "--reported-install-reference")) &&
+                !(command == "apk" && arguments.Length > 1 && arguments[1].Equals("observe", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("Development verification is supported only by explicit apk observe.");
             if (command == "kiosk-direct")
             {
                 return await RunKioskDirectAsync(arguments);
@@ -232,6 +243,7 @@ internal static class CliApplication
 
     private static Task<int> RunAgentRouteAsync(string routeId, string[] arguments) => routeId switch
     {
+        "apk_development_observe" => RunDevelopmentObservationJsonAsync(arguments),
         "apk_preflight" => RunApkPreflightJsonAsync(arguments),
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
         "apk_diagnose" => RunApkDiagnoseJsonAsync(arguments),
@@ -244,6 +256,33 @@ internal static class CliApplication
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
     };
+
+    private static async Task<int> RunDevelopmentObservationJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseDevelopmentObservationCliArguments(arguments);
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            WriteJson(execution.DevelopmentAppRuntimeObservation ??
+                throw new InvalidOperationException("Development observation returned no result."));
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            WriteJson(new
+            {
+                schema = "questionable.file_manager.development_app_runtime_observation.v1",
+                succeeded = false,
+                verification_policy = "development-metadata",
+                installed_bytes_verified = false,
+                installed_signer_verified = false,
+                state_change_possible = false,
+                failure = exception is ArgumentException ? "input_rejected" : "development_observation_failed"
+            });
+            return exception is ArgumentException ? 2 : 1;
+        }
+    }
 
     private static async Task<int> RunConnectivityProfileAsync(string[] arguments)
     {

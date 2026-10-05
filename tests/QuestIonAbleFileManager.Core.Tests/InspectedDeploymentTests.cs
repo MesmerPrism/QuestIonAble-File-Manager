@@ -795,7 +795,11 @@ public sealed class InspectedDeploymentTests
             Assert.Equal(2, runner.Calls.Count(call => call.FileName == "aapt2"));
             Assert.Equal(2, runner.Calls.Count(call => call.FileName == "apksigner"));
             Assert.Equal(2, runner.Calls.Count(call =>
-                call.Arguments.Count >= 3 && call.Arguments[2] == "exec-out"));
+                call.Arguments.Count == 6 && call.Arguments[2] == "exec-out" &&
+                call.Arguments[5].EndsWith("exec cat <&3", StringComparison.Ordinal)));
+            Assert.Equal(2, runner.Calls.Count(call =>
+                call.Arguments.Count == 6 && call.Arguments[2] == "exec-out" &&
+                call.Arguments[5].Contains("qfm-installed-digest:v1", StringComparison.Ordinal)));
             Assert.Single(runner.Calls, call =>
                 call.Arguments.Count >= 6 &&
                 call.Arguments[3] == "am" &&
@@ -1352,7 +1356,8 @@ public sealed class InspectedDeploymentTests
             Assert.Contains(runner.StreamMaximumBytes, maximum => maximum == bytes.LongLength);
 
             var stream = Assert.Single(runner.Calls, call =>
-                call.Arguments.Count == 6 && call.Arguments[2] == "exec-out");
+                call.Arguments.Count == 6 && call.Arguments[2] == "exec-out" &&
+                call.Arguments[5].EndsWith("exec cat <&3", StringComparison.Ordinal));
             var command = stream.Arguments[5];
             Assert.Contains("exec 3<\"$candidate\"", command, StringComparison.Ordinal);
             Assert.Contains(
@@ -2794,6 +2799,17 @@ public sealed class InspectedDeploymentTests
             afterCall?.Invoke(fileName, arguments);
             if (commandFailure?.Invoke(fileName, arguments) is { } failure)
                 return await Task.FromException<StreamingCommandResult>(failure);
+            // These existing deployment fixtures deliberately exercise the
+            // full-body fallback; the digest path has its own adversarial suite.
+            if (arguments.Count == 6 && arguments[2] == "exec-out" &&
+                arguments[5].Contains("qfm-installed-digest:v1", StringComparison.Ordinal))
+            {
+                var unsupported = Encoding.UTF8.GetBytes("qfm-installed-digest:unsupported\n");
+                await destination.WriteAsync(unsupported, cancellationToken);
+                return new StreamingCommandResult(
+                    new CommandResult(fileName, arguments.ToArray(), 90, "", "", TimeSpan.Zero),
+                    unsupported.Length, Convert.ToHexString(SHA256.HashData(unsupported)).ToLowerInvariant());
+            }
             var result = handler(fileName, arguments) with
             {
                 FileName = fileName,

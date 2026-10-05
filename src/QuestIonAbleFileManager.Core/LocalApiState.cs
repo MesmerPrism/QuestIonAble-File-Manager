@@ -100,7 +100,11 @@ internal sealed class LocalApiStagedArtifact : IDisposable
     public void Dispose() => _retainedHandle.Dispose();
 
     public bool TryDelete(out string? error)
+        => TryDelete(out error, out _);
+
+    internal bool TryDelete(out string? error, out bool sharingProtected)
     {
+        sharingProtected = false;
         try
         {
             _retainedHandle.Dispose();
@@ -116,6 +120,7 @@ internal sealed class LocalApiStagedArtifact : IDisposable
         }
         catch (Exception exception)
         {
+            sharingProtected = exception is Win32Exception { NativeErrorCode: 32 or 33 };
             _retainedHandle.Dispose();
             error = exception.Message;
             return false;
@@ -355,6 +360,28 @@ internal sealed class LocalApiArtifactStager : IDisposable
                 "The staged APK workspace could not be proven empty.");
         }
     }
+
+    // Only transient CLI/Core admission uses this inventory. A sharing-protected
+    // file stays physically counted; configured API recovery keeps its strict cleanup.
+    internal void CleanupTransientArtifacts()
+    {
+        foreach (var path in Directory.EnumerateFiles(_stageDirectory, "*.apk")
+                     .Take(_limits.MaximumStagedFiles + 1))
+        {
+            try
+            {
+                using var artifact = Reopen(path);
+                if (!artifact.TryDelete(out _, out var sharingProtected) && !sharingProtected)
+                    throw new LocalApiException("staged_cleanup_pending", "A prior transient APK could not be cleaned safely.");
+            }
+            catch (Win32Exception exception) when (exception.NativeErrorCode is 2 or 3)
+            {
+                // Another admission completed cleanup before this inventory lease.
+            }
+        }
+    }
+
+    internal void ReleaseTransientOwnerLease() => _ownerLease.Dispose();
 
     public void CleanupUntrackedArtifacts(IReadOnlySet<string> retainedPaths)
     {

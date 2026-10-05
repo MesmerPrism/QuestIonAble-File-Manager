@@ -1,7 +1,36 @@
 # Inspected single-device deployment
 
+Transient APK admission serializes only local staging and inventory cleanup.
+Independent CLI/Core operations retain separate immutable staged-file handles
+and pinned ancestor identities throughout their commands, so observation,
+installation and launch on independent headsets can overlap after staging.
+The shared transient inventory retains a closed 256-file and 2 GiB aggregate
+bound, with at most 1 GiB per APK and 16 APKs per admission. Sharing-protected
+active copies remain counted; deletable crash leftovers are reclaimed by the
+next admission. Cleanup contention leaves reclaimable debt and cannot replace
+an already observed command result. This Windows-only staging lease is not
+per-headset effect authority. The dedicated local API's configured owner lease,
+journal, capacity and strict recovery semantics are unchanged.
+
 These routes are a bounded host/operator slice, not a general ADB, shell,
 intent, component, or MCP execution surface.
+
+For an explicitly trusted development installation, use the optional read-only
+`apk observe --serial <serial> --file <apk> --verification development-metadata
+--json [--reported-install-reference <opaque-reference>]` route. It compares
+the actual installed package/versionCode/versionName, standalone base path and
+last-update timestamp before and after ordinary activity/process observation.
+It never hashes or transfers the installed APK. The local APK remains immutable
+and inspected, but its bytes and signer are only expected artifact facts:
+installed bytes/signer remain unverified. A reported install reference is
+caller-supplied development provenance, not authenticated or current-byte proof.
+The distinct development observation contract cannot replace exact evidence.
+Matching versions and an unchanged update time do not identify a unique build;
+use a per-build versionName or app-owned build ID when the app provides one.
+Raw Android process/activity facts retain no application or OpenXR readiness
+authority. This option affects only observe: install, launch, deploy, diagnostics
+and cleanup retain exact verification. Omit the option for the default exact
+observe route. Unsupported policy values are rejected, without silent downgrade.
 
 `apk inspect --file <path-to.apk>` uses Android SDK Build Tools (`aapt2` and
 `apksigner`) to record file size/SHA-256 and exact package, version, signer, and
@@ -12,9 +41,17 @@ ADB receive only that retained copy. The fixed workspace is single-owner,
 bounded, and cleans any prior crash residue before reuse.
 
 `apk install` repeats inspection immediately before its serial-scoped install.
-It then reads package paths from that exact serial and streams the opened
-installed base APK through a hard byte bound without creating a host copy.
-Confirmation requires exact streamed base-APK SHA-256/size equality; only then
+It then reads package paths from that exact serial and computes the complete
+installed base APK's SHA-256 and size on the same opened remote handle. Only a
+small bounded digest record crosses ADB; file identity and package paths are
+rechecked after hashing. If that precise remote hashing/stat capability is
+unsupported, it retains the bounded full-body stream and host digest. Malformed
+readback, path substitution, command failure or timeout never becomes fallback.
+`Installed.VerificationMethod` distinguishes `same-opened-handle-device-sha256`
+from `host-streamed-sha256`; `VerificationFallbackReason` records explicit
+capability absence. Both methods read the complete body and trust the selected
+ADB connection. Neither is cached identity or application readiness.
+Confirmation requires exact base-APK SHA-256/size equality; only then
 is the already inspected package/version/signer identity projected as installed.
 ADB exit status alone is not confirmation. The receipt identifies the selected
 serial plus both expected and installed byte evidence.

@@ -138,7 +138,11 @@ public sealed record InstalledApkIdentity(
     ApkArtifactIdentity? Identity,
     IReadOnlyList<string> ApkPaths,
     string BaseApkSha256,
-    long BaseApkSizeBytes);
+    long BaseApkSizeBytes)
+{
+    public string VerificationMethod { get; init; } = "host-streamed-sha256";
+    public string? VerificationFallbackReason { get; init; }
+}
 
 public sealed record InspectedApkInstallResult(
     ApkArtifactInspection Artifact,
@@ -227,6 +231,24 @@ public sealed record AppRuntimeObservation(
     public bool OpenXrReadinessAuthority { get; init; }
 
     public bool ProcessAlive => ProcessIds.Count > 0;
+}
+
+public sealed record InstalledPackageDevelopmentMetadata(
+    string PackageName, long VersionCode, string? VersionName,
+    IReadOnlyList<string> ApkPaths, string LastUpdateTime);
+
+public sealed record DevelopmentAppRuntimeObservation(
+    ApkArtifactInspection ExpectedArtifact,
+    InstalledPackageDevelopmentMetadata InstalledMetadata,
+    AppRuntimeObservation Runtime,
+    string? ReportedInstallReference)
+{
+    public string ObservationContract => "questionable.file_manager.development_app_runtime_observation.v1";
+    public string VerificationPolicy => "development-metadata";
+    public bool InstalledBytesVerified => false;
+    public bool InstalledSignerVerified => false;
+    public bool ReportedInstallProvenanceVerified => false;
+    public string IdentityLimitation => "Matching metadata does not identify a unique build or prove installed bytes/signer.";
 }
 
 public enum RuntimeProcessObservationQuality
