@@ -62,16 +62,18 @@ public sealed partial class AdbClient
         var indent = headers[0].text.Length - headers[0].text.TrimStart().Length;
         var section = lines.Skip(headers[0].index + 1).TakeWhile(line =>
             string.IsNullOrWhiteSpace(line) || line.Length - line.TrimStart().Length > indent).ToArray();
-        string Single(string pattern)
+        string Single(string key, string pattern)
         {
-            var matches = section.Select(line => Regex.Match(line, pattern, RegexOptions.CultureInvariant))
-                .Where(match => match.Success).ToArray();
-            if (matches.Length != 1) throw new InvalidDataException("Development metadata field was absent or ambiguous.");
-            return matches[0].Groups[1].Value;
+            var occurrences = section.Where(line => Regex.IsMatch(line,
+                @"^\s*" + Regex.Escape(key) + @"\s*=", RegexOptions.CultureInvariant)).ToArray();
+            if (occurrences.Length != 1) throw new InvalidDataException("Development metadata field was absent or ambiguous.");
+            var match = Regex.Match(occurrences[0], pattern, RegexOptions.CultureInvariant);
+            if (!match.Success) throw new InvalidDataException("Development metadata field was malformed.");
+            return match.Groups[1].Value;
         }
-        var code = Single(@"^\s*versionCode=([1-9][0-9]*)(?:\s+.*)?$");
-        var name = Single(@"^\s*versionName=(.*?)\s*$");
-        var update = Single(@"^\s*lastUpdateTime=([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?: [+-][0-9]{4})?)\s*$");
+        var code = Single("versionCode", @"^\s*versionCode=([1-9][0-9]*)(?:\s+.*)?$");
+        var name = Single("versionName", @"^\s*versionName=(.*?)\s*$");
+        var update = Single("lastUpdateTime", @"^\s*lastUpdateTime=([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?: [+-][0-9]{4})?)\s*$");
         if (!long.TryParse(code, NumberStyles.None, CultureInfo.InvariantCulture, out var versionCode) ||
             !DateTime.TryParseExact(update[..19], "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out _))

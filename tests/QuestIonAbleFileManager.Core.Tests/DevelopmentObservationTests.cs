@@ -69,6 +69,20 @@ public sealed class DevelopmentObservationTests
             fixture.Client.ObserveDevelopmentAppAsync("QUEST123", fixture.Apk));
     }
 
+    [Theory]
+    [InlineData("versionCode=wrong")]
+    [InlineData("lastUpdateTime=wrong")]
+    [InlineData("versionCode =wrong")]
+    [InlineData("lastUpdateTime =wrong")]
+    public async Task ValidAndMalformedDuplicateMetadataFieldsFailClosed(string duplicate)
+    {
+        using var fixture = new Fixture();
+        fixture.Runner.FirstMetadata = Metadata + "    " + duplicate + "\n";
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Client.ObserveDevelopmentAppAsync("QUEST123", fixture.Apk));
+        Assert.DoesNotContain(fixture.Runner.Calls, args => args.Contains("exec-out") || args.Contains("activity"));
+    }
+
     [Fact]
     public async Task SplitPackageCannotUseStandaloneDevelopmentObservation()
     {
