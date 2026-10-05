@@ -47,7 +47,8 @@ public enum OperatorCommandKind
     ObserveExactApkProperties,
     ClearExactApkProperties,
     RestoreExactApkProperties,
-    ObserveDevelopmentApp
+    ObserveDevelopmentApp,
+    InstallDevelopmentApk
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -992,6 +993,43 @@ public static class OperatorCommands
             localPath: fullPath, reportedInstallReference: reportedInstallReference);
     }
 
+    public static OperatorCommand InstallDevelopmentApk(string serial, string apkPath, ApkInstallOptions? options = null)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apkPath);
+        var fullPath = Path.GetFullPath(apkPath);
+        options ??= new();
+        var arguments = new List<string> { "apk", "install", "--serial", serial, "--file", fullPath,
+            "--verification", "development-metadata", "--json" };
+        AddInstallOptionArguments(arguments, options);
+        return new(OperatorCommandKind.InstallDevelopmentApk, arguments, serial: serial,
+            localPath: fullPath, installOptions: options);
+    }
+
+    public static OperatorCommand ParseDevelopmentInstallCliArguments(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count < 9 || !arguments.Take(9).SequenceEqual(
+            ["apk", "install", "--serial", arguments[3], "--file", arguments[5],
+             "--verification", "development-metadata", "--json"], StringComparer.Ordinal))
+            throw new ArgumentException("Use apk install --serial <serial> --file <apk> --verification development-metadata --json.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 9; index < arguments.Count; index++)
+        {
+            var option = arguments[index];
+            if (!seen.Add(option)) throw new ArgumentException("Development install options were duplicated.");
+            if (option == "--adb")
+            {
+                if (++index >= arguments.Count || string.IsNullOrWhiteSpace(arguments[index]) || arguments[index].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException("Development install ADB option requires a value.");
+            }
+            else if (option is not ("--no-replace" or "--downgrade" or "--grant-runtime-permissions" or "--test-only"))
+                throw new ArgumentException("Development install option was unknown.");
+        }
+        return InstallDevelopmentApk(arguments[3], arguments[5], new(!seen.Contains("--no-replace"),
+            seen.Contains("--downgrade"), seen.Contains("--grant-runtime-permissions"), seen.Contains("--test-only")));
+    }
+
     public static OperatorCommand ParseDevelopmentObservationCliArguments(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
@@ -1527,7 +1565,8 @@ public sealed record OperatorExecutionResult(
     ApkPermissionObservation? ApkPermissionObservation = null,
     ApkPropertyObservationResult? ApkPropertyObservationResult = null,
     ApkPropertyMutationResult? ApkPropertyMutationResult = null,
-    DevelopmentAppRuntimeObservation? DevelopmentAppRuntimeObservation = null);
+    DevelopmentAppRuntimeObservation? DevelopmentAppRuntimeObservation = null,
+    DevelopmentApkInstallResult? DevelopmentApkInstallResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1578,7 +1617,8 @@ public sealed class OperatorCommandExecutor
         var launchReportsDispatch = command.Kind == OperatorCommandKind.LaunchDiagnoseInspectedApp;
         var parallelReportsDispatch = command.Kind is
             OperatorCommandKind.InstallApkMany or OperatorCommandKind.InstallApkBundleMany;
-        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch || parallelReportsDispatch;
+        var developmentInstallReportsDispatch = command.Kind == OperatorCommandKind.InstallDevelopmentApk;
+        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch;
         if (!reportsDispatch)
         {
             tracker.Dispatched();
@@ -1591,7 +1631,7 @@ public sealed class OperatorCommandExecutor
                 progress,
                 privateInput,
                 propertyReportsDispatch ? tracker : null,
-                launchReportsDispatch || parallelReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
+                launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
             var observation = OperatorMutations.Observe(command, result);
             var receipt = propertyReportsDispatch
                 ? tracker.CompleteAfterReportedDispatch(observation)
@@ -1759,6 +1799,15 @@ public sealed class OperatorCommandExecutor
                         CommandResult: install.CommandResult,
                         ApkArtifactInspection: install.Artifact,
                         InspectedApkInstallResult: install);
+                }
+
+            case OperatorCommandKind.InstallDevelopmentApk:
+                {
+                    var install = await client.InstallDevelopmentApkAsync(
+                        Require(command.Serial, nameof(command.Serial)), Require(command.LocalPath, nameof(command.LocalPath)),
+                        command.InstallOptions, cancellationToken, deviceDispatchObserved).ConfigureAwait(false);
+                    return new(command, CommandResult: install.CommandResult,
+                        ApkArtifactInspection: install.LocalArtifact, DevelopmentApkInstallResult: install);
                 }
 
             case OperatorCommandKind.PreflightInspectedApp:
@@ -2174,6 +2223,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.ListPackages => "Loading third-party packages…",
         OperatorCommandKind.ExportApk => "Exporting and hashing the installed APK…",
         OperatorCommandKind.InstallApk => "Installing the APK…",
+        OperatorCommandKind.InstallDevelopmentApk => "Installing the APK with development metadata confirmation…",
         OperatorCommandKind.PreflightInspectedApp => "Checking APK and selected Quest readiness…",
         OperatorCommandKind.DeployInspectedApp => "Installing, launching, and observing the inspected APK…",
         OperatorCommandKind.DiagnoseInspectedApp => "Capturing bounded inspected APK diagnostics…",

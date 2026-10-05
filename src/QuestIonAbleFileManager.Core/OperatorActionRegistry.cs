@@ -33,6 +33,12 @@ public static class OperatorActionRegistry
         new ReadOnlyCollection<OperatorActionRouteDescriptor>(
         [
             new(
+                "apk_development_install",
+                "apk install --serial --file --verification development-metadata --json",
+                "OperatorCommands.InstallDevelopmentApk",
+                false,
+                "installer success plus package/version metadata; installed bytes/signer, unique build, transaction causality and readiness remain unverified"),
+            new(
                 "apk_development_observe",
                 "apk observe --serial --file --verification development-metadata --json",
                 "OperatorCommands.ObserveDevelopmentApp",

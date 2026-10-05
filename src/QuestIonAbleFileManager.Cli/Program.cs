@@ -48,6 +48,8 @@ internal static class CliApplication
     };
     private static readonly IReadOnlyList<CliAgentRouteAdmission> AgentRouteAdmissions =
     [
+        new("apk_development_install", "apk install --serial <serial> --file <apk> --verification development-metadata --json [install flags]",
+            ["apk", "install", "--serial", "QUEST123", "--file", "example.apk", "--verification", "development-metadata", "--json"], true),
         new("apk_development_observe", "apk observe --serial <serial> --file <apk> --verification development-metadata --json [--reported-install-reference <opaque-reference>]",
             ["apk", "observe", "--serial", "QUEST123", "--file", "example.apk", "--verification", "development-metadata", "--json"], true),
         new("apk_preflight", "apk preflight --serial <serial> --file <file.apk> --json",
@@ -88,6 +90,12 @@ internal static class CliApplication
 
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
         {
+            if (string.Equals(arguments[1], "install", StringComparison.OrdinalIgnoreCase) &&
+                HasFlag(arguments.ToArray(), "--verification"))
+            {
+                routeId = "apk_development_install";
+                return true;
+            }
             if (string.Equals(arguments[1], "observe", StringComparison.OrdinalIgnoreCase) &&
                 (HasFlag(arguments.ToArray(), "--verification") || HasFlag(arguments.ToArray(), "--reported-install-reference")))
             {
@@ -151,8 +159,11 @@ internal static class CliApplication
         {
             var command = arguments[0].ToLowerInvariant();
             if ((HasFlag(arguments, "--verification") || HasFlag(arguments, "--reported-install-reference")) &&
-                !(command == "apk" && arguments.Length > 1 && arguments[1].Equals("observe", StringComparison.OrdinalIgnoreCase)))
-                throw new ArgumentException("Development verification is supported only by explicit apk observe.");
+                !(command == "apk" && arguments.Length > 1 &&
+                    (arguments[1].Equals("observe", StringComparison.OrdinalIgnoreCase) ||
+                     (arguments[1].Equals("install", StringComparison.OrdinalIgnoreCase) &&
+                      !HasFlag(arguments, "--reported-install-reference")))))
+                throw new ArgumentException("Development verification is supported only by explicit apk observe or install.");
             if (command == "kiosk-direct")
             {
                 return await RunKioskDirectAsync(arguments);
@@ -243,6 +254,7 @@ internal static class CliApplication
 
     private static Task<int> RunAgentRouteAsync(string routeId, string[] arguments) => routeId switch
     {
+        "apk_development_install" => RunDevelopmentInstallJsonAsync(arguments),
         "apk_development_observe" => RunDevelopmentObservationJsonAsync(arguments),
         "apk_preflight" => RunApkPreflightJsonAsync(arguments),
         "apk_deploy" => RunApkDeployJsonAsync(arguments),
@@ -279,6 +291,38 @@ internal static class CliApplication
                 installed_signer_verified = false,
                 state_change_possible = false,
                 failure = exception is ArgumentException ? "input_rejected" : "development_observation_failed"
+            });
+            return exception is ArgumentException ? 2 : 1;
+        }
+    }
+
+    private static async Task<int> RunDevelopmentInstallJsonAsync(string[] arguments)
+    {
+        try
+        {
+            var command = OperatorCommands.ParseDevelopmentInstallCliArguments(arguments);
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            WriteJson(new { mutation = execution.MutationReceipt, result = execution.DevelopmentApkInstallResult });
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            var pending = exception as OperatorMutationExecutionException;
+            WriteJson(new
+            {
+                schema = "questionable.file_manager.development_apk_install.v1",
+                succeeded = false,
+                verification_policy = "development-metadata",
+                installed_bytes_verified = false,
+                installed_signer_verified = false,
+                unique_build_identity_verified = false,
+                transaction_provenance_verified = false,
+                application_readiness_verified = false,
+                state_change_possible = pending is not null,
+                mutation = pending?.MutationReceipt,
+                failure = pending is not null ? "install_outcome_unconfirmed" :
+                    exception is ArgumentException ? "input_rejected" : "development_install_not_dispatched"
             });
             return exception is ArgumentException ? 2 : 1;
         }

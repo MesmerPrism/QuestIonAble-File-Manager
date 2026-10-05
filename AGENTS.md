@@ -354,6 +354,13 @@ base-APK digest/size readback to the exact selected serial. See
 `docs/inspected-deployment.md`. Use `apk deploy` for the bounded agent fast path;
 repository-specific build and semantic diagnostic instructions remain owned by
 the source repository as described in `docs/agent-quest-apk-workflow.md`.
+The explicit agent-only `--verification development-metadata` policy on
+`apk install` or `apk observe` retains immutable local APK admission but reports
+installed package/version metadata separately from local identity. Development
+install confirmation means an accepted installer command plus stable metadata;
+it never proves installed bytes, signer, unique build, transaction causality or
+readiness. Default install, deploy and launch retain exact verification. Do not
+project a development result into an exact installed-identity contract.
 `apk diagnose` is read-only on the headset and writes only a new, no-overwrite
 private local evidence directory through the fixed capture set documented in
 `docs/apk-diagnostic-bundle.md`.
