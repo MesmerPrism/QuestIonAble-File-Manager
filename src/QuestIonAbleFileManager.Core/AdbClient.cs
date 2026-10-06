@@ -876,15 +876,18 @@ public sealed partial class AdbClient
         var processTokens = processes.StandardOutput.Split(
             (char[]?)null,
             StringSplitOptions.RemoveEmptyEntries);
-        var pidofOutputUnusable = processes.Succeeded && processTokens.Any(
+        var pidofHasError = !string.IsNullOrWhiteSpace(processes.StandardError);
+        var pidofOutputUnusable = processes.Succeeded && !pidofHasError && processTokens.Any(
             static value => !int.TryParse(value, out var pid) || pid <= 0);
-        var pids = processes.Succeeded
-            ? processTokens
-                .Select(value => int.TryParse(value, out var pid) ? pid : -1)
-                .Where(static pid => pid > 0).Distinct().Order().ToArray()
+        var quietNoMatch = processes.ExitCode == 1 &&
+            string.IsNullOrWhiteSpace(processes.StandardOutput) && !pidofHasError;
+        var pids = processes.Succeeded && !pidofHasError && !pidofOutputUnusable
+            ? processTokens.Select(int.Parse).Distinct().Order().ToArray()
             : [];
-        var processObservationQuality = !processes.Succeeded
-            ? RuntimeProcessObservationQuality.PidofUnavailable
+        var processObservationQuality = quietNoMatch
+            ? RuntimeProcessObservationQuality.PidofReportedNoProcesses
+            : !processes.Succeeded || pidofHasError
+                ? RuntimeProcessObservationQuality.PidofUnavailable
             : pidofOutputUnusable
                 ? RuntimeProcessObservationQuality.PidofOutputUnusable
             : pids.Length == 0
@@ -906,6 +909,7 @@ public sealed partial class AdbClient
             CurrentFocus = ToLegacyGlobalFocusFact(globalFocus.CurrentFocus),
             FocusedApp = ToLegacyGlobalFocusFact(globalFocus.FocusedApp),
             GlobalFocus = globalFocus,
+            ProcessObservationExitCode = processes.ExitCode,
             ProcessObservationQuality = processObservationQuality
         };
     }

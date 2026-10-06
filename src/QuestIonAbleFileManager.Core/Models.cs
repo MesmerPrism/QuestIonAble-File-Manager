@@ -215,6 +215,10 @@ public sealed record AppRuntimeObservation(
     public RuntimeProcessObservationQuality ProcessObservationQuality { get; init; } =
         RuntimeProcessObservationQuality.PidofUnavailable;
 
+    /// <summary>Native exit code from the fixed pidof command, when returned by the runner.
+    /// Null means no command result was observed; it never establishes application readiness.</summary>
+    public int? ProcessObservationExitCode { get; init; }
+
     public string ProcessObservationSource { get; init; } =
         "fixed serial-scoped pidof derived from inspected package";
 

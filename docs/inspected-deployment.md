@@ -156,9 +156,11 @@ acceptance policy; File Manager does not infer OpenXR readiness. Identity,
 digest, and size must match before runtime probes execute. It does not claim
 effective in-app settings, app effect, or wearer-visible state. Process IDs and
 legacy resumed text prove neither XR readiness nor an app effect. `pidof`
-quality is explicit: only a clean zero-PID readback is reported as no process;
-unusable or nonzero `pidof` output is an observation limitation, not a negative
-readiness classification.
+quality and the returned native exit code are explicit: clean exit 0 with no PIDs
+or exit 1 with quiet stdout/stderr reports no matching processes. Malformed PIDs,
+stderr or any other failure remain an observation limitation, not a negative
+readiness classification. Cancellation or a missing command result is not converted
+into process absence. These facts do not verify application or OpenXR readiness.
 
 `apk diagnose --serial <quest-serial> --file <path-to.apk> --output
 <new-folder>` is a read-only durable projection of that same exact-artifact
