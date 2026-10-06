@@ -13,7 +13,20 @@ public static partial class QuestControlParser
         string cpuLevel,
         string gpuLevel,
         DateTimeOffset capturedAt,
-        string displayOutput = "")
+        string displayOutput = "") => Parse(
+            batteryOutput, trackingOutput, powerOutput, proximityOutput,
+            cpuLevel, gpuLevel, capturedAt, displayOutput, proximityReadSucceeded: null);
+
+    public static QuestControlStatus Parse(
+        string batteryOutput,
+        string trackingOutput,
+        string powerOutput,
+        string proximityOutput,
+        string cpuLevel,
+        string gpuLevel,
+        DateTimeOffset capturedAt,
+        string displayOutput,
+        bool? proximityReadSucceeded)
     {
         var batteryLevel = ParseIntegerLine(batteryOutput, "level");
         var batteryState = ParseBatteryState(ParseIntegerLine(batteryOutput, "status"));
@@ -34,7 +47,7 @@ public static partial class QuestControlParser
             ? parsedAutoSleep
             : (bool?)null;
         var keepAwake = stayOn || autoSleepDisabled == true;
-        var (holdDurationMilliseconds, holdRemainingMilliseconds) =
+        var (holdDurationMilliseconds, holdRemainingMilliseconds, parseAvailability) =
             ParseLatestProximityHold(proximityOutput);
 
         return new QuestControlStatus(
@@ -52,7 +65,14 @@ public static partial class QuestControlParser
             gpuLevel.Trim(),
             capturedAt,
             holdDurationMilliseconds,
-            holdRemainingMilliseconds);
+            holdRemainingMilliseconds)
+        {
+            ProximityHoldEvidence = new QuestProximityHoldEvidence(
+                proximityReadSucceeded,
+                proximityReadSucceeded == false
+                    ? QuestProximityHoldParseAvailability.ReadUnavailable
+                    : parseAvailability)
+        };
     }
 
     public static IReadOnlyList<QuestControllerPower> ParseControllerPower(string output)
@@ -108,7 +128,8 @@ public static partial class QuestControlParser
                 : null;
     }
 
-    private static (int? DurationMilliseconds, int? RemainingMilliseconds)
+    private static (int? DurationMilliseconds, int? RemainingMilliseconds,
+        QuestProximityHoldParseAvailability ParseAvailability)
         ParseLatestProximityHold(string output)
     {
         Match? match = null;
@@ -128,15 +149,21 @@ public static partial class QuestControlParser
             }
         }
 
-        if (match is null ||
-            !string.Equals(match.Groups["action"].Value, "prox_close", StringComparison.OrdinalIgnoreCase) ||
-            !int.TryParse(
+        if (match is null)
+        {
+            return (null, null, QuestProximityHoldParseAvailability.NoMatchingBroadcast);
+        }
+        if (!string.Equals(match.Groups["action"].Value, "prox_close", StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, null, QuestProximityHoldParseAvailability.LatestAutomationDisable);
+        }
+        if (!int.TryParse(
                 match.Groups["duration"].Value,
                 NumberStyles.Integer,
                 CultureInfo.InvariantCulture,
                 out var durationMilliseconds))
         {
-            return (null, null);
+            return (null, null, QuestProximityHoldParseAvailability.DurationUnavailable);
         }
 
         var elapsedMilliseconds = (long)Math.Ceiling(Math.Max(0d, ageSeconds) * 1000d);
@@ -144,7 +171,8 @@ public static partial class QuestControlParser
             (long)durationMilliseconds - elapsedMilliseconds,
             0L,
             int.MaxValue);
-        return (durationMilliseconds, remainingMilliseconds);
+        return (durationMilliseconds, remainingMilliseconds,
+            QuestProximityHoldParseAvailability.CloseBroadcastObserved);
     }
 
     private static string ParseDefaultDisplayState(string output)
