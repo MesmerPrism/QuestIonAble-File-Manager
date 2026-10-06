@@ -2222,7 +2222,8 @@ public sealed partial class AdbClient
             cpu.Succeeded ? cpu.StandardOutput : string.Empty,
             gpu.Succeeded ? gpu.StandardOutput : string.Empty,
             DateTimeOffset.Now,
-            display.Succeeded ? display.StandardOutput : string.Empty);
+            display.Succeeded ? display.StandardOutput : string.Empty,
+            proximityReadSucceeded: proximity.Succeeded);
     }
 
     public async Task<QuestKeepAwakeResult> SetQuestKeepAwakeAsync(
