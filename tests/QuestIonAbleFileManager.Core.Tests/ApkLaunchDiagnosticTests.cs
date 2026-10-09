@@ -199,9 +199,11 @@ public sealed class ApkLaunchDiagnosticTests
         try
         {
             var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk)) { InstalledSplitPresent = true };
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
                 new AdbClient("adb", runner, new("aapt2", "apksigner"))
                     .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output));
+            Assert.False(failure.DispatchBoundaryCrossed);
+            Assert.IsType<InvalidDataException>(failure.InnerException);
 
             Assert.Equal(0, runner.LaunchCount);
             Assert.Empty(runner.CaptureArguments);
@@ -222,9 +224,11 @@ public sealed class ApkLaunchDiagnosticTests
         try
         {
             var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk)) { SharedUidPackagePresent = true };
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
                 new AdbClient("adb", runner, new("aapt2", "apksigner"))
                     .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output));
+            Assert.False(failure.DispatchBoundaryCrossed);
+            Assert.IsType<InvalidDataException>(failure.InnerException);
 
             Assert.Equal(0, runner.LaunchCount);
             Assert.Empty(runner.CaptureArguments);
@@ -285,9 +289,11 @@ public sealed class ApkLaunchDiagnosticTests
         try
         {
             var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk)) { PackageUidInventory = inventory };
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
                 new AdbClient("adb", runner, new("aapt2", "apksigner"))
                     .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output));
+            Assert.False(failure.DispatchBoundaryCrossed);
+            Assert.IsType<InvalidDataException>(failure.InnerException);
 
             Assert.Equal(0, runner.LaunchCount);
             Assert.Empty(runner.CaptureArguments);
@@ -399,12 +405,14 @@ public sealed class ApkLaunchDiagnosticTests
                 InstalledSplitPresent = true
             };
             var progress = new RecordingProgress();
-            await Assert.ThrowsAsync<InvalidDataException>(() =>
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
                 new OperatorCommandExecutor(new AdbClient("adb", runner, new("aapt2", "apksigner")))
                     .ExecuteAsync(
                         OperatorCommands.LaunchDiagnoseInspectedApp("QUEST123", apk, output),
                         progress: progress));
 
+            Assert.False(failure.DispatchBoundaryCrossed);
+            Assert.IsType<InvalidDataException>(failure.InnerException);
             Assert.DoesNotContain(progress.Values, static item =>
                 item.Stage.StartsWith("mutation-", StringComparison.Ordinal));
             Assert.Equal(0, runner.LaunchCount);
@@ -518,6 +526,10 @@ public sealed class ApkLaunchDiagnosticTests
                 [OperatorMutationStage.Sent, OperatorMutationStage.Pending],
                 exception.MutationReceipt.Transitions.Select(static item => item.Stage));
             Assert.Equal(1, runner.LaunchCount);
+            var json = WriteFailureJson(exception, 3);
+            Assert.Equal("launch_pending", json.GetProperty("code").GetString());
+            Assert.Equal("dispatch_boundary_crossed", json.GetProperty("dispatch_phase").GetString());
+            Assert.True(json.GetProperty("state_change_possible").GetBoolean());
         }
         finally
         {
@@ -561,6 +573,96 @@ public sealed class ApkLaunchDiagnosticTests
         Assert.True(json.RootElement.GetProperty("failure").GetProperty("state_change_possible").GetBoolean());
         Assert.Equal("pending", json.RootElement.GetProperty("mutation").GetProperty("Stage").GetString());
         Assert.DoesNotContain("private failure detail", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OwnerPredispatchFailureReportsCertaintyAndFencesLateCaptureAction(bool captureArmed)
+    {
+        var apk = await CreateApkAsync();
+        var output = Path.Combine(Path.GetTempPath(), $"qfm-launch-diagnostic-{Guid.NewGuid():N}");
+        try
+        {
+            var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk))
+            {
+                SharedUidPackagePresent = !captureArmed,
+                ThrowBeforeAction = captureArmed
+            };
+            var progress = new RecordingProgress();
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
+                new OperatorCommandExecutor(new AdbClient("adb", runner, new("aapt2", "apksigner")))
+                    .ExecuteAsync(OperatorCommands.LaunchDiagnoseInspectedApp("QUEST123", apk, output),
+                        progress: progress));
+            Assert.False(failure.DispatchBoundaryCrossed);
+            Assert.Equal(captureArmed, runner.CaptureArguments.Count != 0);
+            Assert.Equal(0, runner.LaunchCount);
+            Assert.False(Directory.Exists(output));
+            Assert.DoesNotContain(progress.Values, item => item.Stage.StartsWith("mutation-", StringComparison.Ordinal));
+            var json = WriteFailureJson(failure, 2);
+            Assert.Equal("rejected_before_dispatch", json.GetProperty("code").GetString());
+            Assert.Equal("before_dispatch", json.GetProperty("dispatch_phase").GetString());
+            Assert.False(json.GetProperty("state_change_possible").GetBoolean());
+            if (captureArmed)
+            {
+                Assert.NotNull(runner.RetainedAction);
+                var late = (ApkLaunchDiagnosticAttempt)await runner.RetainedAction!();
+                Assert.False(late.DispatchAttempted);
+                Assert.Equal(0, runner.LaunchCount);
+                Assert.DoesNotContain(progress.Values, item => item.Stage.StartsWith("mutation-", StringComparison.Ordinal));
+            }
+        }
+        finally
+        {
+            File.Delete(apk);
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DirectOwnerPostdispatchFailureAndUnverifiedExceptionRemainUncertain()
+    {
+        var apk = await CreateApkAsync();
+        var output = Path.Combine(Path.GetTempPath(), $"qfm-launch-diagnostic-{Guid.NewGuid():N}");
+        try
+        {
+            var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk)) { ThrowAfterDispatch = true };
+            var failure = await Assert.ThrowsAsync<ApkLaunchDiagnosticExecutionException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output));
+            Assert.True(failure.DispatchBoundaryCrossed);
+            Assert.Equal(1, runner.LaunchCount);
+            var json = WriteFailureJson(failure, 1);
+            Assert.Equal("dispatch_boundary_crossed", json.GetProperty("dispatch_phase").GetString());
+            Assert.True(json.GetProperty("state_change_possible").GetBoolean());
+            var unknown = WriteFailureJson(new IOException("private generic failure"), 1);
+            Assert.Equal("unverified", unknown.GetProperty("dispatch_phase").GetString());
+            Assert.True(unknown.GetProperty("state_change_possible").GetBoolean());
+        }
+        finally
+        {
+            File.Delete(apk);
+            // A failed post-dispatch capture intentionally retains its sibling.
+            foreach (var sibling in Directory.GetDirectories(Path.GetDirectoryName(output)!,
+                $".{Path.GetFileName(output)}.qfm-launch-diagnostic-*"))
+                Directory.Delete(sibling, recursive: true);
+        }
+    }
+
+    private static JsonElement WriteFailureJson(Exception exception, int expectedExit)
+    {
+        var originalOut = Console.Out;
+        using var output = new StringWriter();
+        try
+        {
+            Console.SetOut(output);
+            Assert.Equal(expectedExit, CliApplication.WriteApkLaunchDiagnosticFailure(exception));
+        }
+        finally { Console.SetOut(originalOut); }
+        using var json = JsonDocument.Parse(output.ToString());
+        Assert.DoesNotContain("private generic failure", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("post-dispatch capture failure", output.ToString(), StringComparison.Ordinal);
+        return json.RootElement.GetProperty("failure").Clone();
     }
 
     [Fact]
@@ -662,6 +764,10 @@ public sealed class ApkLaunchDiagnosticTests
         public string? PublishCollisionPath { get; init; }
 
         public bool ThrowAfterDispatch { get; init; }
+
+        public bool ThrowBeforeAction { get; init; }
+
+        public Func<Task<object>>? RetainedAction { get; private set; }
 
         public int LaunchCount { get; private set; }
 
@@ -771,6 +877,9 @@ public sealed class ApkLaunchDiagnosticTests
         {
             CaptureArguments = arguments.ToArray();
             _captureArmed = true;
+            RetainedAction = async () => (object)(await armedAction(CancellationToken.None))!;
+            if (ThrowBeforeAction)
+                throw new IOException("private pre-dispatch capture failure");
             var action = await armedAction(cancellationToken);
             if (ThrowAfterDispatch)
                 throw new IOException("post-dispatch capture failure");

@@ -1742,6 +1742,8 @@ internal static class CliApplication
     internal static int WriteApkLaunchDiagnosticFailure(Exception exception)
     {
         var dispatched = exception as OperatorMutationExecutionException;
+        var ownerFailure = exception as ApkLaunchDiagnosticExecutionException;
+        var rejectedBeforeDispatch = dispatched is null && ownerFailure is { DispatchBoundaryCrossed: false };
         var inputRejected = exception is ArgumentException or FileNotFoundException or
             DirectoryNotFoundException or SplitPackageException;
         WriteJson(new
@@ -1755,16 +1757,21 @@ internal static class CliApplication
             {
                 code = dispatched is not null
                     ? "launch_pending"
-                    : inputRejected ? "input_rejected" : "launch_diagnostic_failed",
+                    : inputRejected ? "input_rejected"
+                    : rejectedBeforeDispatch ? "rejected_before_dispatch" : "launch_diagnostic_failed",
                 message = dispatched is not null
                     ? "Launch was dispatched, but exact terminal evidence is unavailable."
                     : inputRejected
                         ? "The exact launch-diagnostic input or new output directory was rejected."
-                        : "Launch diagnostics failed without exposing private artifact, target, or log details.",
-                state_change_possible = dispatched is not null || !inputRejected
+                        : rejectedBeforeDispatch
+                            ? "The owner rejected launch diagnostics before the fixed launch boundary."
+                            : "Launch diagnostics failed without exposing private artifact, target, or log details.",
+                dispatch_phase = dispatched is not null || ownerFailure is { DispatchBoundaryCrossed: true }
+                    ? "dispatch_boundary_crossed" : rejectedBeforeDispatch ? "before_dispatch" : "unverified",
+                state_change_possible = dispatched is not null || (!inputRejected && !rejectedBeforeDispatch)
             }
         });
-        return dispatched is not null ? 3 : inputRejected ? 2 : 1;
+        return dispatched is not null ? 3 : inputRejected || rejectedBeforeDispatch ? 2 : 1;
     }
 
     private static int WriteApkDiagnosticFailure(Exception exception)

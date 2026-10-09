@@ -74,6 +74,18 @@ the terminal `rejected` transition, while `sent` and `pending` begin immediately
 before the one fixed `am start` dispatch. Any uncertainty after that boundary
 remains `pending`. An exception after dispatch carries that same receipt through
 the CLI failure envelope instead of collapsing it into a receiptless error.
+An owner-observed exception before the fixed launch boundary reports
+`rejected_before_dispatch`, `dispatch_phase=before_dispatch`, and
+`state_change_possible=false` (exit 2), even when capture startup or admission
+failed without a bundle. The closed invocation prevents retained capture
+callbacks from crossing that boundary later. After the boundary, the existing
+pending mutation takes precedence; other unverified exceptions remain uncertain.
+The additive `failure.dispatch_phase` field describes dispatch provenance only,
+not capture cleanup, app readiness, or terminal media cleanup. Core callers now
+receive `ApkLaunchDiagnosticExecutionException` for non-input failures, with the
+original exception retained as `InnerException`; ordinary input exception types
+remain unchanged. A direct Core failure with `DispatchBoundaryCrossed=true`
+proves only that dispatch may have occurred.
 Capture drains use cancellation-bound writes; a bounded terminal drain failure
 revokes process pipes, the destination stream, and the digest before return, so
 late work cannot append to or re-hash retained evidence.
