@@ -1,6 +1,6 @@
 {
   "schema": "questionable.file_manager.android_global_focus_observation_fixture.v1",
-  "runtime_contract": "questionable.file_manager.app_runtime_observation.v5",
+  "runtime_contract": "questionable.file_manager.app_runtime_observation.v6",
   "global_focus_contract": "questionable.file_manager.android_global_focus_observation.v1",
   "source_command": ["shell", "dumpsys", "window", "windows"],
   "cases": [

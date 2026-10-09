@@ -28,7 +28,7 @@ internal static class CliApplication
     private const string LauncherExportProofContract =
         "questionable.file_manager.launcher_export_proof.v2";
     private const string RuntimeObservationContract =
-        "questionable.file_manager.app_runtime_observation.v5";
+        "questionable.file_manager.app_runtime_observation.v6";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -1917,7 +1917,7 @@ internal static class CliApplication
                     $"Launched {result.Launch.Component}; " +
                     $"resumed={result.Launch.ComponentObservedResumed.ToString().ToLowerInvariant()}.");
                 Console.WriteLine(
-                    $"Runtime: process-alive={result.Runtime.ProcessAlive.ToString().ToLowerInvariant()}, " +
+                    $"Runtime: process-alive={(result.Runtime.ProcessAlive == true ? "true" : "unknown")}, " +
                     $"foreground={result.Runtime.IsForeground.ToString().ToLowerInvariant()}, " +
                     $"top-resumed={result.Runtime.IsTopResumed.ToString().ToLowerInvariant()}, " +
                     $"global-current-focus={result.Runtime.GlobalFocus.CurrentFocus.State.ToString().ToLowerInvariant()}, " +

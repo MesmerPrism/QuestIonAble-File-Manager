@@ -323,6 +323,8 @@ public sealed class DevelopmentObservationTests
             if (args.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "activity", "activities"]))
                 return "mResumedActivity: ActivityRecord{123 u0 com.example.app/.Main t1}\n";
             if (args.SequenceEqual(["-s", "QUEST123", "shell", "pidof", "com.example.app"])) return "123\n";
+            if (args.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "meminfo", "com.example.app"]))
+                return "No process found\n";
             throw new InvalidOperationException("Unexpected fixture command.");
         }
 

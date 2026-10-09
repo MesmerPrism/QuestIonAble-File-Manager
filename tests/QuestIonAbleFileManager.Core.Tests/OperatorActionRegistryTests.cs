@@ -800,7 +800,7 @@ public sealed class OperatorActionRegistryTests
             source,
             StringComparison.Ordinal);
         Assert.Contains(
-            "questionable.file_manager.app_runtime_observation.v5",
+            "questionable.file_manager.app_runtime_observation.v6",
             source,
             StringComparison.Ordinal);
         var preflight = Assert.Single(
