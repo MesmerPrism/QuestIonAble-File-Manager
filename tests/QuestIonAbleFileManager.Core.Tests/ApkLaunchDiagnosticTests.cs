@@ -236,6 +236,70 @@ public sealed class ApkLaunchDiagnosticTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SystemPackageUidsDoNotRejectUniqueApplicationUid(bool systemRowsFirst)
+    {
+        const string systemRows = "package:com.example.system uid:1000\n" +
+            "package:com.example.systemshared uid:1000\npackage:com.example.root uid:0\n";
+        const string appRow = "package:com.example.app uid:10234\n";
+        var apk = await CreateApkAsync();
+        var output = Path.Combine(Path.GetTempPath(), $"qfm-launch-diagnostic-{Guid.NewGuid():N}");
+        try
+        {
+            var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk))
+            {
+                PackageUidInventory = systemRowsFirst ? systemRows + appRow : appRow + systemRows
+            };
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output);
+
+            Assert.Equal(ApkLaunchDiagnosticDisposition.Completed, result.Disposition);
+            Assert.Equal(10234, result.CurrentUserUidBeforeDispatch);
+            Assert.Equal(10234, result.CurrentUserUidAfterCapture);
+            Assert.Contains("--uid=10234", runner.CaptureArguments);
+            Assert.True(runner.CaptureWasArmedBeforeLaunch);
+            Assert.Equal(1, runner.LaunchCount);
+        }
+        finally
+        {
+            File.Delete(apk);
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("package:com.example.app uid:10234\npackage:com.example.app uid:10234\n")]
+    [InlineData("package:com.example.app uid:10234\npackage:com.example.app uid:10235\n")]
+    [InlineData("package:com.example.app uid:9999\n")]
+    [InlineData("package:com.example.app uid:0\n")]
+    [InlineData("package:com.example.other uid:10234\n")]
+    [InlineData("package:com.example.app uid:10234\npackage:com.example.system uid:-1\n")]
+    [InlineData("package:com.example.app uid:10234\npackage:com.example.system uid:2147483648\n")]
+    [InlineData("package:com.example.app uid:10234\nmalformed inventory row\n")]
+    public async Task InvalidPackageUidInventoryRejectsBeforeLoggerOrLaunch(string inventory)
+    {
+        var apk = await CreateApkAsync();
+        var output = Path.Combine(Path.GetTempPath(), $"qfm-launch-diagnostic-{Guid.NewGuid():N}");
+        try
+        {
+            var runner = new LaunchDiagnosticRunner(File.ReadAllBytes(apk)) { PackageUidInventory = inventory };
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                    .LaunchAndCaptureInspectedApkAsync("QUEST123", apk, output));
+
+            Assert.Equal(0, runner.LaunchCount);
+            Assert.Empty(runner.CaptureArguments);
+            Assert.False(Directory.Exists(output));
+        }
+        finally
+        {
+            File.Delete(apk);
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task PublishCollisionAfterLaunchRetainsBundleWithoutOverwritingRequestedPath()
     {
@@ -593,6 +657,8 @@ public sealed class ApkLaunchDiagnosticTests
 
         public bool SharedUidPackagePresent { get; init; }
 
+        public string? PackageUidInventory { get; init; }
+
         public string? PublishCollisionPath { get; init; }
 
         public bool ThrowAfterDispatch { get; init; }
@@ -636,9 +702,9 @@ public sealed class ApkLaunchDiagnosticTests
                 return Result(
                     fileName,
                     arguments,
-                    SharedUidPackagePresent
+                    PackageUidInventory ?? (SharedUidPackagePresent
                         ? "package:com.example.app uid:10234\npackage:com.example.shared uid:10234\n"
-                        : "package:com.example.app uid:10234\npackage:com.example.other uid:10235\n");
+                        : "package:com.example.app uid:10234\npackage:com.example.other uid:10235\n"));
             if (arguments.Contains("query-activities"))
                 return Result(fileName, arguments, "com.example.app/.Main\n");
             if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "dumpsys", "package", "com.example.app"]))

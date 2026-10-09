@@ -363,7 +363,7 @@ public sealed partial class AdbClient
                 RegexOptions.CultureInvariant);
             if (!match.Success ||
                 !int.TryParse(match.Groups["uid"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var observedUid) ||
-                observedUid < 10_000)
+                observedUid < 0)
             {
                 throw new InvalidDataException("The current-user package UID inventory was malformed.");
             }
@@ -372,7 +372,7 @@ public sealed partial class AdbClient
         var packageMatches = inventory
             .Where(item => string.Equals(item.PackageName, packageName, StringComparison.Ordinal))
             .ToArray();
-        if (packageMatches.Length != 1 ||
+        if (packageMatches.Length != 1 || packageMatches[0].Uid < 10_000 ||
             inventory.Any(item => item.Uid == packageMatches[0].Uid &&
                                   !string.Equals(item.PackageName, packageName, StringComparison.Ordinal)))
         {

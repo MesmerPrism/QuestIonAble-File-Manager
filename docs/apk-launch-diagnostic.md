@@ -17,7 +17,10 @@ through its immutable retained copy, proves exactly one ready selected serial,
 requires one standalone installed APK with no splits and exact complete bytes,
 derives one exported launcher and the
 current-user package UID (rejecting shared-UID packages), and reads a fixed
-device epoch fence. It then starts
+device epoch fence. The package inventory may include valid system UIDs below
+10000; the selected package must occur exactly once with an application UID
+of at least 10000 that no other package shares. Malformed inventory rows still
+reject admission before capture or launch. QFM then starts
 one continuous `logcat` capture fixed to epoch rendering, that fence, and that
 derived UID. Only after the capture process starts does QFM recheck the exact
 ready serial and installed bytes and issue one resolved launcher dispatch.
