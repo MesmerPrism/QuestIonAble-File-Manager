@@ -489,10 +489,30 @@ public sealed record PackageStopQuiescence(
     IReadOnlyList<string> ForegroundComponents,
     IReadOnlyList<string> TopResumedComponents)
 {
+    // Missing evidence in older serialized results remains unknown.
+    public bool? ProcessAbsenceVerified { get; init; }
+    public PackageStopProcessEvidence? ProcessEvidence { get; init; }
     public bool IsQuiescent =>
-        ProcessIds.Count == 0 &&
-        ForegroundComponents.Count == 0 &&
-        TopResumedComponents.Count == 0;
+        ProcessAbsenceVerified == true &&
+        ProcessEvidence?.IsCoherent == true &&
+        ProcessIds is { Count: 0 } &&
+        ForegroundComponents is { Count: 0 } &&
+        TopResumedComponents is { Count: 0 };
+}
+
+public sealed record PackageStopProcessIdentity(int ProcessId, ulong StartTicks);
+public sealed record PackageStopProcessEvidence(
+    int CurrentUser, int PackageUid,
+    IReadOnlyList<PackageStopProcessIdentity> BeforeDispatch,
+    bool KnownBirthsRetired, int CompletePostInventories)
+{
+    internal bool IsCoherent => KnownBirthsRetired && CompletePostInventories == 2 &&
+        CurrentUser >= 0 && PackageUid >= 10000 && PackageUid / 100000 == CurrentUser &&
+        PackageUid % 100000 >= 10000 && BeforeDispatch is not null &&
+        BeforeDispatch.All(birth => birth is { ProcessId: > 0, StartTicks: > 0 }) &&
+        BeforeDispatch.Select(birth => birth.ProcessId).Distinct().Count() == BeforeDispatch.Count;
+    public string Schema => "questionable.file_manager.package_stop_process_evidence.v1";
+    public string Disposition => IsCoherent ? "verified_absent" : "unverified";
 }
 
 public sealed record PackageStopResult(
