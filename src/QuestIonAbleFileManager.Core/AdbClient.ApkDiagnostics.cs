@@ -161,6 +161,8 @@ public sealed partial class AdbClient
                     runtime.ActivityObservationSource,
                     runtime.ProcessObservationSource,
                     runtime.ProcessObservationQuality,
+                    runtime.ProcessObservationExitCode,
+                    runtime.ProcessCorroboration,
                     runtime.ForegroundComponents,
                     runtime.TopResumedComponents,
                     runtime.BlockingSystemComponents,

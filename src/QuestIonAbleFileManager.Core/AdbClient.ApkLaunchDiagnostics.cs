@@ -345,7 +345,8 @@ public sealed partial class AdbClient
     private async Task<int> ReadUniqueCurrentUserPackageUidAsync(
         string serial,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? maximumOutputCharacters = null)
     {
         var result = await RunForDeviceAsync(
             serial,
@@ -353,6 +354,9 @@ public sealed partial class AdbClient
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         result.EnsureSuccess("Read current-user package UID inventory");
+        if (maximumOutputCharacters is { } maximum &&
+            (result.StandardOutput.Length > maximum || !string.IsNullOrWhiteSpace(result.StandardError)))
+            throw new InvalidDataException("Bounded package UID inventory was unusable.");
         var inventory = new List<(string PackageName, int Uid)>();
         foreach (var line in result.StandardOutput.ReplaceLineEndings("\n")
                      .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
