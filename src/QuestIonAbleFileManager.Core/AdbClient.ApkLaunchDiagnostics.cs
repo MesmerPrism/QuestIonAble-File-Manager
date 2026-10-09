@@ -38,6 +38,43 @@ public sealed partial class AdbClient
         Action? dispatchObserver,
         CancellationToken cancellationToken)
     {
+        // 0: open, 1: fixed launch boundary crossed, 2: closed without dispatch.
+        // Closing also fences a capture runner that retains its action callback.
+        var dispatchState = 0;
+        try
+        {
+            return await LaunchAndCaptureInspectedApkCoreAsync(
+                serial, apkPath, outputDirectory,
+                () =>
+                {
+                    if (Interlocked.CompareExchange(ref dispatchState, 1, 0) != 0)
+                        throw new InvalidOperationException("The launch-diagnostic dispatch boundary is closed.");
+                    dispatchObserver?.Invoke();
+                }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            var crossed = Interlocked.CompareExchange(ref dispatchState, 2, 0) == 1;
+            // Keep existing input exception contracts. Other failures acquire
+            // certainty only here, where this invocation owns the dispatch fence.
+            if (!crossed && exception is ArgumentException or FileNotFoundException or
+                DirectoryNotFoundException or SplitPackageException)
+                throw;
+            throw new ApkLaunchDiagnosticExecutionException(crossed, exception);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref dispatchState, 2, 0);
+        }
+    }
+
+    private async Task<ApkLaunchDiagnosticBundleResult> LaunchAndCaptureInspectedApkCoreAsync(
+        string serial,
+        string apkPath,
+        string outputDirectory,
+        Action dispatchObserver,
+        CancellationToken cancellationToken)
+    {
         serial = AndroidInput.RequireSerial(serial);
         var reportedPath = Path.GetFullPath(apkPath);
         if (!File.Exists(reportedPath))
@@ -109,8 +146,8 @@ public sealed partial class AdbClient
                         launcher,
                         () =>
                         {
+                            dispatchObserver();
                             deviceEffectPossible = true;
-                            dispatchObserver?.Invoke();
                         },
                         actionToken).ConfigureAwait(false),
                     cancellationToken).ConfigureAwait(false);
@@ -261,8 +298,8 @@ public sealed partial class AdbClient
             await RequireExactLaunchDiagnosticReadySerialAsync(serial, cancellationToken).ConfigureAwait(false);
             var installed = await ReadInstalledIdentityAsync(serial, artifact, cancellationToken).ConfigureAwait(false);
             EnsureExactStandaloneInstalledArtifact(artifact, installed);
-            dispatchAttempted = true;
             markDeviceEffectPossible();
+            dispatchAttempted = true;
             var start = await RunForDeviceAsync(
                 serial,
                 ["shell", "am", "start", "-n", launcher.Wire],
