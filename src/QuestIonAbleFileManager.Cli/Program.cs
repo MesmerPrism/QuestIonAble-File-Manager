@@ -72,6 +72,8 @@ internal static class CliApplication
             ["apk", "properties", "restore", "--serial", "QUEST123", "--file", "example.apk", "--manifest", "properties.json", "--snapshot", "snapshot.json", "--confirm-exact-apk-property-mutation", "--json"], true),
         new("apk_permission_observation", "apk permissions --serial <serial> --package <package> --json",
             ["apk", "permissions", "--serial", "QUEST123", "--package", "com.example.app", "--json"], true),
+        new("device_actor_identity_observation", "device actor-identity-observe --serial <serial> --pid <positive-decimal> --json",
+            ["device", "actor-identity-observe", "--serial", "QUEST123", "--pid", "123", "--json"], true),
         new("device_actor_observation", "device actor-observe --serial <serial> --pid <positive-decimal> --json",
             ["device", "actor-observe", "--serial", "QUEST123", "--pid", "123", "--json"], true),
         new("adb_forward_inventory", "adb forwards --serial <serial> --json",
@@ -146,6 +148,12 @@ internal static class CliApplication
             routeId = "device_actor_observation";
             return true;
         }
+        if (string.Equals(arguments[0], "device", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(arguments[1], "actor-identity-observe", StringComparison.OrdinalIgnoreCase))
+        {
+            routeId = "device_actor_identity_observation";
+            return true;
+        }
         if (string.Equals(arguments[0], "adb", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(arguments[1], "forwards", StringComparison.OrdinalIgnoreCase))
         {
@@ -199,6 +207,7 @@ internal static class CliApplication
                         apkPermissionObservation = ApkPermissionObservationSchema,
                         adbForwardInventoryResult = AdbForwardInventoryResultSchema,
                         deviceActorObservation = "questionable.file_manager.device_actor_observation.v1",
+                        deviceActorIdentityObservation = "questionable.file_manager.device_actor_identity_observation.v1",
                         apkLaunchResult = ApkLaunchResultSchema,
                         launcherExportProof = LauncherExportProofContract,
                         runtimeObservation = RuntimeObservationContract
@@ -275,6 +284,7 @@ internal static class CliApplication
             RunExactApkPropertiesJsonAsync(arguments),
         "apk_permission_observation" => RunApkPermissionObservationJsonAsync(arguments),
         "device_actor_observation" => RunDeviceActorObservationJsonAsync(arguments),
+        "device_actor_identity_observation" => RunDeviceActorIdentityObservationJsonAsync(arguments),
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
     };
@@ -2596,6 +2606,29 @@ internal static class CliApplication
             var code = input ? "input_rejected" : exception is InvalidDataException ? "actor_output_rejected" : "actor_observation_failed";
             WriteJson(new { schema, succeeded = false, result = (object?)null,
                 failure = new { code, message = "The fixed read-only actor observation did not complete.", state_change_possible = false,
+                    capture_evidence = exception.Data[typeof(ActorCaptureEvidence)] as ActorCaptureEvidence } });
+            return input ? 2 : 1;
+        }
+    }
+
+    internal static async Task<int> RunDeviceActorIdentityObservationJsonAsync(string[] arguments, Func<AdbClient>? createClient = null)
+    {
+        const string schema = "questionable.file_manager.device_actor_identity_observation.v1";
+        try
+        {
+            var command = OperatorCommands.ParseDeviceActorIdentityCliArguments(arguments);
+            var client = createClient is null ? AdbClient.CreateDefault() : createClient();
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            var result = execution.DeviceActorIdentityObservation ?? throw new InvalidOperationException("Actor identity returned no result.");
+            WriteJson(new { schema, succeeded = true, result, failure = (object?)null });
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            var input = exception is ArgumentException;
+            var code = input ? "input_rejected" : exception is InvalidDataException ? "actor_identity_output_rejected" : "actor_identity_observation_failed";
+            WriteJson(new { schema, succeeded = false, result = (object?)null,
+                failure = new { code, message = "The fixed read-only actor identity observation did not complete.", state_change_possible = false,
                     capture_evidence = exception.Data[typeof(ActorCaptureEvidence)] as ActorCaptureEvidence } });
             return input ? 2 : 1;
         }

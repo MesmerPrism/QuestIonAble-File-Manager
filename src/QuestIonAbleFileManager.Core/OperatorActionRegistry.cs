@@ -111,6 +111,12 @@ public static class OperatorActionRegistry
                 false,
                 "one bounded serial-scoped fixed canonical/boot/full numeric process inventory/proc birth/four UID observation; expected actor, protected UID and lease policy remain with the caller"),
             new(
+                "device_actor_identity_observation",
+                "device actor-identity-observe --serial --pid --json",
+                "OperatorCommands.ObserveDeviceActorIdentity",
+                false,
+                "one bounded fixed canonical/boot/process inventory/initial birth/raw cmdline/full package UID registry/four UIDs/final birth observation; package and authority policy remain with caller"),
+            new(
                 "adb_forward_inventory",
                 "adb forwards --serial --json",
                 "OperatorCommands.InventoryAdbForwards",
