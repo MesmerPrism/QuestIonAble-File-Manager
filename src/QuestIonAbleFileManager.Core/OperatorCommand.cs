@@ -49,7 +49,8 @@ public enum OperatorCommandKind
     RestoreExactApkProperties,
     ObserveDevelopmentApp,
     InstallDevelopmentApk,
-    ObserveDeviceActor
+    ObserveDeviceActor,
+    ObserveDeviceActorIdentity
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -903,6 +904,26 @@ public static class OperatorCommands
         return ObserveDeviceActor(arguments[3], pid);
     }
 
+    public static OperatorCommand ObserveDeviceActorIdentity(string serial, int pid)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pid);
+        return new OperatorCommand(OperatorCommandKind.ObserveDeviceActorIdentity,
+            ["device", "actor-identity-observe", "--serial", serial, "--pid", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"],
+            serial: serial, actorPid: pid);
+    }
+
+    public static OperatorCommand ParseDeviceActorIdentityCliArguments(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 7 || arguments[0] != "device" || arguments[1] != "actor-identity-observe" ||
+            arguments[2] != "--serial" || arguments[4] != "--pid" || arguments[6] != "--json" ||
+            !Regex.IsMatch(arguments[5], "^[1-9][0-9]*$", RegexOptions.CultureInvariant) ||
+            !int.TryParse(arguments[5], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid))
+            throw new ArgumentException("Use exactly device actor-identity-observe --serial <serial> --pid <positive-decimal> --json.", nameof(arguments));
+        return ObserveDeviceActorIdentity(arguments[3], pid);
+    }
+
     public static OperatorCommand InventoryAdbForwards(string serial)
     {
         serial = AndroidInput.RequireSerial(serial);
@@ -1592,7 +1613,8 @@ public sealed record OperatorExecutionResult(
     ApkPropertyObservationResult? ApkPropertyObservationResult = null,
     ApkPropertyMutationResult? ApkPropertyMutationResult = null,
     DevelopmentAppRuntimeObservation? DevelopmentAppRuntimeObservation = null,
-    DevelopmentApkInstallResult? DevelopmentApkInstallResult = null);
+    DevelopmentApkInstallResult? DevelopmentApkInstallResult = null,
+    DeviceActorIdentityObservation? DeviceActorIdentityObservation = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1909,6 +1931,11 @@ public sealed class OperatorCommandExecutor
             case OperatorCommandKind.ObserveDeviceActor:
                 return new OperatorExecutionResult(command,
                     DeviceActorObservation: await client.ObserveDeviceActorAsync(
+                        Require(command.Serial, nameof(command.Serial)), command.ActorPid, cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveDeviceActorIdentity:
+                return new OperatorExecutionResult(command,
+                    DeviceActorIdentityObservation: await client.ObserveDeviceActorIdentityAsync(
                         Require(command.Serial, nameof(command.Serial)), command.ActorPid, cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InventoryAdbForwards:

@@ -1,5 +1,9 @@
 # Closed device actor observation
 
+For the separate initial/final-birth, binary cmdline and package-UID registry
+route, see [extended identity observation](actor-identity-observation.md).
+This five-section route and its schema remain unchanged.
+
 The agent-only read-only route is:
 
 ```text
