@@ -105,6 +105,12 @@ public static class OperatorActionRegistry
                 false,
                 "bounded fixed package-manager and app-ops readback for one exact installed package: manifest declarations, reported effective grant bits, and reported app-op modes only; it does not mutate permission state or decide admission, application readiness, OpenXR readiness, feature use, or wearer visibility"),
             new(
+                "device_actor_observation",
+                "device actor-observe --serial --pid --json",
+                "OperatorCommands.ObserveDeviceActor",
+                false,
+                "one bounded serial-scoped fixed canonical/boot/full numeric process inventory/proc birth/four UID observation; expected actor, protected UID and lease policy remain with the caller"),
+            new(
                 "adb_forward_inventory",
                 "adb forwards --serial --json",
                 "OperatorCommands.InventoryAdbForwards",
