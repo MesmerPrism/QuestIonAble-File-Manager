@@ -1,0 +1,42 @@
+[
+  {
+    "name": "@yume-chan/adb",
+    "version": "2.6.4",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/adb-credential-web",
+    "version": "2.1.0",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/adb-daemon-webusb",
+    "version": "2.3.2",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/async",
+    "version": "4.1.3",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/event",
+    "version": "2.0.0",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/no-data-view",
+    "version": "2.0.0",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/stream-extra",
+    "version": "2.6.1",
+    "license": "MIT"
+  },
+  {
+    "name": "@yume-chan/struct",
+    "version": "2.3.2",
+    "license": "MIT"
+  }
+]

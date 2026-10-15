@@ -8,6 +8,13 @@ apps back to a Windows file.
 The repository also ships a CLI over the same core operations so every GUI
 action can be automated and tested.
 
+An optional, separately started [browser operator host](docs/browser-operator.md)
+projects ordinary device status, classic WiFi setup and power controls through
+those same Core handlers. Its bundled read-only WebUSB proof needs no headset
+app; direct USB access can conflict with a running host ADB connection. This
+development surface is separate from the inspected-deployment API and signed
+release packaging.
+
 > This is an independent open-source project. It is not affiliated with or
 > endorsed by Meta. Meta Quest is a trademark of Meta Platforms, Inc.
 

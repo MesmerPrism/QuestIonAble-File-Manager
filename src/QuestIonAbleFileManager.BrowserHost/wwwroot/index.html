@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QFM Browser</title><link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+<main class="shell">
+  <header><a class="brand" href="./">QFM Browser</a><a href="./agent.html">Agent guide</a></header>
+  <h1>Manage your Quest</h1>
+  <p class="intro">No headset app required. Your browser is an adapter to authorized device controls.</p>
+  <nav class="tabs" aria-label="Connection mode"><button id="host-tab" aria-current="page">QFM host</button><button id="usb-tab">USB proof</button></nav>
+  <section id="host-view" aria-labelledby="host-tab">
+    <section class="connection panel" aria-labelledby="connect-title">
+      <div><h2 id="connect-title">Connect to QFM</h2>
+        <form id="connect-form"><label for="token">Session token</label><div class="input-action"><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Enter session token" required disabled><button class="primary" id="connect" disabled>Connect</button></div></form>
+        <p class="hint">Use the token from your local QFM host. It stays in this tab.</p><p id="local-host-link" hidden><a href="http://127.0.0.1:8127/">Open the local QFM host</a>. Start it first using the agent guide.</p>
+      </div>
+      <div class="connection-status"><span>Status</span><p id="host-status" role="status">Not connected</p><button id="disconnect-host" class="text-button" hidden>Disconnect</button></div>
+    </section>
+    <div class="workspace">
+      <div class="left-column">
+        <section class="panel device-panel" aria-labelledby="headsets-title"><div class="section-heading"><h2 id="headsets-title">Headsets</h2><button id="refresh" disabled>Refresh devices</button></div>
+          <p id="device-empty" class="empty">Connect to list authorized USB and WiFi devices.</p>
+          <ul id="devices" class="devices" aria-label="Authorized headsets"></ul>
+          <p id="inventory-age" class="hint"></p>
+        </section>
+        <section class="panel" aria-labelledby="wifi-title"><h2 id="wifi-title">WiFi connection</h2>
+          <form id="wifi-form"><div class="wifi-fields"><div><label for="wifi-host">Known headset address</label><input id="wifi-host" placeholder="Headset IP address" autocomplete="off" spellcheck="false" maxlength="253"></div><div><label for="wifi-port">Port</label><input id="wifi-port" type="number" value="5555" min="1" max="65535" required></div></div>
+            <label class="check"><input id="wifi-confirm" type="checkbox"> I approve this WiFi ADB change</label>
+            <div class="actions"><button id="wifi-connect" type="submit" disabled>Connect WiFi</button><button id="wifi-enable" type="button" disabled>Enable from selected USB</button></div>
+          </form>
+        </section>
+      </div>
+      <section class="panel selected-panel" aria-labelledby="selected-title"><h2 id="selected-title">Selected headset</h2><p id="selection">Choose a headset to read its current state.</p>
+        <dl id="power"><div><dt>Power</dt><dd id="power-value">Unknown</dd></div><div><dt>Display</dt><dd id="display-value">Unknown</dd></div><div><dt>Proximity</dt><dd id="proximity-value">Unknown</dd></div><div><dt>Hold remaining</dt><dd id="hold-value">Unknown</dd></div></dl>
+        <p id="status-age" class="hint"></p><button id="read-status" class="text-button" disabled>Read current status</button>
+        <h3>Keep awake</h3><label class="duration" for="duration">Proximity duration <select id="duration"><option value="60000">1 minute</option><option value="3600000" selected>1 hour</option><option value="28800000">8 hours</option></select></label><p class="hint">Stay-awake remains on until Restore normal. This duration applies to the proximity hold.</p>
+        <label class="check"><input id="power-confirm" type="checkbox"> I approve this device settings change</label>
+        <div class="actions"><button id="apply-hold" disabled>Apply hold</button><button id="restore-normal" disabled>Restore normal</button></div>
+      </section>
+    </div>
+    <p class="hint supervision">Coordinate with the active device supervisor before changing power or transports. This page does not take over watchdog custody.</p>
+  </section>
+  <section id="usb-view" hidden aria-labelledby="usb-tab">
+    <section class="panel"><h2>Read-only USB proof</h2><p>Read serial, boot identity and battery directly through WebUSB. No host ADB executable or headset app is used by this mode.</p>
+      <p id="usb-capability" role="status">Checking browser capability…</p>
+      <div class="actions"><button id="usb-choose" class="primary">Choose USB headset</button><button id="usb-permitted">List permitted devices</button></div>
+      <p class="hint">Your browser may open a device chooser and the headset may ask for debugging authorization. Shared ADB can already own the USB interface; keep it running and use QFM host mode when the interface is busy.</p>
+    </section>
+    <section class="panel"><h2>Permitted USB devices</h2><label for="usb-selection">Selected USB device</label><select id="usb-selection"><option value="">Choose a permitted device</option></select><div class="actions"><button id="usb-read" disabled>Read USB status</button><button id="usb-reconnect" disabled>Reconnect</button><button id="usb-disconnect" disabled>Release USB</button></div><p id="usb-status" role="status">No USB request sent.</p><pre id="usb-reading" hidden></pre></section>
+    <p class="hint">The proof does not enable WiFi, change power, install packages or start a keeper. A previous permission is different from an open ADB connection. Disconnect retains the browser's ADB key; see the agent guide for revocation.</p>
+  </section>
+  <section class="panel result-panel" aria-labelledby="result-title"><div class="section-heading"><h2 id="result-title">Latest result</h2><button id="reconcile" hidden>Read original result</button></div><p id="result-summary" role="status">No request sent.</p><details><summary>Raw JSON</summary><pre id="result-json">{}</pre></details></section>
+  <footer>Browser controls use the same QFM command handlers as the CLI. Existing watchdogs are not replaced.</footer>
+</main>
+</body></html>
