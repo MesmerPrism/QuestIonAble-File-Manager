@@ -48,7 +48,8 @@ public enum OperatorCommandKind
     ClearExactApkProperties,
     RestoreExactApkProperties,
     ObserveDevelopmentApp,
-    InstallDevelopmentApk
+    InstallDevelopmentApk,
+    ObserveDeviceActor
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -91,7 +92,8 @@ public sealed class OperatorCommand
         string? outputPath = null,
         string? propertyManifestPath = null,
         string? propertySnapshotPath = null,
-        string? reportedInstallReference = null)
+        string? reportedInstallReference = null,
+        int actorPid = 0)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -125,6 +127,7 @@ public sealed class OperatorCommand
         PropertyManifestPath = propertyManifestPath;
         PropertySnapshotPath = propertySnapshotPath;
         ReportedInstallReference = reportedInstallReference;
+        ActorPid = actorPid;
     }
 
     public OperatorCommandKind Kind { get; }
@@ -185,6 +188,8 @@ public sealed class OperatorCommand
     public string? PropertyManifestPath { get; }
 
     public string? PropertySnapshotPath { get; }
+
+    public int ActorPid { get; }
 
     public string ToPowerShellCommand(
         string cliExecutable = ".\\questionable-file-manager.exe",
@@ -878,6 +883,26 @@ public static class OperatorCommands
         return UninstallExactApk(arguments[3], arguments[5], operatorConfirmed: true);
     }
 
+    public static OperatorCommand ObserveDeviceActor(string serial, int pid)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pid);
+        return new OperatorCommand(OperatorCommandKind.ObserveDeviceActor,
+            ["device", "actor-observe", "--serial", serial, "--pid", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), "--json"],
+            serial: serial, actorPid: pid);
+    }
+
+    public static OperatorCommand ParseDeviceActorObservationCliArguments(IReadOnlyList<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Count != 7 || arguments[0] != "device" || arguments[1] != "actor-observe" ||
+            arguments[2] != "--serial" || arguments[4] != "--pid" || arguments[6] != "--json" ||
+            !System.Text.RegularExpressions.Regex.IsMatch(arguments[5], "^[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant) ||
+            !int.TryParse(arguments[5], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid))
+            throw new ArgumentException("Use exactly device actor-observe --serial <serial> --pid <positive-decimal> --json.", nameof(arguments));
+        return ObserveDeviceActor(arguments[3], pid);
+    }
+
     public static OperatorCommand InventoryAdbForwards(string serial)
     {
         serial = AndroidInput.RequireSerial(serial);
@@ -1562,6 +1587,7 @@ public sealed record OperatorExecutionResult(
     PackageStopResult? PackageStopResult = null,
     ExactApkUninstallResult? ExactApkUninstallResult = null,
     AdbForwardInventoryResult? AdbForwardInventoryResult = null,
+    DeviceActorObservation? DeviceActorObservation = null,
     ApkPermissionObservation? ApkPermissionObservation = null,
     ApkPropertyObservationResult? ApkPropertyObservationResult = null,
     ApkPropertyMutationResult? ApkPropertyMutationResult = null,
@@ -1879,6 +1905,11 @@ public sealed class OperatorCommandExecutor
                         Require(command.Serial, nameof(command.Serial)),
                         Require(command.LocalPath, nameof(command.LocalPath)),
                         cancellationToken).ConfigureAwait(false));
+
+            case OperatorCommandKind.ObserveDeviceActor:
+                return new OperatorExecutionResult(command,
+                    DeviceActorObservation: await client.ObserveDeviceActorAsync(
+                        Require(command.Serial, nameof(command.Serial)), command.ActorPid, cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.InventoryAdbForwards:
                 return new OperatorExecutionResult(
@@ -2231,6 +2262,7 @@ public sealed class OperatorCommandExecutor
         OperatorCommandKind.StopPackage => "Stopping one exact package for the current Android user…",
         OperatorCommandKind.UninstallExactApk =>
             "Removing one exact inspected APK and its app-private data…",
+        OperatorCommandKind.ObserveDeviceActor => "Reading the fixed device actor identity…",
         OperatorCommandKind.InventoryAdbForwards => "Reading the shared ADB forwarding inventory…",
         OperatorCommandKind.ObservePackagePermissions => "Reading bounded exact-package permission facts…",
         OperatorCommandKind.ObserveExactApkProperties => "Reading the closed exact-APK property manifest…",
