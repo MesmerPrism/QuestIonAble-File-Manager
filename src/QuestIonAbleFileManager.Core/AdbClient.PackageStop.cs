@@ -22,6 +22,7 @@ public sealed partial class AdbClient
         // check on the exact selected serial.
         await EnsurePackagePresentForStopAsync(serial, packageName, cancellationToken).ConfigureAwait(false);
 
+        var before = await TryReadStopSnapshotAsync(serial, packageName, cancellationToken).ConfigureAwait(false);
         CommandResult stop;
         try
         {
@@ -59,6 +60,8 @@ public sealed partial class AdbClient
                 packageName,
                 activities.StandardOutput,
                 ReadPackageProcessIds(processes));
+            var proof = await TryProveStopProcessAbsenceAsync(serial, packageName, before, cancellationToken).ConfigureAwait(false);
+            quiescence = quiescence with { ProcessAbsenceVerified = proof.Verified, ProcessEvidence = proof.Evidence };
 
             return new PackageStopResult(
                 serial,

@@ -515,6 +515,7 @@ while copying the same opened handle into PackageInstaller.
 - [Optional Fleet installer handoff](docs/fleet-installer-handoff.md)
 - [Inspected single-device deployment](docs/inspected-deployment.md)
 - [Agent Quest APK workflow](docs/agent-quest-apk-workflow.md)
+- [Closed read-only device actor observation](docs/actor-observation.md)
 - [APK diagnostic bundle](docs/apk-diagnostic-bundle.md)
 - [Dedicated local API](docs/local-api.md)
 - [Release workflow](docs/release-workflow.md)

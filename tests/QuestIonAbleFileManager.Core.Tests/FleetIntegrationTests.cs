@@ -812,10 +812,18 @@ public sealed class FleetIntegrationTests
         var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, options);
         var path = Path.Combine(operation.OperationRoot, "state-0003.json");
         Task<FleetIntegrationOperationStatusSnapshot> read;
+        using var readStarted = new ManualResetEventSlim();
         using (var writer = FleetWindowsFileSafety.CreateNewOwnedFile(path))
         {
-            read = Task.Run(() => store.ReadStatus(request.OperationId));
-            await Task.Delay(50);
+            // ReadStatus blocks during its bounded retry window. Keep its reader
+            // and the writer release independent of shared thread-pool scheduling.
+            read = Task.Factory.StartNew(() =>
+            {
+                readStarted.Set();
+                return store.ReadStatus(request.OperationId);
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            Assert.True(readStarted.Wait(TimeSpan.FromSeconds(2)));
+            Thread.Sleep(50);
             writer.Write(bytes);
             writer.Flush(flushToDisk: true);
             FleetWindowsFileSafety.ValidateFile(writer.SafeFileHandle, path, requireSingleLink: true);

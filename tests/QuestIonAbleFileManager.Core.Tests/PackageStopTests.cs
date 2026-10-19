@@ -59,10 +59,19 @@ public sealed class PackageStopTests
         Assert.Equal(
             [
                 ["-s", Serial, "shell", "pm path --user current 'com.example.app'"],
+                ["-s", Serial, "shell", "am", "get-current-user"],
+                ["-s", Serial, "shell", AdbClient.StopProcessInventoryCommand],
+                ["-s", Serial, "shell", "am", "get-current-user"],
                 ["-s", Serial, "shell", "am", "force-stop", "--user", "current", Package],
                 ["-s", Serial, "shell", "pm path --user current 'com.example.app'"],
                 ["-s", Serial, "shell", "dumpsys", "activity", "activities"],
-                ["-s", Serial, "shell", "pidof", Package]
+                ["-s", Serial, "shell", "pidof", Package],
+                ["-s", Serial, "shell", "am", "get-current-user"],
+                ["-s", Serial, "shell", AdbClient.StopProcessInventoryCommand],
+                ["-s", Serial, "shell", "am", "get-current-user"],
+                ["-s", Serial, "shell", "am", "get-current-user"],
+                ["-s", Serial, "shell", AdbClient.StopProcessInventoryCommand],
+                ["-s", Serial, "shell", "am", "get-current-user"]
             ],
             runner.Calls.Select(static call => call.Arguments));
         Assert.DoesNotContain(runner.Calls.SelectMany(static call => call.Arguments),
@@ -282,6 +291,9 @@ public sealed class PackageStopTests
                 return Success(activities);
             if (arguments.SequenceEqual(["-s", Serial, "shell", "pidof", Package]))
                 return pidof;
+            if (arguments.SequenceEqual(["-s", Serial, "shell", "am", "get-current-user"])) return Success("0\n");
+            if (arguments.SequenceEqual(["-s", Serial, "shell", AdbClient.StopProcessInventoryCommand]))
+                return Success("QFM_STOP_UID_BEGIN\npackage:com.example.app uid:10226\nQFM_STOP_UID_END=0\nQFM_STOP_PS_BEGIN\nUID PID ARGS\n0 1 init\nQFM_STOP_PS_END=0\n");
             return Failure(arguments);
         });
 

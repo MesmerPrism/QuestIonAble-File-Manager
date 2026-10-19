@@ -1,0 +1,3 @@
+Applications Memory Usage (in Kilobytes):
+
+** MEMINFO in pid 17527 [com.example.native_renderer.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa] **

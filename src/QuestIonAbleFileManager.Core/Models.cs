@@ -171,7 +171,7 @@ public sealed record AppRuntimeObservation(
     IReadOnlyList<int> ProcessIds)
 {
     public string ObservationContract { get; init; } =
-        "questionable.file_manager.app_runtime_observation.v5";
+        "questionable.file_manager.app_runtime_observation.v6";
 
     public IReadOnlyList<string> ForegroundComponents { get; init; } = [];
 
@@ -208,9 +208,8 @@ public sealed record AppRuntimeObservation(
         AndroidGlobalFocusObservation.NotCollected;
 
     /// <summary>
-    /// QFM currently uses only the fixed serial-scoped <c>pidof</c> probe for
-    /// this package dimension. A missing PID is an observation limitation, not
-    /// an application or OpenXR failure.
+    /// Raw fixed serial-scoped <c>pidof</c> facts remain independent of the
+    /// later presence corroboration. A missing PID is an observation limitation.
     /// </summary>
     public RuntimeProcessObservationQuality ProcessObservationQuality { get; init; } =
         RuntimeProcessObservationQuality.PidofUnavailable;
@@ -234,7 +233,22 @@ public sealed record AppRuntimeObservation(
 
     public bool OpenXrReadinessAuthority { get; init; }
 
-    public bool ProcessAlive => ProcessIds.Count > 0;
+    public RuntimeProcessCorroboration ProcessCorroboration { get; init; } =
+        new(RuntimeProcessCorroborationState.NotCollected);
+
+    // v6 never reports absence from a process-name lookup alone. Null is unknown.
+    public bool? ProcessAlive => ProcessIds.Count > 0 ||
+        ProcessCorroboration.State == RuntimeProcessCorroborationState.VerifiedPresent ? true : null;
+}
+
+public enum RuntimeProcessCorroborationState { NotCollected, Inconclusive, Unavailable, Conflicting, VerifiedPresent }
+
+public sealed record RuntimeProcessCorroboration(
+    RuntimeProcessCorroborationState State, int? ProcessId = null,
+    ulong? StartTicks = null, int? CurrentUserUid = null)
+{
+    public string ObservationSource => "fixed exact-package meminfo joined to current-user unique UID and stable PID stat birth";
+    public bool AbsenceAuthority => false;
 }
 
 public sealed record InstalledPackageDevelopmentMetadata(
@@ -475,10 +489,30 @@ public sealed record PackageStopQuiescence(
     IReadOnlyList<string> ForegroundComponents,
     IReadOnlyList<string> TopResumedComponents)
 {
+    // Missing evidence in older serialized results remains unknown.
+    public bool? ProcessAbsenceVerified { get; init; }
+    public PackageStopProcessEvidence? ProcessEvidence { get; init; }
     public bool IsQuiescent =>
-        ProcessIds.Count == 0 &&
-        ForegroundComponents.Count == 0 &&
-        TopResumedComponents.Count == 0;
+        ProcessAbsenceVerified == true &&
+        ProcessEvidence?.IsCoherent == true &&
+        ProcessIds is { Count: 0 } &&
+        ForegroundComponents is { Count: 0 } &&
+        TopResumedComponents is { Count: 0 };
+}
+
+public sealed record PackageStopProcessIdentity(int ProcessId, ulong StartTicks);
+public sealed record PackageStopProcessEvidence(
+    int CurrentUser, int PackageUid,
+    IReadOnlyList<PackageStopProcessIdentity> BeforeDispatch,
+    bool KnownBirthsRetired, int CompletePostInventories)
+{
+    internal bool IsCoherent => KnownBirthsRetired && CompletePostInventories == 2 &&
+        CurrentUser >= 0 && PackageUid >= 10000 && PackageUid / 100000 == CurrentUser &&
+        PackageUid % 100000 >= 10000 && BeforeDispatch is not null &&
+        BeforeDispatch.All(birth => birth is { ProcessId: > 0, StartTicks: > 0 }) &&
+        BeforeDispatch.Select(birth => birth.ProcessId).Distinct().Count() == BeforeDispatch.Count;
+    public string Schema => "questionable.file_manager.package_stop_process_evidence.v1";
+    public string Disposition => IsCoherent ? "verified_absent" : "unverified";
 }
 
 public sealed record PackageStopResult(

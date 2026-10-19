@@ -372,9 +372,10 @@ internal static class OperatorMutations
         var quiescence = stop.Quiescence;
         return quiescence.IsQuiescent
             ? OperatorMutationObservation.Confirmed(
-                $"{stop.PackageName} remains installed and has no observed process, foreground component, or top-resumed component.")
+                $"{stop.PackageName} remains installed with verified package-UID process absence and no foreground or top-resumed component.")
             : OperatorMutationObservation.Pending(
-                $"{stop.PackageName}: process-count={quiescence.ProcessIds.Count}; " +
+                $"{stop.PackageName}: process-absence={quiescence.ProcessAbsenceVerified?.ToString() ?? "unknown"}; " +
+                $"process-count={quiescence.ProcessIds.Count}; " +
                 $"foreground-count={quiescence.ForegroundComponents.Count}; " +
                 $"top-resumed-count={quiescence.TopResumedComponents.Count}.",
                 "The force-stop was sent, but exact-package quiescence has not appeared in Android readback.");

@@ -38,6 +38,43 @@ public sealed partial class AdbClient
         Action? dispatchObserver,
         CancellationToken cancellationToken)
     {
+        // 0: open, 1: fixed launch boundary crossed, 2: closed without dispatch.
+        // Closing also fences a capture runner that retains its action callback.
+        var dispatchState = 0;
+        try
+        {
+            return await LaunchAndCaptureInspectedApkCoreAsync(
+                serial, apkPath, outputDirectory,
+                () =>
+                {
+                    if (Interlocked.CompareExchange(ref dispatchState, 1, 0) != 0)
+                        throw new InvalidOperationException("The launch-diagnostic dispatch boundary is closed.");
+                    dispatchObserver?.Invoke();
+                }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            var crossed = Interlocked.CompareExchange(ref dispatchState, 2, 0) == 1;
+            // Keep existing input exception contracts. Other failures acquire
+            // certainty only here, where this invocation owns the dispatch fence.
+            if (!crossed && exception is ArgumentException or FileNotFoundException or
+                DirectoryNotFoundException or SplitPackageException)
+                throw;
+            throw new ApkLaunchDiagnosticExecutionException(crossed, exception);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref dispatchState, 2, 0);
+        }
+    }
+
+    private async Task<ApkLaunchDiagnosticBundleResult> LaunchAndCaptureInspectedApkCoreAsync(
+        string serial,
+        string apkPath,
+        string outputDirectory,
+        Action dispatchObserver,
+        CancellationToken cancellationToken)
+    {
         serial = AndroidInput.RequireSerial(serial);
         var reportedPath = Path.GetFullPath(apkPath);
         if (!File.Exists(reportedPath))
@@ -109,8 +146,8 @@ public sealed partial class AdbClient
                         launcher,
                         () =>
                         {
+                            dispatchObserver();
                             deviceEffectPossible = true;
-                            dispatchObserver?.Invoke();
                         },
                         actionToken).ConfigureAwait(false),
                     cancellationToken).ConfigureAwait(false);
@@ -261,8 +298,8 @@ public sealed partial class AdbClient
             await RequireExactLaunchDiagnosticReadySerialAsync(serial, cancellationToken).ConfigureAwait(false);
             var installed = await ReadInstalledIdentityAsync(serial, artifact, cancellationToken).ConfigureAwait(false);
             EnsureExactStandaloneInstalledArtifact(artifact, installed);
-            dispatchAttempted = true;
             markDeviceEffectPossible();
+            dispatchAttempted = true;
             var start = await RunForDeviceAsync(
                 serial,
                 ["shell", "am", "start", "-n", launcher.Wire],
@@ -345,7 +382,8 @@ public sealed partial class AdbClient
     private async Task<int> ReadUniqueCurrentUserPackageUidAsync(
         string serial,
         string packageName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? maximumOutputCharacters = null)
     {
         var result = await RunForDeviceAsync(
             serial,
@@ -353,6 +391,9 @@ public sealed partial class AdbClient
             InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
         result.EnsureSuccess("Read current-user package UID inventory");
+        if (maximumOutputCharacters is { } maximum &&
+            (result.StandardOutput.Length > maximum || !string.IsNullOrWhiteSpace(result.StandardError)))
+            throw new InvalidDataException("Bounded package UID inventory was unusable.");
         var inventory = new List<(string PackageName, int Uid)>();
         foreach (var line in result.StandardOutput.ReplaceLineEndings("\n")
                      .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -363,7 +404,7 @@ public sealed partial class AdbClient
                 RegexOptions.CultureInvariant);
             if (!match.Success ||
                 !int.TryParse(match.Groups["uid"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var observedUid) ||
-                observedUid < 10_000)
+                observedUid < 0)
             {
                 throw new InvalidDataException("The current-user package UID inventory was malformed.");
             }
@@ -372,7 +413,7 @@ public sealed partial class AdbClient
         var packageMatches = inventory
             .Where(item => string.Equals(item.PackageName, packageName, StringComparison.Ordinal))
             .ToArray();
-        if (packageMatches.Length != 1 ||
+        if (packageMatches.Length != 1 || packageMatches[0].Uid < 10_000 ||
             inventory.Any(item => item.Uid == packageMatches[0].Uid &&
                                   !string.Equals(item.PackageName, packageName, StringComparison.Ordinal)))
         {

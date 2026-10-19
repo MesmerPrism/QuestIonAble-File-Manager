@@ -5,7 +5,7 @@
     "questionable.file_manager.inspected_deployment.v5",
     "questionable.file_manager.apk_launch_result.v1",
     "questionable.file_manager.launcher_export_proof.v2",
-    "questionable.file_manager.app_runtime_observation.v5"
+    "questionable.file_manager.app_runtime_observation.v6"
   ],
   "native_launch_envelope_invariant": {
     "schema": "questionable.file_manager.apk_launch_result.v1",
@@ -23,7 +23,7 @@
     }
   },
   "runtime_observation_v5": {
-    "schema": "questionable.file_manager.app_runtime_observation.v5",
+    "schema": "questionable.file_manager.app_runtime_observation.v6",
     "proves": [
       "android_installed_identity",
       "android_foreground",

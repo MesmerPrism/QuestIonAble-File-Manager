@@ -27,7 +27,7 @@ public sealed class InspectedDeploymentProviderCorpusTests
         Assert.Equal(
             [
                 "questionable.file_manager.apk_launch_result.v1",
-                "questionable.file_manager.app_runtime_observation.v5",
+                "questionable.file_manager.app_runtime_observation.v6",
                 "questionable.file_manager.inspected_deployment.v5",
                 "questionable.file_manager.launcher_export_proof.v2"
             ],
@@ -47,7 +47,7 @@ public sealed class InspectedDeploymentProviderCorpusTests
         Assert.Equal("non-null", launchInvariant.GetProperty("failure").GetProperty("failure").GetString());
 
         var runtime = root.GetProperty("runtime_observation_v5");
-        Assert.Equal("questionable.file_manager.app_runtime_observation.v5", runtime.GetProperty("schema").GetString());
+        Assert.Equal("questionable.file_manager.app_runtime_observation.v6", runtime.GetProperty("schema").GetString());
         Assert.Equal(
             ["android_foreground", "android_global_current_focus", "android_global_focused_app", "android_installed_identity", "android_process", "android_top_resumed"],
             runtime.GetProperty("proves").EnumerateArray()

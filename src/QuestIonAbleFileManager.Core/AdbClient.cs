@@ -910,7 +910,11 @@ public sealed partial class AdbClient
             FocusedApp = ToLegacyGlobalFocusFact(globalFocus.FocusedApp),
             GlobalFocus = globalFocus,
             ProcessObservationExitCode = processes.ExitCode,
-            ProcessObservationQuality = processObservationQuality
+            ProcessObservationQuality = processObservationQuality,
+            ProcessCorroboration = pids.Length > 0
+                ? new(RuntimeProcessCorroborationState.NotCollected)
+                : await CorroboratePackageProcessAsync(serial, artifact.Identity.PackageName, cancellationToken)
+                    .ConfigureAwait(false)
         };
     }
 

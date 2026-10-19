@@ -403,3 +403,23 @@ digest evidence, and cancellation/timeout cleanup. Adding a WPF control later
 would require a separately reviewed
 operator workflow and a parity route; this CLI-only adapter does not silently
 appear in the current app.
+
+
+Package-stop process absence is a separate, conservative readback. A silent
+`pidof` exit 1 is only a name-lookup result and cannot confirm quiescence,
+including for package names longer than Linux process names. The stop route
+retains one fixed force-stop dispatch, observes the current user and unique
+package UID, reads complete framed whole-device `ps -A -o UID,PID,ARGS`
+inventories, and binds observed pre-stop PID birth/UID facts. Two subsequent
+complete inventories must contain no process for that UID; original PID births
+must have retired. User/UID drift, shared UID, denied or incomplete output,
+ambiguous process rows and conflicting isolated-UID package rows remain pending.
+No automatic retry or new device effect is introduced.
+
+The additive `PackageStopQuiescence.ProcessAbsenceVerified` nullable field is
+true only with structured `ProcessEvidence` (schema
+`questionable.file_manager.package_stop_process_evidence.v1`). Missing fields
+from older results mean unknown. Existing process/component arrays remain,
+but empty arrays alone no longer confirm quiescence. This proves bounded
+Android readback, not application transaction cleanup, future non-restart,
+OpenXR shutdown, sensor/camera release, or another client's connection lifetime.

@@ -29,7 +29,7 @@ published as a partial bundle with its exact exit evidence.
 
 The v3 fixed capture set is:
 
-- `runtime.json`, using `app_runtime_observation.v5`, including the retained
+- `runtime.json`, using `app_runtime_observation.v6`, including the retained
   legacy v4 single-field projections and separately
   parsed bounded `mCurrentFocus` and `mFocusedApp` global-focus facts from the
   fixed `dumpsys window windows` command. It retains field status, count,
@@ -78,3 +78,27 @@ Raw package snapshots and logs can contain private device or application data.
 Store bundles in an ignored/private location, and review or sanitize them before
 sharing. A Work Environment wrapper owns immutable multi-step run-copy
 composition; QFM owns the receipt-pinned identity of this inspected output.
+
+Runtime observation v6 deliberately changes `processAlive` from a Boolean to
+`true | null`: true is observed presence; null is unknown. It never reports
+false from a package-name lookup. Consumers that require a Boolean must reject
+null rather than interpreting it as absence. The existing `processIds`,
+`processObservationQuality`, source and exit code remain the raw `pidof` facts.
+No process observation has application or OpenXR readiness authority.
+
+If `pidof` returns no usable PIDs, a separate fixed, read-only corroboration
+uses exact-package `dumpsys meminfo`. A single anchored positive PID is joined
+to the current user's unique package UID, all four `/proc/<pid>/status` UIDs,
+and identical positive birth ticks from before and after repeated exact-package
+memory readback; the package UID is re-observed too. The derived PID and paths
+are not caller inputs. The whole optional probe has one 15-second deadline,
+bounded outputs and no retry. Denied, malformed, ambiguous, changing or missing
+readback remains unavailable, conflicting or inconclusive, never absent.
+Caller cancellation still cancels the operation.
+
+`processCorroboration` records its separate state, source, verified PID/birth/UID
+when available and `absenceAuthority=false`. Earlier `pidof` no-match and later
+verified presence are retained together; they do not establish simultaneity or
+the cause of a naming mismatch. Neither process-name truncation nor a crash is
+inferred. Existing v3 diagnostic capture/envelope contracts retain their scope;
+their nested runtime contract is v6.

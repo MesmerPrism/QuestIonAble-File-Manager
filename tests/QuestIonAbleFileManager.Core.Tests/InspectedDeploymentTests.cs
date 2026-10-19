@@ -10,6 +10,88 @@ namespace QuestIonAbleFileManager.Core.Tests;
 public sealed class InspectedDeploymentTests
 {
     [Theory]
+    [InlineData("verified", RuntimeProcessCorroborationState.VerifiedPresent)]
+    [InlineData("wrong-package", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("ambiguous", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("reuse", RuntimeProcessCorroborationState.Conflicting)]
+    [InlineData("wrong-uid", RuntimeProcessCorroborationState.Conflicting)]
+    [InlineData("denied", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("wrong-stat-pid", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("absent", RuntimeProcessCorroborationState.Inconclusive)]
+    [InlineData("pid-drift", RuntimeProcessCorroborationState.Conflicting)]
+    [InlineData("shared-uid", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("uid-drift", RuntimeProcessCorroborationState.Conflicting)]
+    [InlineData("bad-birth", RuntimeProcessCorroborationState.Unavailable)]
+    [InlineData("oversized", RuntimeProcessCorroborationState.Unavailable)]
+    public async Task Observe_CorroboratesExactLongPackageWithoutInventingPidofAbsence(
+        string scenario, RuntimeProcessCorroborationState expected)
+    {
+        var apk = await CreateApkAsync();
+        // Sanitized saved Android MEMINFO header shape; the original package is private.
+        var package = "com.example.native_renderer." + new string('a', 80);
+        var savedMemory = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "tests",
+            "QuestIonAbleFileManager.Core.Tests", "Fixtures", "android-meminfo-long-package.txt"));
+        var birthReads = 0;
+        var memoryReads = 0;
+        var uidReads = 0;
+        string Stat(string pid, string birth) => pid + " (a process name) S " +
+            string.Join(" ", Enumerable.Repeat("0", 18)) + " " + birth + " 0\n";
+        var runner = CreateDeploymentRunner(apk, packageName: package, pidofOutput: "",
+            corroboration: arguments =>
+            {
+                if (arguments.Contains("pidof")) return new("adb", arguments, 1, "", "", TimeSpan.Zero);
+                if (arguments.Contains("meminfo"))
+                {
+                    memoryReads++;
+                    var header = "** MEMINFO in pid " + (scenario == "pid-drift" && memoryReads > 1 ? "17528" : "17527") + " [" +
+                        (scenario == "wrong-package" ? package + ".other" : package) + "] **\n";
+                    return Success(scenario == "verified" ? savedMemory : scenario == "oversized" ? new string('x', 262145) : scenario == "absent" ? "No process found\n" :
+                        scenario == "ambiguous" ? header + header : header);
+                }
+                if (arguments.SequenceEqual(["-s", "QUEST123", "shell", "pm", "list", "packages", "--user", "current", "-U"]))
+                {
+                    uidReads++;
+                    return Success("package:android uid:1000\npackage:" + package + " uid:" +
+                        (scenario == "uid-drift" && uidReads > 1 ? "10178" : "10177") + "\n" +
+                        (scenario == "shared-uid" ? "package:com.example.other uid:10177\n" : ""));
+                }
+                if (arguments.LastOrDefault() == "/proc/17527/stat")
+                {
+                    birthReads++;
+                    return scenario == "denied" ? new("adb", arguments, 1, "", "Permission denied", TimeSpan.Zero) :
+                        Success(Stat(scenario == "wrong-stat-pid" ? "17528" : "17527",
+                            scenario == "bad-birth" ? "not-ticks" : scenario == "reuse" && birthReads > 1 ? "124" : "123"));
+                }
+                if (arguments.LastOrDefault() == "/proc/17527/status")
+                    return Success(scenario == "wrong-uid" ? "Uid:\t10178 10178 10178 10178\n" : "Uid:\t10177 10177 10177 10177\n");
+                return null;
+            });
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .ObserveInspectedAppAsync("QUEST123", apk);
+            Assert.Empty(result.ProcessIds);
+            Assert.Equal(RuntimeProcessObservationQuality.PidofReportedNoProcesses, result.ProcessObservationQuality);
+            Assert.Equal(1, result.ProcessObservationExitCode);
+            Assert.Equal(expected, result.ProcessCorroboration.State);
+            Assert.Equal(expected == RuntimeProcessCorroborationState.VerifiedPresent ? true : (bool?)null, result.ProcessAlive);
+            if (expected == RuntimeProcessCorroborationState.VerifiedPresent)
+            {
+                Assert.Equal(17527, result.ProcessCorroboration.ProcessId);
+                Assert.Equal(123UL, result.ProcessCorroboration.StartTicks);
+                Assert.Equal(10177, result.ProcessCorroboration.CurrentUserUid);
+            }
+            Assert.False(result.ProcessCorroboration.AbsenceAuthority);
+            using var wire = JsonDocument.Parse(JsonSerializer.Serialize(result));
+            Assert.Equal(expected == RuntimeProcessCorroborationState.VerifiedPresent ? JsonValueKind.True : JsonValueKind.Null,
+                wire.RootElement.GetProperty("ProcessAlive").ValueKind);
+            Assert.False(result.ApplicationReadinessAuthority);
+            Assert.DoesNotContain(runner.Calls, call => call.Arguments.Contains("start") || call.Arguments.Contains("force-stop"));
+        }
+        finally { File.Delete(apk); }
+    }
+
+    [Theory]
     [InlineData("apksigner-print-certs-build-tools-34.txt")]
     [InlineData("apksigner-print-certs-build-tools-36.txt")]
     [InlineData("apksigner-print-certs-build-tools-37.txt")]
@@ -2131,7 +2213,7 @@ public sealed class InspectedDeploymentTests
                 "questionable.file_manager.android_global_focus_observation_fixture.v1",
                 fixture.RootElement.GetProperty("schema").GetString());
             Assert.Equal(
-                "questionable.file_manager.app_runtime_observation.v5",
+                "questionable.file_manager.app_runtime_observation.v6",
                 fixture.RootElement.GetProperty("runtime_contract").GetString());
             Assert.Equal(
                 "questionable.file_manager.android_global_focus_observation.v1",
@@ -2173,7 +2255,7 @@ public sealed class InspectedDeploymentTests
                 var current = result.GlobalFocus.CurrentFocus;
                 var focusedApp = result.GlobalFocus.FocusedApp;
 
-                Assert.Equal("questionable.file_manager.app_runtime_observation.v5",
+                Assert.Equal("questionable.file_manager.app_runtime_observation.v6",
                     result.ObservationContract);
                 Assert.Equal("questionable.file_manager.android_global_focus_observation.v1",
                     result.GlobalFocus.ObservationContract);
@@ -2246,7 +2328,7 @@ public sealed class InspectedDeploymentTests
                 }
                 if (testCase.GetProperty("id").GetString() == "target-focus-pidof-absent")
                 {
-                    Assert.False(result.ProcessAlive);
+                    Assert.Null(result.ProcessAlive);
                     Assert.Contains("com.example.app/com.example.app.Main", current.Components);
                 }
                 if (testCase.TryGetProperty("must_not_publish_raw_fragment", out var rawFragment))
@@ -2570,12 +2652,14 @@ public sealed class InspectedDeploymentTests
         CommandResult? uidLogcatResult = null,
         Func<string, IReadOnlyList<string>, Exception?>? commandFailure = null,
         Action<string, IReadOnlyList<string>>? afterCall = null,
-        CommandResult? finalPackagePathResult = null)
+        CommandResult? finalPackagePathResult = null,
+        Func<IReadOnlyList<string>, CommandResult?>? corroboration = null)
     {
         launcherOutput ??= $"{packageName}/{activityName}\n";
         var packagePathReadCount = 0;
         return new FakeRunner((file, arguments) =>
         {
+            if (corroboration?.Invoke(arguments) is { } corroborated) return corroborated;
             if (file == "aapt2")
             {
                 return Success(
