@@ -27,6 +27,19 @@ The route remains pending if any one of those facts differs. A successful ADB
 exit code alone is not confirmation. Restoring normal behavior separately
 requires stay-on off, autosleep not disabled, and proximity no longer `CLOSE`.
 
+Ordinary device-status JSON also reports optional `proximityHoldEvidence`.
+`readSucceeded` distinguishes a successful proximity read from an unavailable
+read; it is null when the parser's caller supplied no read provenance.
+`parseAvailability` is one of `readUnavailable`, `noMatchingBroadcast`,
+`latestAutomationDisable`, `durationUnavailable`, or `closeBroadcastObserved`.
+These finite reasons describe the read and matching broadcast history. They
+contain no raw history or error details, and do not prove an effective hold,
+sleep, or network connectivity. A later short close broadcast remains the
+latest matching observation. Existing nullable duration/remaining fields and
+age calculations are unchanged; `KeepAwakeActive` remains the independent
+stay-on or autosleep predicate. The dedicated Fleet power-readback contract
+keeps its existing fields.
+
 ## Watchdog Modes
 
 Fleet can request one of two active modes through the dedicated provider.
