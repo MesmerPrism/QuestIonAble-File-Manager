@@ -1,5 +1,19 @@
 namespace QuestIonAbleFileManager.Core;
 
+public enum QuestProximityHoldParseAvailability
+{
+    ReadUnavailable,
+    NoMatchingBroadcast,
+    LatestAutomationDisable,
+    DurationUnavailable,
+    CloseBroadcastObserved
+}
+
+// Describes the read and matching broadcast history, not the effective platform hold.
+public sealed record QuestProximityHoldEvidence(
+    bool? ReadSucceeded,
+    QuestProximityHoldParseAvailability ParseAvailability);
+
 public sealed record QuestControllerPower(
     string Hand,
     int? BatteryLevel,
@@ -28,6 +42,8 @@ public sealed record QuestControlStatus(
     int? ProximityHoldDurationMilliseconds = null,
     int? ProximityHoldRemainingMilliseconds = null)
 {
+    public QuestProximityHoldEvidence? ProximityHoldEvidence { get; init; }
+
     public string HeadsetBatteryLabel => HeadsetBatteryLevel is int level
         ? $"{level}% {HeadsetBatteryState}".Trim()
         : "Unavailable";
