@@ -1,0 +1,17 @@
+{
+  "name": "qfm-browser-usb-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@yume-chan/adb": "2.6.4",
+    "@yume-chan/adb-credential-web": "2.1.0",
+    "@yume-chan/adb-daemon-webusb": "2.3.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

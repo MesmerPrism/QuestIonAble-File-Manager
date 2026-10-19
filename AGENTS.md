@@ -22,6 +22,7 @@ release recipe for an unrelated task.
 | Read-only diagnostic bundle | `docs/apk-diagnostic-bundle.md` |
 | Wi-Fi ADB and bounded multi-target install | `docs/wifi-adb-and-parallel-install.md` |
 | Optional local inspected-deployment API | `docs/local-api.md` |
+| Optional browser host and read-only WebUSB proof | `docs/browser-operator.md`; `tools/browser-ui/README.md`; `tools/browser-usb/README.md` |
 | Fleet providers, profiles, discovery or installer handoff | Applicable Device Safety/Architecture section in the conditional contracts; `docs/fleet-integration.md`; `docs/fleet-installer-handoff.md` |
 | Signing, packaging, release and update continuity | `docs/release-workflow.md`; conditional Release Posture and Build And Validation sections |
 
@@ -72,7 +73,11 @@ before modifying these surfaces.
 
 The local API is loopback-only, bearer-protected and inert until explicitly
 started; its retained journal/anchor/state boundary is mandatory. Do not start
-it during ordinary validation. Fleet installer handoff is distribution-only,
+it during ordinary validation. The separate browser host projects only its
+closed Core command registry; preserve its exact-origin/session admission
+checks and unresolved-operation recovery. Direct WebUSB remains a separate
+read-only proof and must release its own handle when shared ADB owns the
+interface. Fleet installer handoff is distribution-only,
 with complete checked-in trust configuration, exact signed metadata/assets,
 protected replay authority and guided-install evidence. Handoff dispatch alone
 does not prove installation. Detailed repair/rollback/rotation rules remain
