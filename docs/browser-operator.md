@@ -618,11 +618,17 @@ live-session operations.
 ## Direct commands for Kiosk's current selection
 
 The separate **Kiosk Direct commands** card uses the acknowledged opaque
-connection above. Its eight commands are `status`, `show-controls`, `show-apps`,
+connection above. Its nine commands are `status`, `show-controls`, `show-apps`, `reload`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal` and `launch-kiosk`. Only `set-launch-requirement` accepts a
 value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
 because even a status command creates a remote logical request.
+
+Reload accepts no value and requires the same explicit confirmation. Only the
+original command's bound, accepted and completed typed result with Core's
+confirmed receipt acknowledges the provider reload. This does not prove a
+fresh catalog, foreground, application or OpenXR readiness. A lost reply uses
+the same explicit original-result lookup and never repeats Reload.
 
 Launch addresses Kiosk's current selection at execution time. A previous
 catalog selection is a separate operation; this card cannot bind an atomic

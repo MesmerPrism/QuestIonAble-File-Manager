@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path');
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'../../src/QuestIonAbleFileManager.BrowserHost/wwwroot'),origin='http://127.0.0.1:18141',key='qfm-browser-direct-command-v1';
-const commands=['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk'];
+const commands=['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload'];
 const logical=id=>'kiosk_'+id.replaceAll('-','');
 const connection=()=>({sessionId:'session-a',connectionId:'a1234567-1234-4234-8234-123456789abc',connectRequestId:'b1234567-1234-4234-8234-123456789abc',usbOperationId:'usb_b1234567123442348234123456789abc',serial:'USB_TARGET',productChannel:'stable',expiresAtUtc:new Date(Date.now()+300000).toISOString()});
 function typed(command,id,value){return {schema:'rusty.kiosk.cli_result.v1',requestId:id,command,accepted:true,completed:true,controlsOpen:command==='show-controls',selectedKey:'selected-key',selectedPackage:'example.selected.app',selectedInstalled:true,selectedLaunchable:true,selectedLaunchRequirement:value||'any',pendingRequirementLaunch:false,guardArmed:command==='launch-kiosk',setupHelperInstalled:true,setupHelperReady:true,selectedEntry:{key:'selected-key',launchRequirement:value||'any'}};}
@@ -31,7 +31,8 @@ async function fixture(t,{respond,status,state={},saved,width=1280,storageFailur
       window.ctx=${JSON.stringify({sessionId:'session-a',connected:true,busy:false,authGeneration:1,actions:['kiosk.direct.invoke','kiosk.direct.request-status','kiosk.direct.request-result','kiosk.direct.request-cancel'],connection:scope,externalUnresolved:false,...state})};window.ctx.actions=new Set(window.ctx.actions);window.busyCalls=[];window.contextReads=0;
       window.view=createDirectCommandView({getContext:()=>{window.contextReads++;return window.ctx;},setBusy:value=>{window.busyCalls.push(value);window.ctx.busy=value;window.siblingBlocked=Boolean(value||window.view?.hasUnresolved());window.view?.update();},showResult:(value,summary)=>window.latest={value,summary},api:async(path,options)=>{const r=await fetch(path,{...options,cache:'no-store'});const value=await r.json();if(!r.ok)throw Object.assign(new Error(value.error),{dispatched:value.dispatched,status:r.status});return value;}});window.view.update();window.fixtureReady=true;`});
     const name=url.pathname==='/'?'index.html':url.pathname.slice(1);if(!['index.html','styles.css','direct-command-view.js'].includes(name))return route.fulfill({status:404,body:''});
-    let bytes=await fs.readFile(path.join(root,name));if(name==='index.html')bytes=Buffer.from(bytes.toString().replace(/<script[^>]*src="\.\/pwa.js"[^>]*><\/script>/,'').replace(/<script[^>]*src="\.\/app.js"[^>]*><\/script>/,'<script type="module" src="./command-fixture.js"></script>'));
+    // The root integration owns the actual option; provide it only when this isolated base lacks it.
+    let bytes=await fs.readFile(path.join(root,name));if(name==='index.html')bytes=Buffer.from(bytes.toString().replace(/(<select id="direct-command-command"[^>]*>)([\s\S]*?)(<\/select>)/,(_,open,options,close)=>open+options+(options.includes('value="reload"')?'':'<option value="reload">Reload Kiosk provider</option>')+close).replace(/<script[^>]*src="\.\/pwa.js"[^>]*><\/script>/,'').replace(/<script[^>]*src="\.\/app.js"[^>]*><\/script>/,'<script type="module" src="./command-fixture.js"></script>'));
     return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:bytes});
   });
   await page.goto(origin);await page.waitForFunction(()=>window.fixtureReady);
@@ -124,7 +125,7 @@ for(const [name,state] of Object.entries({disconnected:{connected:false},noConne
   const f=await fixture(t,{state});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isDisabled(),true);await f.page.locator('#direct-command-invoke').evaluate(button=>{button.disabled=false;button.click();});assert.equal(f.calls.length,0);assert.equal(await f.stored(),null);
 });
 
-test('only eight commands and three canonical requirements exist and each approval is scope-bound',async t=>{
+test('only nine commands and three canonical requirements exist and each approval is scope-bound',async t=>{
   const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),commands);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
   assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-command').selectOption('check-setup-helper');assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.update({authGeneration:2});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(f.calls.length,0);
@@ -238,4 +239,59 @@ test('owner-valid numeric package segment acknowledges both the original and exp
 
 for(const packageName of ['com..123','.com.example','com.example.','com.example.12-3',' com.example.123','com.example.123\n','x'.repeat(255)+'.y'])test('malformed or oversized package token remains unknown '+JSON.stringify(packageName),async t=>{
   const f=await fixture(t,{respond:(route,body,value)=>{value.kioskDirectCommand.typedResult.selectedPackage=packageName;return route.fulfill({json:value});}});await f.invoke();assert.ok((await f.stored()).original);assert.equal(await f.page.evaluate(()=>window.latest),undefined);assert.equal(f.calls.length,1);
+});
+
+
+test('reload is admitted only as a separately approved null-value provider request',async t=>{
+  const f=await fixture(t);await f.page.locator('#direct-command-command').selectOption('reload');
+  assert.equal(await f.page.locator('#direct-command-invoke-confirm').isDisabled(),false);
+  await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].body.command,'reload');assert.equal(f.calls[0].body.value,null);
+  assert.equal(f.calls[0].saved.original.command,'reload');assert.equal(f.calls[0].saved.original.logicalRequestId,logical(f.calls[0].body.requestId));
+  assert.equal(await f.stored(),null);assert.match(await f.page.locator('#direct-command-state').textContent(),/provider reload acknowledged/i);
+  assert.match(await f.page.locator('#direct-command-state').textContent(),/foreground.*readiness.*unknown/i);
+});
+
+for(const [name,change] of [
+  ['not accepted',v=>v.kioskDirectCommand.typedResult.accepted=false],
+  ['not completed',v=>v.kioskDirectCommand.typedResult.completed=false],
+  ['pending Core receipt',v=>v.kioskDirectCommand.coreReceipt.stage='pending'],
+  ['unconfirmed original effect',v=>v.kioskDirectCommand.originalEffect='unknown'],
+  ['no original reconciliation',v=>v.kioskDirectCommand.reconcilesOriginal=false],
+  ['pending envelope',v=>v.state='pending'],
+  ['crossed typed command',v=>v.kioskDirectCommand.typedResult.command='status'],
+  ['crossed logical ID',v=>v.kioskDirectCommand.typedResult.requestId='kiosk_'+'f'.repeat(32)],
+  ['crossed connection',v=>v.kioskDirectCommand.connectionId='d1234567-1234-4234-8234-123456789abc'],
+  ['non-null value',v=>v.kioskDirectCommand.value='wifi-on'],
+  ['lifecycle alone',v=>{const d=v.kioskDirectCommand;d.typedResult=null;d.reconcilesOriginal=false;d.originalEffect='unknown';d.lifecycle={requestId:d.logicalRequestId,operationState:'confirmed',accepted:true,completed:true,enqueuedAtMs:1000,expiresAtMs:2000};}]
+])test('reload '+name+' cannot acknowledge the saved original',async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>{change(value);return route.fulfill({json:value});}});await f.invoke('reload');
+  assert.equal((await f.stored()).original.command,'reload');assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);assert.equal(await f.page.evaluate(()=>window.siblingBlocked),true);
+  assert.doesNotMatch(await f.page.locator('#direct-command-state').textContent(),/provider reload acknowledged/i);assert.equal(f.calls.length,1);
+});
+
+for(const pending of [true,null])test('reload acknowledges only the provider request even with unrelated pending launch '+pending,async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>{value.kioskDirectCommand.typedResult.pendingRequirementLaunch=pending;return route.fulfill({json:value});}});
+  await f.invoke('reload');assert.equal(await f.stored(),null);assert.match(await f.page.locator('#direct-command-state').textContent(),/provider reload acknowledged/i);assert.match(await f.page.locator('#direct-command-state').textContent(),/foreground.*readiness.*unknown/i);
+});
+
+test('lost reload survives reload and lifecycle status; only its explicit exact typed result recovers it',async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>body.action==='kiosk.direct.invoke'?route.abort('failed'):route.fulfill({json:value})});
+  await f.invoke('reload');const before=await f.stored(),id=before.original.requestId;assert.equal(before.original.command,'reload');assert.equal(before.original.value,null);
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);assert.deepEqual(await f.stored(),before);assert.equal(f.calls.length,1);
+  await f.recovery('request-status');assert.deepEqual(await f.stored(),before);assert.equal(f.calls.at(-1).body.originalRequestId,id);
+  await f.recovery('request-result');assert.equal(await f.stored(),null);assert.equal(f.calls.at(-1).body.originalRequestId,id);
+  assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);assert.match(await f.page.locator('#direct-command-state').textContent(),/provider reload acknowledged/i);
+});
+
+for(const [name,patch] of Object.entries({auth:{authGeneration:2},disconnect:{connected:false},connection:{connection:{...connection(),connectionId:'d1234567-1234-4234-8234-123456789abc'}},channel:{connection:{...connection(),productChannel:'labs'}}}))test('late reload reply after '+name+' preserves its exact original without projection',async t=>{
+  let release,held;const received=new Promise(resolve=>release=resolve);const f=await fixture(t,{respond:(route,body,value)=>{held=()=>route.fulfill({json:value});release();}});
+  const running=f.invoke('reload');try{await received;const before=await f.stored();await f.update(patch);await held();await running;assert.deepEqual(await f.stored(),before);assert.equal(await f.page.evaluate(()=>window.latest),undefined);assert.equal(f.calls.length,1);}finally{if(held)await held().catch(()=>{});await running;}
+});
+
+test('reload typed recovery leaves its separate uncertain cancellation and cleanup reference intact',async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>['kiosk.direct.invoke','kiosk.direct.request-cancel'].includes(body.action)?route.abort('failed'):route.fulfill({json:value})});
+  await f.invoke('reload');await f.cancel();const before=await f.stored(),cancel=before.cancellation;
+  await f.recovery('request-result');const after=await f.stored();assert.equal(after.original,null);assert.deepEqual(after.cancellation,cancel);assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);
+  assert.deepEqual(await f.page.evaluate(()=>window.view.getCleanupReference()),{sessionId:cancel.sessionId,connectionId:cancel.connectionId});assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);
 });

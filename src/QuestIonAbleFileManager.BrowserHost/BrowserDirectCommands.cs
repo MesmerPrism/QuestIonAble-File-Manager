@@ -124,6 +124,7 @@ public static class BrowserDirectCommands
         "status" => RustyKioskCommand.Status,
         "show-controls" => RustyKioskCommand.ShowControls,
         "show-apps" => RustyKioskCommand.ShowApps,
+        "reload" => RustyKioskCommand.Reload,
         "check-setup-helper" => RustyKioskCommand.CheckSetupHelper,
         "set-launch-requirement" => RustyKioskCommand.SetLaunchRequirement,
         "cancel-pending-launch" => RustyKioskCommand.CancelPendingLaunch,
