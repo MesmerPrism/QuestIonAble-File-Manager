@@ -22,9 +22,11 @@ internal sealed record LocalApiJournalEntry(
     string? ErrorCode,
     string? Error,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? OperationVersion = null);
+    string? OperationVersion = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    LocalApiV3JournalState? Diagnostic = null);
 
-internal sealed class LocalApiJournal : IDisposable
+internal sealed partial class LocalApiJournal : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -49,7 +51,6 @@ internal sealed class LocalApiJournal : IDisposable
         _key = settings.JournalIntegrityKey.ToArray();
         _maximumBytes = settings.Limits.MaximumJournalBytes;
         _fault = settings.JournalFault;
-        CleanupBoundedTemps();
     }
 
     public IReadOnlyList<LocalApiJournalEntry> Load()
@@ -87,11 +88,11 @@ internal sealed class LocalApiJournal : IDisposable
             _lastEnvelopeHash = envelopeHash;
             _anchorHandle = FleetWindowsFileSafety.OpenRetainedReadOnlyFile(_anchorPath);
             FleetWindowsFileSafety.ValidateFile(_anchorHandle.SafeFileHandle, _anchorPath, requireSingleLink: true);
-            var entries = JsonSerializer.Deserialize<LocalApiJournalEntry[]>(payload, Json) ?? [];
+            var entries = JsonSerializer.Deserialize<LocalApiJournalEntry[]>(payload, Json) ?? throw Damage();
             // Validate every version before registry recovery may delete an orphan or cleanup debt.
             // Older readers reject this new field through their strict unknown-member handling.
             if (entries.Any(static entry => entry.OperationVersion is not null &&
-                    entry.OperationVersion != LocalApiV2Contract.Version))
+                    entry.OperationVersion != LocalApiV2Contract.Version && entry.OperationVersion != LocalApiV3Contract.Version))
                 throw new LocalApiException("journal_version_unsupported", "A retained operation version is unsupported.");
             return entries;
         }
@@ -103,6 +104,7 @@ internal sealed class LocalApiJournal : IDisposable
 
     public void Save(IReadOnlyList<LocalApiJournalEntry> entries)
     {
+        EnsureV3Capacity(entries);
         Fault("before_save");
         var payload = JsonSerializer.SerializeToUtf8Bytes(entries, Json);
         var nextSequence = checked(_sequence + 1);
@@ -170,6 +172,8 @@ internal sealed class LocalApiJournal : IDisposable
             throw new LocalApiException("journal_temp_capacity", "Too many journal recovery files remain.");
         foreach (var name in names) TryDeleteTemp(name);
     }
+
+    internal void CleanupValidatedTemps() => CleanupBoundedTemps();
 
     private static LocalApiException Damage() =>
         new("journal_damaged", "The durable local API journal failed integrity validation.");

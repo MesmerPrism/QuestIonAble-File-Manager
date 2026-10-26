@@ -112,6 +112,8 @@ public sealed partial class LocalApiCommandRegistry
     {
         if (version == LocalApiContract.Version)
             return BuildCommand(request);
+        if (version != LocalApiV2Contract.Version)
+            throw Input("contract_unsupported", "The contract version is unsupported.");
         var v2 = new LocalApiV2PreflightRequest(version, request.Command, request.ApkPath,
             request.Serial!, request.InstallOptions, request.ExpiresInSeconds);
         v2.Validate();
@@ -120,9 +122,12 @@ public sealed partial class LocalApiCommandRegistry
 
     private static string ComputeDigestForVersion(
         OperatorCommand command, ApkArtifactInspection artifact, string version) =>
-        version == LocalApiContract.Version
-            ? ComputeCommandDigest(command, artifact)
-            : ComputeV2CommandDigest(command, artifact);
+        version switch
+        {
+            LocalApiContract.Version => ComputeCommandDigest(command, artifact),
+            LocalApiV2Contract.Version => ComputeV2CommandDigest(command, artifact),
+            _ => throw Input("contract_unsupported", "The command digest version requires its explicit domain.")
+        };
 
     private static string ComputeV2CommandDigest(OperatorCommand command, ApkArtifactInspection artifact)
     {

@@ -186,7 +186,7 @@ internal sealed class LocalApiDiagnosticUse(Action release) : IDisposable
 internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
 {
     private readonly string _root;
-    private readonly LocalApiDiagnosticInputLease? _input;
+    private LocalApiDiagnosticInputLease? _input;
     private LocalApiDiagnosticResourceSnapshot _inputSnapshot;
     private readonly long _inputSize;
     private readonly Func<LocalApiDiagnosticOutputSnapshot, CancellationToken, Task> _persist;
@@ -321,6 +321,33 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
     internal long MissingInputReservationBytes => _inputSnapshot.State is "planned" or "removed" ? 0 : _inputSize;
     internal LocalApiDiagnosticCaptureSink CreateSink() => new(this);
     internal LocalApiDiagnosticOutputSnapshot? LastAcknowledgedSnapshot => Volatile.Read(ref _lastAcknowledged);
+
+    // Registry-only first-execution seam, never used during load/status and never
+    // for an interrupted capture. The registry additionally binds the authenticated
+    // Preflighted/ready/unconsumed/output-not-started original and immutable digest.
+    // Success transfers this exact input loan into the existing reservation.
+    internal async Task ActivateNeverStartedAsync(LocalApiDiagnosticInputLease input, string expectedSha256,
+        DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            if (_disposed || _released || !_faulted || _input is not null || _captureStarted || _candidate is not null ||
+                _phase != "reserved" || now >= expiresAt || _activeReads != 0 ||
+                _resources.Any(resource => resource.State != "planned" || resource.Identity is not null || resource.DebtCode is not null) ||
+                _inputSnapshot.State is not ("owned" or "sealed") || _inputSnapshot.DebtCode is not null ||
+                _inputSnapshot.Identity != input.Identity || input.SizeBytes != _inputSize ||
+                input.Path != System.IO.Path.Combine(_root, _inputSnapshot.Leaf))
+                throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_first_execution_invalid");
+            input.Verify(); _validateRoot();
+            if (await input.HashAsync(token).ConfigureAwait(false) != expectedSha256)
+                throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_input_changed");
+            input.Verify(); _validateRoot();
+            _input = input; _faulted = false;
+            _recoveredInputWitness?.Dispose(); _recoveredInputWitness = null;
+        }
+        finally { _gate.Release(); }
+    }
     internal void VerifyInput(LocalApiDiagnosticInputLease input)
     {
         if (_input is null) throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_output_closed");
