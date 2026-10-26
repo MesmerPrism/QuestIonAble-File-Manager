@@ -228,3 +228,14 @@ test('native read reply crossing connection or form change cannot clear the orig
 test('cancel definitive predispatch rejection clears only its newly saved cancel reference',async t=>{
   const f=await fixture(t,{respond:(route,body)=>body.action==='kiosk.direct.invoke'?route.abort('failed'):route.fulfill({status:409,json:{error:'busy',dispatched:false}})});await f.invoke();const before=(await f.stored()).original;await f.cancel();assert.deepEqual((await f.stored()).original,before);assert.equal((await f.stored()).cancellation,null);assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);assert.equal(f.calls.length,2);
 });
+
+test('owner-valid numeric package segment acknowledges both the original and explicit typed recovery literally',async t=>{
+  const packageName='com.example.123';let lose=true;
+  const f=await fixture(t,{respond:(route,body,value)=>{if(value.kioskDirectCommand.typedResult)value.kioskDirectCommand.typedResult.selectedPackage=packageName;if(lose&&body.action==='kiosk.direct.invoke'){lose=false;return route.abort('failed');}return route.fulfill({json:value});}});
+  await f.invoke();assert.ok((await f.stored()).original);await f.recovery('request-result');assert.equal(await f.stored(),null);assert.equal(await f.page.evaluate(()=>window.latest.value.typedResult.selectedPackage),packageName);
+  await f.invoke();assert.equal(await f.stored(),null);assert.match(await f.page.locator('#direct-command-facts').textContent(),/com\.example\.123/);assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.invoke').length,2);
+});
+
+for(const packageName of ['com..123','.com.example','com.example.','com.example.12-3',' com.example.123','com.example.123\n','x'.repeat(255)+'.y'])test('malformed or oversized package token remains unknown '+JSON.stringify(packageName),async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>{value.kioskDirectCommand.typedResult.selectedPackage=packageName;return route.fulfill({json:value});}});await f.invoke();assert.ok((await f.stored()).original);assert.equal(await f.page.evaluate(()=>window.latest),undefined);assert.equal(f.calls.length,1);
+});

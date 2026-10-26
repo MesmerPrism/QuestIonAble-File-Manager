@@ -12,7 +12,7 @@ const usb = id => 'usb_' + id.replaceAll('-','');
 const valueValid = (command,value) => commands.has(command) && (command === 'set-launch-requirement' ? requirements.has(value) : value === null);
 const boolOrNull = value => value === null || typeof value === 'boolean';
 const keyValid = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && value.trim() === value && !/[\x00-\x1f\x7f-\x9f]/.test(value);
-const packageValid = value => typeof value === 'string' && value.length <= 256 && /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(value);
+const packageValid = value => typeof value === 'string' && value.length <= 256 && /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(value);
 const predispatch = new Set(['busy','session_capacity_reached','session_changed','unauthorized','origin_or_host_rejected','action_unsupported','confirmation_required','fields_invalid','request_invalid','content_type_invalid','body_size_invalid','request_body_timeout','request_id_invalid','field_invalid','duplicate_field','direct_unavailable','direct_connection_not_found','direct_connection_expired','direct_owner_stopping','direct_command_unsupported','direct_value_invalid','direct_original_unavailable','direct_original_mismatch']);
 function scope(value) {
   return value && session(value.sessionId) && guid(value.connectionId) && guid(value.connectRequestId) && value.usbOperationId === usb(value.connectRequestId) && serial(value.serial) && ['stable','labs'].includes(value.productChannel)
