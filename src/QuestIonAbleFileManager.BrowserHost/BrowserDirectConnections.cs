@@ -66,8 +66,9 @@ public sealed partial class BrowserDirectConnections
             {
                 entry=_entry is { } found && found.Id==request.ConnectionId ? found : throw new BrowserRequestException("direct_connection_not_found",404);
                 Expire(entry);
-                if((request.Action=="kiosk.direct.status" || request.IsCommand) && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
-                if(entry.Session is null || (request.Action=="kiosk.direct.status" || request.IsCommand) && (entry.State!="connected" || entry.Revoked || !entry.Published))
+                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action=="kiosk.direct.tags-export";
+                if(requiresLive && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
+                if(entry.Session is null || requiresLive && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
             }
             var metadata=request.IsCommand ? BrowserDirectCommandProjection.Metadata(request,entry,original) : null;
@@ -78,11 +79,13 @@ public sealed partial class BrowserDirectConnections
         }
     }
 
-    internal async Task<BrowserCommandOutcome> ExecuteAsync(Operation operation,CancellationToken cancellation)
+    internal async Task<BrowserCommandOutcome> ExecuteAsync(Operation operation,CancellationToken cancellation,
+        Func<KioskDirectTagExportLease,CancellationToken,Task<BrowserArtifactReceipt>>? stageTagExport=null)
     {
         var request=operation.Request; var entry=operation.Entry;
         try
         {
+            if(request.Action=="kiosk.direct.tags-export")return await ExecuteTagExportAsync(operation,stageTagExport,cancellation).ConfigureAwait(false);
             if(request.IsCommand)return await ExecuteCommandAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.connect-usb")
             {
