@@ -678,9 +678,11 @@ public sealed partial class AdbClient
         var method = "same-opened-handle-device-sha256";
         if (digest is null)
         {
-            var streamed = await StreamInstalledBaseApkAsync(
-                serial, basePaths[0], expectedArtifact.SizeBytes,
-                cancellationToken).ConfigureAwait(false);
+            var streamed = _runner is DiagnosticRequiredCommandRunner
+                ? await PullFileBoundedAsync(serial, basePaths[0], Stream.Null, expectedArtifact.SizeBytes,
+                    cancellationToken).ConfigureAwait(false)
+                : await StreamInstalledBaseApkAsync(serial, basePaths[0], expectedArtifact.SizeBytes,
+                    cancellationToken).ConfigureAwait(false);
             digest = (streamed.Sha256, streamed.BytesWritten);
             method = "host-streamed-sha256";
         }
