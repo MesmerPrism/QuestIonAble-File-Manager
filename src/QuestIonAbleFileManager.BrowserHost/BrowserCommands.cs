@@ -17,7 +17,9 @@ public sealed class BrowserCommands
     public const int MaximumRequestBytes = 4096;
     public const int MaximumRequests = 256;
     public static readonly string[] Actions =
-        ["devices", "device.status", "wifi.enable", "wifi.connect", "device.keep-awake", "device.normal"];
+        ["devices", "device.status", "wifi.enable", "wifi.connect", "wifi.disconnect", "device.keep-awake", "device.normal",
+         "files.list", "apk.list", "apk.permissions", "device.performance", "device.performance-clear",
+         "device.actor-observe", "device.actor-identity", "adb.forwards"];
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
@@ -120,15 +122,20 @@ public sealed class BrowserCommands
             var allowed = action switch
             {
                 "devices" => new[] { "requestId", "action" },
-                "device.status" => ["requestId", "action", "serial"],
+                "device.status" or "apk.list" or "adb.forwards" => ["requestId", "action", "serial"],
+                "files.list" => ["requestId", "action", "serial", "path"],
+                "apk.permissions" => ["requestId", "action", "serial", "package"],
+                "device.actor-observe" or "device.actor-identity" => ["requestId", "action", "serial", "pid"],
                 "wifi.enable" => ["requestId", "action", "serial", "port", "confirmed"],
-                "wifi.connect" => ["requestId", "action", "serial", "host", "port", "confirmed"],
+                "wifi.connect" or "wifi.disconnect" => ["requestId", "action", "serial", "host", "port", "confirmed"],
                 "device.keep-awake" => ["requestId", "action", "serial", "durationMilliseconds", "confirmed"],
-                "device.normal" => ["requestId", "action", "serial", "confirmed"],
+                "device.normal" or "device.performance-clear" => ["requestId", "action", "serial", "confirmed"],
+                "device.performance" => ["requestId", "action", "serial", "cpu", "gpu", "confirmed"],
                 _ => throw new BrowserRequestException("action_unsupported")
             };
             if (!names.SetEquals(allowed)) throw new BrowserRequestException("fields_invalid");
-            var mutation = action is not ("devices" or "device.status");
+            var mutation = action is "wifi.enable" or "wifi.connect" or "wifi.disconnect" or
+                "device.keep-awake" or "device.normal" or "device.performance" or "device.performance-clear";
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
             var serial = action == "devices" ? null : RequiredString(root, "serial");
@@ -136,8 +143,18 @@ public sealed class BrowserCommands
             {
                 "devices" => OperatorCommands.DiscoverDevices(),
                 "device.status" => OperatorCommands.ReadQuestControls(serial!),
+                "files.list" => OperatorCommands.ListFiles(serial!, RequiredString(root, "path")),
+                "apk.list" => OperatorCommands.ListPackages(serial!),
+                "apk.permissions" => OperatorCommands.ObservePackagePermissions(serial!, RequiredString(root, "package")),
+                "device.actor-observe" => OperatorCommands.ObserveDeviceActor(serial!, Integer(root, "pid", 1, int.MaxValue)),
+                "device.actor-identity" => OperatorCommands.ObserveDeviceActorIdentity(serial!, Integer(root, "pid", 1, int.MaxValue)),
+                "adb.forwards" => OperatorCommands.InventoryAdbForwards(serial!),
                 "wifi.enable" => OperatorCommands.EnableWifiAdb(serial!, Integer(root, "port", 1, 65535), true),
-                "wifi.connect" => Connect(root, serial!),
+                "wifi.connect" => WifiEndpoint(root, serial!, disconnect: false),
+                "wifi.disconnect" => WifiEndpoint(root, serial!, disconnect: true),
+                "device.performance" => OperatorCommands.SetQuestPerformance(serial!,
+                    PerformanceLevel(root, "cpu"), PerformanceLevel(root, "gpu"), operatorConfirmed: true),
+                "device.performance-clear" => OperatorCommands.SetQuestPerformance(serial!, null, null, clear: true, operatorConfirmed: true),
                 "device.keep-awake" => OperatorCommands.SetQuestKeepAwake(serial!, true,
                     Integer(root, "durationMilliseconds", 60000, 28800000), true),
                 "device.normal" => OperatorCommands.SetQuestKeepAwake(serial!, false, 60000, true),
@@ -150,16 +167,20 @@ public sealed class BrowserCommands
         { throw new BrowserRequestException("request_invalid"); }
     }
 
-    private static OperatorCommand Connect(JsonElement root, string serial)
+    private static OperatorCommand WifiEndpoint(JsonElement root, string serial, bool disconnect)
     {
         var host = RequiredString(root, "host");
         var port = Integer(root, "port", 1, 65535);
-        var command = OperatorCommands.ConnectWifiAdb(host, port, true);
+        var command = disconnect ? OperatorCommands.DisconnectWifiAdb(host, port, true) :
+            OperatorCommands.ConnectWifiAdb(host, port, true);
         // This confirms one endpoint, not canonical headset or boot identity.
         if (!string.Equals(serial, $"{command.WifiHost}:{port}", StringComparison.Ordinal))
             throw new BrowserRequestException("endpoint_target_mismatch");
         return command;
     }
+
+    private static int? PerformanceLevel(JsonElement root, string name) =>
+        root.GetProperty(name).ValueKind == JsonValueKind.Null ? null : Integer(root, name, 0, 5);
 
     private static string RequiredString(JsonElement root, string name)
     {
