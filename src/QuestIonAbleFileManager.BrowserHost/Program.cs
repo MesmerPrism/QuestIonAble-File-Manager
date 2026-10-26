@@ -49,12 +49,19 @@ var profileExecutor = new Lazy<OperatorCommandExecutor>(() => new(
 var profiles = new BrowserProfiles(
     (command, input, cancellation) => profileExecutor.Value.ExecuteAsync(command, cancellation, privateInput: input),
     new WindowsPrivateProfileInputReader(), OperatorPlatformCapabilities.Current.ConnectivityProfilesSupported);
+// Fleet status uses its own lazy owner: no ADB or connectivity-profile activation.
+var fleetExecutor = new Lazy<OperatorCommandExecutor>(() => new(
+    client: null,
+    fleetInstallerFactory: FleetInstallerHandoff.FromEnvironment,
+    connectivityProfilesFactory: () => throw new InvalidOperationException("fleet_profile_activation_forbidden")));
+var fleetStatus = new BrowserFleet((command, cancellation) => fleetExecutor.Value.ExecuteAsync(command, cancellation),
+    OperatorPlatformCapabilities.Current.FleetInstallerSupported);
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
 }, () => artifacts.Value, operationGate, BrowserArtifactStore.Capability.Supported ? transfers.ExecuteAsync : null,
-    directConnections, profiles);
+    directConnections, profiles, fleetStatus);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
@@ -127,7 +134,8 @@ app.MapGet("/browser/v1/session", () => new
     platformCapabilities = OperatorPlatformCapabilities.Current,
     artifactStaging = BrowserArtifactStore.Capability,
     retainedOperations = retained.Capability,
-    connectivityProfiles = profiles.Capability
+    connectivityProfiles = profiles.Capability,
+    fleetInstallerStatus = fleetStatus.Capability
 });
 BrowserArtifactRoutes.Map(app, () => artifacts.Value);
 BrowserRetainedRoutes.Map(app, retained);

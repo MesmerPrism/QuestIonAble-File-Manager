@@ -106,6 +106,7 @@ fields reject, and each action requires exactly its listed fields:
 | Action | Fields beyond `requestId` (nonempty GUID) and `action` |
 | --- | --- |
 | `devices` | none |
+| `fleet.status` | none (Windows Fleet release-status capability) |
 | `device.status` | `serial` |
 | `wifi.enable` | `serial`, `port`, `confirmed:true` |
 | `wifi.connect` | `serial` equal to `host:port`, `host`, `port`, `confirmed:true` |
@@ -615,6 +616,46 @@ contain no credential or full result. Connection close remains available for
 cleanup of this same connection while its command is unresolved. Closing erases
 the key and may end result recovery; listener cleanup never acknowledges a
 command. Expiry and host restart cannot reconstruct the old credential.
+
+## Optional Windows Fleet release status
+
+The **Fleet release status** card performs only the typed `fleet status` read.
+The session's `fleetInstallerStatus` capability reports Windows implementation
+support; it does not probe configuration, trusted metadata, installed services
+or replay state. Only **Read Fleet release status** activates the dedicated lazy
+owner. No ready device, ADB client, connectivity profile, Direct connection or
+Native API configuration is required. Other platforms show the Windows owner
+alternative. No guided-install route or button is exposed.
+
+The read uses the host's existing trusted release source and channel. It may
+fetch signed metadata and open protected local replay evidence; this is not an
+offline-only or filesystem-free observation. The owner verifies its normal
+trust and replay boundary. The browser accepts no source URL, path, release
+selector or trust override. A configured source can be Stable or Labs; the
+card reports the observed host configuration without changing it.
+
+`POST /browser/v1/execute` accepts exactly `requestId` and `action:"fleet.status"`.
+A completed response has `result:null`, `mutation:null` and
+`fleet:{operation:"status",status:{...}}`. The closed status fields are
+`schema`, `status`, `configured`, `sourceKind`, `product`, `version`, `channel`,
+`descriptorId`, `descriptorSha256`, `highestHandoffVersion`, `lastOutcome` and
+`observedAtMs`. An unconfigured owner returns the completed `not_configured`
+observation with null release/history fields. Configured status is `ready`,
+`already_handed_off` or `not_newer_than_last_handoff`. These are release/replay
+facts, not installed-service health, connectivity, enrollment or acknowledgement
+of any previous operation. Unknown owner history text becomes `unknown`.
+
+Failed reads return only fixed configuration, release, replay, timeout,
+cancellation or binding codes. Raw owner results, paths, URLs, process output
+and exception text are omitted. The existing five-second body and 90-second
+read deadlines remain unchanged. The shared ledger and operation gate retain
+the read until its task ends; duplicate IDs cannot dispatch it again. A lost
+reply creates no mutation reference, and the UI stores no status or request in
+browser storage. A separate explicit read is allowed while an older mutation
+is unknown, but never clears or reconciles that original. Reload, authentication,
+target changes and online events send no Fleet request. See the
+[Fleet installer owner guide](fleet-installer-handoff.md) for the separate typed
+Windows CLI/WPF guided-install workflow and its protected replay authority.
 
 ## Local Windows connectivity profiles
 

@@ -78,7 +78,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -393,4 +393,42 @@ for (const kind of ['command-only','other-original','changed-host-command','cros
     assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.close').length,0,'Execute-time guard refuses the crossed or additional-owner exemption');
   }
   assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-command-v1'))),commandReference,'Cleanup never acknowledges a command');
+});
+
+const fleetSession = route => route.fulfill({json:{sessionId:'fixture-session',actions:['devices','device.status','device.keep-awake','fleet.status'],fleetInstallerStatus:{supported:true}}});
+const fleetReply = body => ({requestId:body.requestId,action:'fleet.status',state:'completed',result:null,mutation:null,fleet:{operation:'status',status:{
+  schema:'questionable.file_manager.fleet_installer_status.v1',status:'ready',configured:true,sourceKind:'embedded_pages_metadata',product:'rusty-fleet-labs',version:'1.2.3',channel:'labs',descriptorId:'fixture-release',descriptorSha256:'a'.repeat(64),highestHandoffVersion:null,lastOutcome:null,observedAtMs:1770000000000}}});
+test('real app Fleet status is explicit, host scoped and independent of a ready device',async t=>{
+  const f=await fixture(t,{session:fleetSession,mutation:({route,body})=>route.fulfill({json:fleetReply(body)})});
+  assert.equal(await f.page.locator('#fleet-status-read').isDisabled(),true);assert.equal(f.calls.length,0);
+  await f.connect();assert.equal(f.calls.length,1);assert.equal(await f.page.locator('#fleet-status-read').isDisabled(),false);
+  await f.page.locator('#fleet-status-read').click();await f.settled();
+  assert.equal(f.calls.length,2);assert.deepEqual(Object.keys(f.calls[1].body).sort(),['action','requestId']);
+  assert.equal(await f.page.locator('#fleet-status-product').textContent(),'rusty-fleet-labs');
+  assert.equal(await f.page.locator('#fleet-status-version').textContent(),'1.2.3');
+  assert.equal(await f.page.evaluate(()=>Object.keys(sessionStorage).some(key=>key.includes('fleet'))),false);
+});
+for(const kind of ['generic','profile'])test(`real app Fleet status never acknowledges an unresolved ${kind} write`,async t=>{
+  const f=await fixture(t,{session:fleetSession,mutation:({route,body})=>route.fulfill({json:fleetReply(body)})});
+  const key=kind==='generic'?originalKey:'qfm-browser-profile-v1';
+  const original=kind==='generic'?{requestId:'55555555-5555-4555-8555-555555555555',sessionId:'fixture-session',action:'device.keep-awake',target:'FIXTURE-A'}:
+    {requestId:'33333333-3333-4333-8333-333333333333',sessionId:'fixture-session',action:'profile.revoke',deviceId:'fixture-profile'};
+  await f.page.evaluate(({key,original})=>sessionStorage.setItem(key,JSON.stringify(original)),{key,original});await f.page.reload();
+  assert.equal(f.calls.length,0);await f.connect();await f.selectA();
+  assert.equal(await f.page.locator('#fleet-status-read').isDisabled(),false);
+  await f.page.locator('#fleet-status-read').click();await f.settled();await f.page.locator('#power-confirm').check();
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  assert.deepEqual(await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),key),original);
+  assert.equal(f.calls.filter(call=>call.body?.action==='fleet.status').length,1);
+  assert.equal(f.calls.filter(call=>call.method==='GET'&&call.path.includes('/requests/')).length,0);
+});
+test('real app Fleet read reply is discarded after authentication is cleared',async t=>{
+  let release,entered;const started=new Promise(resolve=>entered=resolve),held=new Promise(resolve=>release=resolve);
+  const f=await fixture(t,{session:fleetSession,mutation:async({route,body})=>{entered();await held;return route.fulfill({json:fleetReply(body)});}});
+  await f.connect();await f.page.locator('#fleet-status-read').click();await started;
+  await f.page.locator('#disconnect-host').click();release();
+  await f.page.waitForFunction(()=>document.querySelector('#connect').disabled===false);
+  assert.equal(await f.page.locator('#fleet-status-facts').isHidden(),true);
+  assert.equal(await f.page.locator('#fleet-status-read').isDisabled(),true);
+  assert.equal((await f.page.locator('#result-json').textContent()).includes('fixture-release'),false);
 });

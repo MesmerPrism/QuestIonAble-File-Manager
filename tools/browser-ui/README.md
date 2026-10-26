@@ -13,6 +13,7 @@ node --test tools/browser-ui/kiosk.test.cjs
 node --test tools/browser-ui/direct-connection.test.cjs
 node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
+node --test tools/browser-ui/fleet-status.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -83,3 +84,11 @@ private-field/buffer clearing, explicit replacement/revoke, exact rollback
 semantics, lost originals, auth generations and cross-view blocking. They never
 open Credential Manager or a real profile, ADB/Fleet provider, host or device.
 Local record validity is distinct from connectivity and lost-write identity.
+
+Fleet status fixtures intercept every URL and inject only synthetic status
+receipts. They cover explicit target-free reads, unavailable/configured states,
+closed safe projections, lost replies, authentication generations, unchanged
+sibling UNKNOWN references, no storage/replay, and desktop/mobile controls.
+They never resolve real Fleet configuration, metadata or protected replay state.
+The real-app suite also verifies that the card is capability-gated and does not
+acknowledge generic or profile writes.

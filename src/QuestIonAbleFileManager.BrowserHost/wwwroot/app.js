@@ -8,11 +8,12 @@ import {createKioskView} from './kiosk-view.js';
 import {createDirectConnectionView} from './direct-connection-view.js';
 import {createDirectCommandView} from './direct-command-view.js';
 import {createProfileView} from './profile-view.js';
+import {createFleetStatusView} from './fleet-status-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
-  artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false}, profileCapability:{supported:false}, stagingGeneration:0 };
-let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, directCommandView, profileView;
+  artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false}, profileCapability:{supported:false}, fleetStatusCapability:{supported:false}, stagingGeneration:0 };
+let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, directCommandView, profileView, fleetStatusView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -67,6 +68,7 @@ function controls() {
   directConnectionView?.update();
   directCommandView?.update();
   profileView?.update();
+  fleetStatusView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -137,6 +139,7 @@ byId('connect-form').addEventListener('submit', async event => {
     host.artifactStaging=session.artifactStaging || {supported:false};
     if(byId('artifact-limits'))text('artifact-limits',host.artifactStaging.supported ? `Protected staging: up to ${artifactBytes(artifactMaximum())} per file, ${host.artifactStaging.maximumFiles || 8} files and ${artifactBytes(host.artifactStaging.maximumTotalBytes || 512*1024*1024)} total in this host process. Captures and retained owner copies have separate custody. Streaming save is offered where the browser supports it; buffered fallback is limited to 256 MiB.` : 'Protected staging is unavailable on this host. Use the configured Windows companion or current QFM CLI.');
     host.retainedCapability=session.retainedOperations || {supported:false,reason:'This host has no configured retained operation owner.',alternative:'Use the current typed CLI or configure the Windows companion using the guide.'};
+    host.fleetStatusCapability=session.fleetInstallerStatus || {supported:false};
     host.profileCapability=session.connectivityProfiles || {supported:false,reason:'This host does not offer local connectivity profile management.',alternative:'Use the Windows companion or typed connectivity-profile CLI.'};
     if(host.artifactSession && host.artifactSession!==host.session){host.artifact=null;clearApkInspection();text('artifact-state','Host session changed. Select and stage bytes again; old handles cannot be reused.');}
     text('artifact-capability',host.artifactStaging.supported ? 'Protected transient staging is supported on this Windows host when its temporary volume and permissions are valid.' : (host.artifactStaging.reason || 'This host does not offer protected browser staging.')+' '+(host.artifactStaging.alternative || 'Use the Windows companion or current QFM desktop/CLI.'));
@@ -211,6 +214,7 @@ const directCleanupConnectionId = () => {
 directConnectionView=createDirectConnectionView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,externalUnresolved:otherDirectBlockers() || Boolean(directCommandView?.hasUnresolved()),cleanupConnectionId:directCleanupConnectionId()}),setBusy:value=>{host.busy=value;controls();},showResult});
 directCommandView=createDirectCommandView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,authGeneration:connectionGeneration,connection:directConnectionView?.getConnectionReference(),externalUnresolved:otherDirectBlockers() || Boolean(directConnectionView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 profileView=createProfileView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.profileCapability,authGeneration:connectionGeneration,selected:readySelected() || null,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+fleetStatusView=createFleetStatusView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.fleetStatusCapability,authGeneration:connectionGeneration}),setBusy:value=>{host.busy=value;controls();},showResult});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {
