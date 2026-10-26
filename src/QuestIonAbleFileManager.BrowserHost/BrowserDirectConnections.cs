@@ -13,7 +13,7 @@ internal interface IBrowserDirectSession
 }
 
 /// <summary>One native memory-only connection. Handles and receipts never contain its credential or endpoint.</summary>
-public sealed class BrowserDirectConnections
+public sealed partial class BrowserDirectConnections
 {
     private readonly object _sync = new();
     private readonly Func<BrowserDirectConnectContext,CancellationToken,Task<IBrowserDirectSession>> _connect;
@@ -49,7 +49,7 @@ public sealed class BrowserDirectConnections
         }
     }
 
-    internal Operation Reserve(BrowserDirectRequest request,string hostSession)
+    internal Operation Reserve(BrowserDirectRequest request,string hostSession,BrowserDirectCommandOutcome? original=null)
     {
         lock(_sync)
         {
@@ -66,11 +66,12 @@ public sealed class BrowserDirectConnections
             {
                 entry=_entry is { } found && found.Id==request.ConnectionId ? found : throw new BrowserRequestException("direct_connection_not_found",404);
                 Expire(entry);
-                if(request.Action=="kiosk.direct.status" && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
-                if(entry.Session is null || request.Action=="kiosk.direct.status" && entry.State!="connected")
+                if((request.Action=="kiosk.direct.status" || request.IsCommand) && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
+                if(entry.Session is null || (request.Action=="kiosk.direct.status" || request.IsCommand) && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
             }
-            var operation=new Operation(request,entry);
+            var metadata=request.IsCommand ? BrowserDirectCommandProjection.Metadata(request,entry,original) : null;
+            var operation=new Operation(request,entry,metadata);
             _hostSession=hostSession;
             if(request.Action=="kiosk.direct.connect-usb")_entry=entry;
             return _active=operation;
@@ -82,6 +83,7 @@ public sealed class BrowserDirectConnections
         var request=operation.Request; var entry=operation.Entry;
         try
         {
+            if(request.IsCommand)return await ExecuteCommandAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.connect-usb")
             {
                 entry.Session=await _connect(entry.Context,cancellation).ConfigureAwait(false);
@@ -133,6 +135,8 @@ public sealed class BrowserDirectConnections
                 }
                 else entry.State="unavailable";
             }
+            if(request.IsCommand)return new(request.RequestId,request.Action,request.Mutation?"outcomeUnknown":"failed",
+                Error:"direct_command_unknown",KioskDirectCommand:operation.CommandMetadata);
             return Outcome(request,entry,request.Mutation?"outcomeUnknown":"failed",
                 request.Mutation?"direct_operation_unknown":"direct_status_unavailable");
         }
@@ -219,7 +223,7 @@ public sealed class BrowserDirectConnections
         internal string? RemoteSession; internal long? RemoteGeneration;
         internal BrowserDirectAdoption? Adoption; internal BrowserDirectCleanup? Cleanup;
     }
-    internal sealed record Operation(BrowserDirectRequest Request,Entry Entry)
+    internal sealed record Operation(BrowserDirectRequest Request,Entry Entry,BrowserDirectCommandOutcome? CommandMetadata=null)
     { internal TaskCompletionSource Completion {get;}=new(TaskCreationOptions.RunContinuationsAsynchronously); }
 
     private sealed class NativeSession(RustyKioskUsbDirectLinkSession session):IBrowserDirectSession

@@ -14,7 +14,8 @@ public sealed record BrowserCommandOutcome(
     BrowserArtifactPushOutcome? ArtifactPush = null,
     BrowserKioskOutcome? Kiosk = null,
     BrowserDirectConnectionOutcome? KioskDirectConnection = null,
-    BrowserProfileOutcome? Profile = null);
+    BrowserProfileOutcome? Profile = null,
+    BrowserDirectCommandOutcome? KioskDirectCommand = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
