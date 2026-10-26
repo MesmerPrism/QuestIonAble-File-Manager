@@ -17,6 +17,114 @@ public sealed class QuestConnectivityProfileManagementTests
     private const string PairingCode = "ABCD-EFGH-JKMN-PQRS";
 
     [Fact]
+    public void ValidatedEnrollmentIdBorrowsPrivateBytesAndReturnsOnlyCanonicalId()
+    {
+        var document = Enrollment();
+        var original = document.ToArray();
+        try
+        {
+            var id = QuestConnectivityProfileEnrollmentDocument.GetValidatedDeviceId(document);
+            Assert.Equal(DeviceId, id);
+            Assert.Equal(original, document);
+            Assert.Equal(DeviceId, QuestConnectivityProfileEnrollmentDocument.GetValidatedDeviceId(document));
+            Assert.DoesNotContain(PairingCode, JsonSerializer.Serialize(id), StringComparison.Ordinal);
+            Assert.DoesNotContain("QUEST-USB-123", id, StringComparison.Ordinal);
+            Assert.DoesNotContain(Target, id, StringComparison.Ordinal);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(document);
+            CryptographicOperations.ZeroMemory(original);
+        }
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(4097)]
+    public void ValidatedEnrollmentIdRejectsNullEmptyOrOversizedInputWithOwnerCode(int length)
+    {
+        byte[]? document = length < 0 ? null : new byte[length];
+        var original = document?.ToArray();
+        var exception = Assert.Throws<QuestConnectivityProfileManagementException>(() =>
+            QuestConnectivityProfileEnrollmentDocument.GetValidatedDeviceId(document!));
+        Assert.Equal("profileInputSizeInvalid", exception.Code);
+        Assert.Equal("rejected", exception.Status);
+        Assert.Equal(original, document);
+    }
+
+    [Fact]
+    public void ValidatedEnrollmentIdAcceptsExactOwnerByteCeilingWithoutTrimmingCallerBuffer()
+    {
+        var enrollment = Enrollment();
+        var document = Enumerable.Repeat((byte)' ', QuestConnectivityProfileManagementContract.MaximumPrivateInputBytes).ToArray();
+        enrollment.CopyTo(document, 0);
+        var original = document.ToArray();
+        try
+        {
+            Assert.Equal(DeviceId, QuestConnectivityProfileEnrollmentDocument.GetValidatedDeviceId(document));
+            Assert.Equal(original, document);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(enrollment);
+            CryptographicOperations.ZeroMemory(document);
+            CryptographicOperations.ZeroMemory(original);
+        }
+    }
+
+    [Theory]
+    [InlineData("schema", "profileSchemaInvalid")]
+    [InlineData("id", "profileDeviceIdInvalid")]
+    [InlineData("target", "profileTargetInvalid")]
+    [InlineData("usb", "profileDocumentInvalid")]
+    [InlineData("endpoint", "profileDocumentInvalid")]
+    [InlineData("public-endpoint", "profileDocumentInvalid")]
+    [InlineData("code", "profilePairingCodeInvalid")]
+    [InlineData("escaped-code", "profilePairingCodeInvalid")]
+    [InlineData("duplicate-id", "profileDocumentInvalid")]
+    [InlineData("duplicate-code", "profileDocumentInvalid")]
+    [InlineData("extra", "profileDocumentInvalid")]
+    [InlineData("depth", "profileDocumentInvalid")]
+    [InlineData("json", "profileDocumentInvalid")]
+    public void ValidatedEnrollmentIdReusesStrictOwnerValidationWithoutLeakingOrChangingInput(string fault, string code)
+    {
+        var text = Encoding.UTF8.GetString(Enrollment());
+        text = fault switch
+        {
+            "schema" => text.Replace(QuestConnectivityProfileManagementContract.EnrollmentSchema, "private-sentinel"),
+            "id" => text.Replace(DeviceId, "Fleet-Device-1"),
+            "target" => text.Replace(Target, "private-sentinel/other-target"),
+            "usb" => text.Replace("QUEST-USB-123", "192.0.2.42:5555"),
+            "endpoint" => text.Replace("http://", "https://"),
+            "public-endpoint" => text.Replace("192.168.137.42", "198.51.100.42"),
+            "code" => text.Replace(PairingCode, "too-short"),
+            "escaped-code" => text.Replace(PairingCode, "\\u0041BCD-EFGH-JKMN-PQRS"),
+            "duplicate-id" => text.Replace("{", "{\"device_id\":\"private-sentinel\","),
+            "duplicate-code" => text.Replace("{", "{\"pairing_code\":\"private-sentinel\","),
+            "extra" => text.Replace("{", "{\"private-sentinel\":\"private-sentinel\","),
+            "depth" => "{\"private-sentinel\":{\"nested\":{\"deeper\":{}}}}",
+            _ => "{private-sentinel"
+        };
+        var document = Encoding.UTF8.GetBytes(text);
+        var original = document.ToArray();
+        try
+        {
+            var exception = Assert.Throws<QuestConnectivityProfileManagementException>(() =>
+                QuestConnectivityProfileEnrollmentDocument.GetValidatedDeviceId(document));
+            Assert.Equal(code, exception.Code);
+            Assert.Equal(original, document);
+            foreach (var privateValue in new[] { "private-sentinel", "too-short", PairingCode, "QUEST-USB-123", "192.168.137.42", Target, DeviceId })
+                Assert.DoesNotContain(privateValue, exception.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(document);
+            CryptographicOperations.ZeroMemory(original);
+        }
+    }
+
+    [Fact]
     public async Task TypedExecutorCreatesListsStatusesReplacesAndRevokesWithoutProjectingSecrets()
     {
         var store = new MemoryCredentialStore();
