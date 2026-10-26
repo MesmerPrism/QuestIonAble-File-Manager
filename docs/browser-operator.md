@@ -117,6 +117,7 @@ fields reject, and each action requires exactly its listed fields:
 | `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
 | `apk.preflight` | `serial`, `artifactId`, `sha256`, `sizeBytes` |
 | `runtime.observe` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `verification` exactly `exact` or `development-metadata` |
+| `files.push` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `remotePath` (full absolute destination filename), `confirmOverwrite` exactly `true` |
 | `files.pull` | `serial`, `remotePath` (one absolute headset file), `fileName` (simple download label) |
 | `apk.export` | `serial`, `package`, `fileName` (simple label ending in `.apk`) |
 
@@ -233,8 +234,8 @@ recovery or authorize scavenging unrelated files.
 
 Transient staging performs local transport and inspection. The separate retained
 workflow below owns inspected single-APK install, launch and runtime observation.
-Device file push and the remaining advanced deployment options still use the
-existing typed CLI/WPF during migration.
+Remaining advanced deployment options use the existing typed CLI/WPF during
+migration.
 
 ## APK readiness and runtime reads
 
@@ -267,6 +268,36 @@ and rejects late responses from an earlier authentication or selection. It never
 persists or replays these reads, chooses a fallback verification policy, or
 clears an original unknown mutation. An explicit local connector connection
 can still read a USB headset while the wider network is offline.
+
+## Upload and push one file
+
+The separate file-upload view stages a chosen file through the same protected
+artifact route and capacity limits as APK upload. Its receipt stays in tab
+memory and does not replace a selected APK, download capture or retained
+operation. Choose one ready headset and a full absolute destination filename,
+then explicitly approve that this write can overwrite an existing file. Changing
+source, target, destination or authentication clears approval.
+
+`files.push` uses the immutable source lease, current one-use request ledger and
+shared operation gate for the complete Core call. It accepts no host path, shell
+or replacement command arguments. Its typed `artifactPush` result binds the
+staged receipt, serial, destination, `verification: "remote-size"` and
+`remoteSizeVerified`, alongside a sanitized Core mutation receipt. Raw command
+vectors, host paths and process output are omitted. Completion requires a
+matching confirmed receipt and destination size. The Core destination checks
+reject observed directories, final symlinks and other nonregular files; these
+checks do not establish ancestor custody, atomic publication or remote SHA-256.
+
+The browser saves a small original request reference before sending the write.
+Lost, pending or crossed replies preserve uncertainty and block further device
+changes. Reload, reconnect and connectivity events never resend. Explicit
+original-result lookup uses the recorded request/session independently of the
+currently selected target. A restarted host has a new session and cannot recover
+the prior in-memory ledger; preserve the reference and use the typed owner/manual
+recovery route. A current file read alone cannot prove an earlier write's history
+or restore overwritten bytes. Removing transient source bytes does not clear an
+unknown write. No Native API configuration or additional journal is required by
+this existing transient control family.
 
 ## Bounded file pull and single-APK export
 

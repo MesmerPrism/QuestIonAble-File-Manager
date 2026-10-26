@@ -77,7 +77,7 @@ app.Use(async (context, next) =>
             catch (BrowserRequestException exception)
             {
                 context.Response.StatusCode = exception.StatusCode;
-                await context.Response.WriteAsJsonAsync(new { error = exception.Code, dispatched = exception.Dispatched });
+                await context.Response.WriteAsJsonAsync(RequestError(exception));
                 return;
             }
         }
@@ -148,7 +148,7 @@ app.MapPost("/browser/v1/execute", async (HttpContext context) =>
         return Results.Json(await commands.ExecuteAsync(buffer.ToArray(), app.Lifetime.ApplicationStopping));
     }
     catch (BrowserRequestException exception)
-    { return Results.Json(new { error = exception.Code, dispatched = exception.Dispatched }, statusCode: exception.StatusCode); }
+    { return Results.Json(RequestError(exception), statusCode: exception.StatusCode); }
     catch (BadHttpRequestException exception) when (exception.StatusCode == 413)
     { return Results.Json(new { error = "body_size_invalid", dispatched = false }, statusCode: 413); }
     catch (OperationCanceledException)
@@ -169,3 +169,10 @@ finally
     }
 }
 return shutdownCode;
+
+static Dictionary<string, object> RequestError(BrowserRequestException exception)
+{
+    var response = new Dictionary<string, object> { ["error"] = exception.Code };
+    if (exception.Dispatched is { } dispatched) response["dispatched"] = dispatched;
+    return response;
+}

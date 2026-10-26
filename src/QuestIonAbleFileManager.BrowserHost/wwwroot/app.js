@@ -3,11 +3,12 @@ import {createRetainedView} from './retained-view.js';
 import {createTransferView} from './transfer-view.js';
 import {saveArtifact} from './verified-download.js';
 import {createApkReadView} from './apk-read-view.js';
+import {createFilePushView} from './file-push-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
-  artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false} };
-let retainedView, transferView, apkReadView;
+  artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false}, stagingGeneration:0 };
+let retainedView, transferView, apkReadView, filePushView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -29,7 +30,7 @@ const saveOwnedArtifact = receipt => {
 const artifactBytes = value => value >= 1024*1024*1024 ? `${value/(1024*1024*1024)} GiB` : `${value/(1024*1024)} MiB`;
 function controls() {
   const connected = localHostMode && Boolean(host.token && host.session), ready = Boolean(readySelected());
-  const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved();
+  const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved() && !filePushView?.hasUnresolved();
   byId('refresh').disabled = !connected || host.busy;
   byId('read-status').disabled = !connected || !ready || host.busy;
   byId('apply-hold').disabled = !mutatable || !ready || !byId('power-confirm').checked;
@@ -57,6 +58,7 @@ function controls() {
   retainedView?.update();
   transferView?.update();
   apkReadView?.update();
+  filePushView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -108,7 +110,7 @@ function consume(value, action, projectLive = true) {
   if (host.original && value.requestId === host.original.requestId && ((value.state === 'completed' && (!mutations.has(action) || receiptConfirmed || endpointReady)) || value.state === 'failed')) recordOriginal(null);
 }
 async function execute(action, fields = {}) {
-  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && (host.original || retainedView?.hasUnresolved()))) return;
+  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && (host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved()))) return;
   const requestId = crypto.randomUUID(); host.busy = true;
   const generation = connectionGeneration;
   if (mutations.has(action)) recordOriginal({ requestId, sessionId:host.session, action, target:fields.serial || fields.host });
@@ -172,7 +174,7 @@ async function localArtifactOperation(operation){
 byId('artifact-form').addEventListener('submit',event=>{event.preventDefault();if(byId('stage-apk').disabled)return;const file=byId('apk-upload').files[0],name=byId('artifact-name').value;if(!file || file.size>artifactMaximum()){text('artifact-state',`Choose one APK no larger than ${artifactMaximum()} bytes.`);return;}localArtifactOperation(async generation=>{const session=host.session;const value=await api('/browser/v1/artifacts',{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream','X-Qfm-File-Name':name}});host.artifact=value.artifact;host.artifactSession=session;if(generation===connectionGeneration)text('artifact-state',`${value.artifact.fileName} staged locally: ${value.artifact.sizeBytes} bytes, SHA-256 ${value.artifact.sha256}.`);});});
 byId('inspect-apk').addEventListener('click',()=>{if(byId('inspect-apk').disabled)return;const artifact=host.artifact;clearApkInspection();text('artifact-state','Reading the staged APK through shared Core inspection…');execute('apk.inspect',{artifactId:artifact.id,sha256:artifact.sha256,sizeBytes:artifact.sizeBytes});});
 byId('remove-artifact').addEventListener('click',()=>{if(byId('remove-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async generation=>{await api(`/browser/v1/artifacts/${artifact.id}`,{method:'DELETE'});if(host.artifact?.id===artifact.id)host.artifact=null;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Staged file removed. Original file unchanged.');}});});
-byId('clear-artifacts').addEventListener('click',()=>{if(byId('clear-artifacts').disabled)return;localArtifactOperation(async generation=>{await api('/browser/v1/artifacts/cleanup',{method:'POST'});host.artifact=null;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Unleased staged files cleared. Original files unchanged.');}});});
+byId('clear-artifacts').addEventListener('click',()=>{if(byId('clear-artifacts').disabled)return;localArtifactOperation(async generation=>{await api('/browser/v1/artifacts/cleanup',{method:'POST'});host.artifact=null;host.stagingGeneration++;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Unleased staged files cleared. Original files unchanged.');}});});
 byId('download-artifact').addEventListener('click',()=>{if(byId('download-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async generation=>{const result=await saveOwnedArtifact(artifact);if(generation===connectionGeneration)text('artifact-state',result.state==='saved'?'Staged bytes saved after exact size and SHA-256 verification.':'Staged bytes verified; download handed to the browser.');});});
 byId('reconcile').addEventListener('click',async()=>{if(!host.original||host.busy)return;const original=host.original,generation=connectionGeneration;host.busy=true;controls();try{consume(await api(`/browser/v1/requests/${original.requestId}`),original.action,generation===connectionGeneration && Boolean(host.token && host.session));}catch(error){showResult(original,`Original result unavailable: ${error.message}. Do not replay.`);}finally{host.busy=false;controls();}});
 for(const mode of ['host','usb'])byId(`${mode}-tab`).addEventListener('click',()=>{for(const name of ['host','usb']){byId(`${name}-view`).hidden=name!==mode;if(name===mode)byId(`${name}-tab`).setAttribute('aria-current','page');else byId(`${name}-tab`).removeAttribute('aria-current');}});
@@ -187,9 +189,10 @@ byId('usb-selection').addEventListener('change',()=>{byId('usb-reading').hidden=
 byId('usb-read').addEventListener('click',()=>usbAction(()=>usb.read(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-reconnect').addEventListener('click',()=>usbAction(()=>usb.reconnect(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-disconnect').addEventListener('click',()=>usbAction(()=>usb.disconnect(byId('usb-selection').value)));
-retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original)}),setBusy:value=>{host.busy=value;controls();},showResult});
+retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original || filePushView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 transferView=createTransferView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,selectedPackage:byId('package-name').value,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult,saveArtifact:saveOwnedArtifact});
 apkReadView=createApkReadView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult});
+filePushView=createFilePushView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,artifactStaging:host.artifactStaging,stagingGeneration:host.stagingGeneration,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {
