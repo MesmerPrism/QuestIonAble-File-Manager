@@ -1,0 +1,11 @@
+[
+  {
+    "name": "@noble/hashes",
+    "version": "2.4.0",
+    "license": "MIT",
+    "sourceCommit": "663c2aeeffc308ac0cded59bd32f7c212adacfc2",
+    "packageIntegrity": "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==",
+    "licenseSha256": "4f221aee6e072336700c408c68ab3b96a3fc09f6aebe6f48f1bd99e5ef13faec",
+    "bundleSha256": "8ed2639cac9f9ad111da730a187182b5e491c66beccb73efaf2bb271b69d73b5"
+  }
+]
