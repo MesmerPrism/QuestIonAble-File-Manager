@@ -174,3 +174,67 @@ readback remains unknown/pending, and application/OpenXR readiness remains
 unknown. Restart never replays consumed operations; interrupted mutations
 become unknown. Terminal and unknown records retain the existing bounded
 24-hour default lifetime and journal-before-delete cleanup-debt behavior.
+
+## V3 retained diagnostics in Core
+
+Core also provides the closed
+`questionable.file_manager.local_api.v3` contract for `apk.diagnose`.
+This slice is an in-process registry API; the dedicated HTTP executable and
+browser do not yet expose v3 routes. The existing CLI diagnostic command keeps
+its separate explicit directory-output workflow.
+
+The registry provides `GetV3Capabilities`, `PreflightV3Async`,
+`ExecuteV3Async`, `GetV3Status`, `CancelV3`, and
+`AcquireDiagnosticOutputAsync`. It uses the same configured state directory,
+integrity key, journal, anchor, exclusive owner and shared capacity as v1/v2.
+The diagnostic path requires Windows NTFS staging and SDK Build Tools. Its
+capabilities describe implementation limits; preparation validates the actual
+source, target and storage.
+
+Preflight accepts only the exact v3 version, `apk.diagnose`, one local base APK,
+one ready serial and optional expiry. The default approval lifetime is
+120 seconds, with a 300-second maximum. Source inspection precedes a durable,
+non-executable `preparing` row; copying and staged reinspection must finish
+before approval becomes executable. Expiry starts at that first commit.
+An unconsumed, unexpired ready approval survives restart for its first explicit
+execution. Interrupted preparation or execution is never resumed automatically.
+
+The command digest binds immutable APK facts, target, generated output intent
+and all process/resource limits. Execute, status and cancel bind the original
+operation ID and digest; callers cannot replace command arguments. Admitted
+execution outlives a disconnected page. Cancellation is a request until actual
+runner, cleanup and journal acknowledgements finish. Disposal joins active
+preparation and execution; active output leases prevent disposal.
+
+The owner reserves the APK's bytes and one file slot, plus 8 MiB and 15 output
+slots. At most 14 payloads, including the manifest, contain 256 KiB each; the
+stored ZIP is capped at 4 MiB. Required and optional process stdout/stderr each
+have a 256 KiB bound. Required overflow fails; optional truncation remains
+explicit partial evidence. The 64 KiB encoded-row reservation and 4 MiB
+journal-envelope limit include future metadata growth and Base64 escaping.
+Existing default disk and file limits are unchanged.
+
+A sealed ZIP becomes available only after the terminal journal and anchor
+commit succeeds. Safe status contains bounded intent, capture counts, fixed
+errors and the published descriptor, with no physical paths, native identities,
+logs, command vectors or raw Core result. Capture completeness establishes no
+application, OpenXR or wearer-visibility readiness. Status reports durable
+publication and read eligibility; each read separately verifies current native
+identity, size and hash before returning bytes.
+
+Read acquisition binds the original operation/digest, output ID, expected size
+and SHA-256. Its sealed disposable lease exposes a read-only stream and the
+constant `apk-diagnostics.zip` descriptor. New reads stop at the configured
+terminal-retention boundary, normally 24 hours, while existing leases may
+finish. Physical cleanup of known terminal diagnostics is lazy, on a later v3
+preflight, and uses journaled identity-bound deletion; legacy preflight does
+not initiate that asynchronous cleanup.
+
+Uncertain output and unresolved ownership debt retain their resources and
+capacity across restart and age. The first v3 slice has no destructive UNKNOWN
+cleanup route, force/forget option or replacement-key recovery. A failed or
+undelivered preparation can retain a server-owned operation whose ID the
+caller never received. Preserve its state for qualified owner recovery;
+discarding a browser receipt does not authorize evidence deletion. New tagged
+rows make older strict readers reject the state; preserve the journal and key
+rather than removing metadata to downgrade it.
