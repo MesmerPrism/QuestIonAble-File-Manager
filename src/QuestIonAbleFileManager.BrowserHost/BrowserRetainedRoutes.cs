@@ -21,7 +21,11 @@ public static class BrowserRetainedRoutes
                 InvokeAsync(context, operations, routeAction, app.Lifetime.ApplicationStopping));
             app.MapPost("/browser/v2/retained/" + routeAction, (HttpContext context) =>
                 InvokeV2Async(context, operations, routeAction, app.Lifetime.ApplicationStopping));
+            app.MapPost("/browser/v3/retained/" + routeAction, (HttpContext context) =>
+                InvokeV3Async(context, operations, routeAction, app.Lifetime.ApplicationStopping));
         }
+        app.MapPost("/browser/v3/retained/output", (HttpContext context) =>
+            InvokeV3Async(context, operations, "output", app.Lifetime.ApplicationStopping));
     }
 
     internal static async Task InvokeAsync(HttpContext context, BrowserRetainedOperations operations, string action,
@@ -30,18 +34,31 @@ public static class BrowserRetainedRoutes
     internal static async Task InvokeV2Async(HttpContext context, BrowserRetainedOperations operations, string action,
         CancellationToken stopping = default) => await InvokeVersionAsync(context, operations, action, true, stopping);
 
+    internal static async Task InvokeV3Async(HttpContext context, BrowserRetainedOperations operations, string action,
+        CancellationToken stopping = default) => await InvokeVersionAsync(context, operations, action, false, stopping, v3: true);
+
     private static async Task InvokeVersionAsync(HttpContext context, BrowserRetainedOperations operations, string action, bool v2,
-        CancellationToken stopping = default)
+        CancellationToken stopping = default, bool v3 = false)
     {
         context.Response.Headers.CacheControl = "no-store";
         try
         {
             if (!string.Equals(context.Request.ContentType, "application/json", StringComparison.OrdinalIgnoreCase))
                 throw new BrowserRetainedException("content_type_invalid", 415, false);
+            if (v3 && context.Request.Headers.ContainsKey("Content-Encoding"))
+                throw new BrowserRetainedException("content_encoding_invalid", 415, false);
             if (context.Request.ContentLength > BrowserCommands.MaximumRequestBytes)
                 throw new BrowserRetainedException("body_size_invalid", 413, false);
             var body = await ReadBodyAsync(context);
-            object result = action switch
+            object result = v3 ? action switch
+            {
+                "preflight" => await operations.PreflightV3Async(body, context.RequestAborted),
+                "execute" => await operations.ExecuteV3Async(body, stopping),
+                "status" => operations.GetV3Status(body),
+                "cancel" => operations.CancelV3(body),
+                "output" => await operations.PrepareDiagnosticOutputAsync(body, context.RequestAborted),
+                _ => throw new BrowserRetainedException("command_not_allowed", 404, false)
+            } : action switch
             {
                 "preflight" => v2 ? await operations.PreflightV2Async(body, context.RequestAborted) : await operations.PreflightAsync(body, context.RequestAborted),
                 // Once admitted, only owner lifetime and explicit retained cancellation affect execution.

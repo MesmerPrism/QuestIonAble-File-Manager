@@ -115,6 +115,25 @@
       <p class="hint">Unknown pushes block new mutations. Reconnect and reload send nothing. Read original result only uses the original request and host session; a missing result after restart does not prove no effect. Preserve the reference and use the typed QFM CLI/owner route for recovery.</p>
     </section>
     <section class="panel" aria-labelledby="apps-title"><div class="section-heading"><h2 id="apps-title">Installed apps</h2><button id="list-packages" disabled>List third-party apps</button></div><ul id="packages" class="package-list" aria-label="Installed packages"></ul><form id="permissions-form"><label for="package-name">Package name</label><div class="input-action"><input id="package-name" placeholder="Select a listed app or enter its exact package" maxlength="256" autocomplete="off" spellcheck="false"><button id="read-permissions" disabled>Read permissions</button></div></form><p id="permissions-state" class="hint">Permission facts are read-only; they do not grant access or decide app readiness.</p></section>
+<section class="panel" id="diagnostics-view" aria-labelledby="diagnostics-heading">
+  <h2 id="diagnostics-heading">Private APK diagnostics</h2>
+  <p>Capture bounded diagnostic evidence for one exact uploaded APK and ready headset. No app is installed, launched or stopped. The ZIP can contain private device facts and logs; keep it private.</p>
+  <p id="diagnostics-capability" class="hint">Connect to a configured Windows companion for retained diagnostics.</p>
+  <dl class="apk-facts"><div><dt>Uploaded source</dt><dd id="diagnostics-source">No uploaded APK</dd></div><div><dt>Current target</dt><dd id="diagnostics-target">No ready target</dd></div></dl>
+  <button id="diagnostics-prepare" type="button" disabled>Prepare exact diagnostics</button>
+  <div id="diagnostics-review" hidden>
+    <dl class="apk-facts"><div><dt>Reviewed target</dt><dd id="diagnostics-reviewed-target"></dd></div><div><dt>APK bytes</dt><dd id="diagnostics-reviewed-size"></dd></div><div><dt>APK SHA-256</dt><dd id="diagnostics-reviewed-sha"></dd></div><div><dt>Package</dt><dd id="diagnostics-reviewed-package"></dd></div><div><dt>Version</dt><dd id="diagnostics-reviewed-version"></dd></div><div><dt>Signer SHA-256</dt><dd id="diagnostics-reviewed-signer"></dd></div><div><dt>Capture limits</dt><dd>Up to 14 payload files, 8 process logs and a 4 MiB ZIP. Capture completeness does not prove app, OpenXR or wearer readiness.</dd></div></dl>
+  </div>
+  <label class="check"><input id="diagnostics-consent" type="checkbox" disabled> I reviewed the exact APK and target and consent to capturing private diagnostic data once.</label>
+  <div class="actions"><button id="diagnostics-capture" type="button" disabled>Capture private diagnostics once</button><button id="diagnostics-status" type="button" disabled>Read original status</button><button id="diagnostics-cancel" type="button" disabled>Request cancellation of unfinished capture</button><button id="diagnostics-reference" type="button" disabled>Save original reference</button></div>
+  <dl class="apk-facts"><div><dt>Original scope</dt><dd id="diagnostics-original-scope">No saved original</dd></div></dl>
+  <p id="diagnostics-state" role="status" aria-live="polite">No diagnostics prepared.</p>
+  <pre id="diagnostics-summary" hidden></pre>
+  <div id="diagnostics-archive" hidden><dl class="apk-facts"><div><dt>Retained archive</dt><dd>apk-diagnostics.zip</dd></div><div><dt>ZIP bytes</dt><dd id="diagnostics-archive-size"></dd></div><div><dt>ZIP SHA-256</dt><dd id="diagnostics-archive-sha"></dd></div></dl><button id="diagnostics-copy" type="button" disabled>Prepare ZIP download copy</button></div>
+  <p id="diagnostics-copy-state" role="status" aria-live="polite">No transient ZIP copy prepared. Copying never captures again.</p>
+  <div class="actions"><button id="diagnostics-save" type="button" disabled>Save prepared ZIP copy</button><button id="diagnostics-checksum" type="button" disabled>Save ZIP checksum</button><button id="diagnostics-remove" type="button" disabled>Remove transient ZIP copy</button></div>
+  <p class="hint">Save and Remove affect only a separate protected transient copy. Clearing or removing a prepared download copy leaves the retained archive unchanged. Expiry stops new archive reads; an already held save may finish. Unknown capture or preparation is never replayed, cleared by status of another action, or discarded by staging Clear.</p>
+</section>
     <section id="fleet-status-view" class="panel" aria-labelledby="fleet-status-title">
       <h2 id="fleet-status-title">Get Fleet</h2>
       <p id="fleet-status-capability" class="hint">A Windows QFM companion is required. Release configuration is unknown until an explicit status read.</p>
