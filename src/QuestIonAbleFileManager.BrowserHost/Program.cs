@@ -91,6 +91,17 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { error = "request_failed" });
     }
 });
+// Serve a worker bound to the exact shipped shell bytes, before ordinary static files.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path == "/sw.js")
+    {
+        context.Response.ContentType = "text/javascript; charset=utf-8";
+        await context.Response.WriteAsync(BrowserShellAssets.RenderWorker(app.Environment.WebRootPath));
+        return;
+    }
+    await next(context);
+});
 app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions { ServeUnknownFileTypes = true, DefaultContentType = "text/plain" });
 app.MapGet("/browser/v1/session", () => new
