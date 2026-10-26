@@ -39,6 +39,16 @@ Connection adoption is one shared Core composite used by WPF and CLI status: it
 also requires a completed typed Kiosk status with matching effective-state
 readback and a signed staging inventory before the client is published.
 
+Core callers that need a reference before USB dispatch can use
+`ConnectWithOperationIdAsync` with a preallocated, nonzero
+`usb_<32 lowercase hexadecimal digits>` ID. It uses the same exact-target,
+provider, authentication and cleanup checks as `ConnectAsync`; the existing
+method signature and generated-ID behavior remain available. Retain the ID
+before calling, rather than allocating a replacement after a missing reply.
+The ID is nonsecret evidence for that bootstrap, not a credential or permission
+to repeat enable. It cannot restore the session key after process exit, and no
+public saved-ID cleanup or session-restoration API is introduced by this seam.
+
 If bootstrap enabled the listener, cleanup sends `direct-disable` with the
 originating operation ID, session ID, and exact pre-disable generation. Disable
 is asynchronous. File Manager takes the post-disable generation from the

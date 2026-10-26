@@ -200,12 +200,43 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
         _utcNow = utcNow ?? (static () => DateTimeOffset.UtcNow);
     }
 
-    public async Task<RustyKioskUsbDirectLinkSession> ConnectAsync(
+    public Task<RustyKioskUsbDirectLinkSession> ConnectAsync(
         string serial,
         RustyKioskProductChannel channel,
         bool operatorConfirmed,
         HttpClient? httpClient = null,
+        CancellationToken cancellationToken = default) =>
+        ConnectCoreAsync(serial, channel, operatorConfirmed, operationId: null, httpClient, cancellationToken);
+
+    /// <summary>
+    /// Uses a caller-retained nonsecret bootstrap identity. The ID is not a credential
+    /// and does not restore a session or authorize replay after a missing response.
+    /// </summary>
+    public async Task<RustyKioskUsbDirectLinkSession> ConnectWithOperationIdAsync(
+        string serial,
+        RustyKioskProductChannel channel,
+        bool operatorConfirmed,
+        string operationId,
+        HttpClient? httpClient = null,
         CancellationToken cancellationToken = default)
+    {
+        if (operationId is null ||
+            !Regex.IsMatch(operationId, "\\Ausb_[a-f0-9]{32}\\z") ||
+            operationId == "usb_00000000000000000000000000000000")
+        {
+            throw new ArgumentException("The retained Direct Link bootstrap operation id is invalid.", nameof(operationId));
+        }
+        return await ConnectCoreAsync(serial, channel, operatorConfirmed, operationId, httpClient, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<RustyKioskUsbDirectLinkSession> ConnectCoreAsync(
+        string serial,
+        RustyKioskProductChannel channel,
+        bool operatorConfirmed,
+        string? operationId,
+        HttpClient? httpClient,
+        CancellationToken cancellationToken)
     {
         if (!operatorConfirmed)
         {
@@ -219,7 +250,7 @@ public sealed class RustyKioskUsbDirectLinkBootstrapper
         var uid = await RequireInstalledProviderAsync(serial, product, cancellationToken)
             .ConfigureAwait(false);
 
-        var operationId = "usb_" + Guid.NewGuid().ToString("N");
+        operationId ??= "usb_" + Guid.NewGuid().ToString("N");
         var arguments = DeviceArguments(
             serial,
             product,
