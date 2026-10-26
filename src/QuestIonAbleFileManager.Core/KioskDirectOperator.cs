@@ -38,13 +38,21 @@ public sealed record KioskDirectOperatorCommand(
     public static KioskDirectOperatorCommand Invoke(
         RustyKioskCommand command,
         string? value,
-        bool operatorConfirmed)
+        bool operatorConfirmed) =>
+        Invoke(command, value, operatorConfirmed, requestId: null);
+
+    public static KioskDirectOperatorCommand Invoke(
+        RustyKioskCommand command,
+        string? value,
+        bool operatorConfirmed,
+        string? requestId)
     {
         value = command.ValidateValue(value);
         return New(
             KioskDirectOperatorAction.Invoke,
             KioskCommand: command,
             Value: value,
+            RequestId: requestId is null ? null : RequireRequestId(requestId),
             OperatorConfirmed: operatorConfirmed);
     }
 
@@ -142,7 +150,7 @@ public sealed record KioskDirectOperatorCommand(
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 requestId ?? string.Empty,
-                "^[A-Za-z0-9_-]{8,64}$"))
+                @"\A[A-Za-z0-9_-]{8,64}\z"))
         {
             throw new ArgumentException("The Direct Link request id is invalid.", nameof(requestId));
         }
@@ -224,6 +232,7 @@ public sealed class KioskDirectOperatorExecutor(RustyKioskDirectClient client)
                     var admitted = await _client.AdmitKioskRequestAsync(
                             kioskCommand,
                             command.Value,
+                            requestId: command.RequestId,
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                     try
