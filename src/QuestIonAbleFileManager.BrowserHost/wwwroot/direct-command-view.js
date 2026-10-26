@@ -1,6 +1,6 @@
 const storageKey = 'qfm-browser-direct-command-v1';
 const invokeAction = 'kiosk.direct.invoke', cancelAction = 'kiosk.direct.request-cancel';
-const commands = new Set(['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk']);
+const commands = new Set(['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload']);
 const requirements = new Set(['any','wifi-on','wifi-off']);
 const stages = new Set(['sent','pending','confirmed','failed','timedOut','pendingWearerAction','rejected','expired','cancelled','cleanupUnknown']);
 const states = new Set(['pending','pending_wearer_action','confirmed','rejected','expired','cancelled','unknown']);
@@ -73,7 +73,7 @@ function confirms(d) {
     case 'cancel-pending-launch': return t.pendingRequirementLaunch === false;
     case 'launch-normal': return t.guardArmed === false && t.pendingRequirementLaunch === false;
     case 'launch-kiosk': return t.guardArmed === true && t.pendingRequirementLaunch === false;
-    default: return d.command === 'status' || d.command === 'check-setup-helper';
+    default: return d.command === 'status' || d.command === 'check-setup-helper' || d.command === 'reload';
   }
 }
 
@@ -158,7 +158,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const d = project(value,ref,requestId,action);
     if (value.state === 'completed' && confirms(d) && original?.requestId === ref.requestId) {
       original = null; if (!persist()) { original = ref; return; }
-      message = ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
+      message = ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
     } else message = `Original proof remains ${d.originalEffect}; actual Core stage ${d.coreReceipt?.stage ?? 'unavailable'}. Lifecycle, pending requirements and missing evidence do not confirm a typed effect.`;
     show(d,requestId,action);
   }
