@@ -87,7 +87,7 @@ All API routes require `Authorization: Bearer <private-credential>`.
 | `GET /browser/v1/requests/{requestId}` | Original retained running/result state; also requires the session header. Never reruns an action. |
 
 Windows hosts additionally report `artifactStaging` platform support and
-advertise `apk.inspect`. Support is not root admission: the first explicit
+advertise `apk.inspect`, `apk.preflight` and `runtime.observe`. Support is not root admission: the first explicit
 staging request must still create a private, local NTFS directory and retain
 its native file/ancestor handles. Other platforms return a fixed unavailable
 reason and the Windows companion alternative. They retain portable device
@@ -115,6 +115,8 @@ fields reject, and each action requires exactly its listed fields:
 | `device.actor-identity` | `serial`, `pid` (positive process ID) |
 | `adb.forwards` | `serial` |
 | `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
+| `apk.preflight` | `serial`, `artifactId`, `sha256`, `sizeBytes` |
+| `runtime.observe` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `verification` exactly `exact` or `development-metadata` |
 | `files.pull` | `serial`, `remotePath` (one absolute headset file), `fileName` (simple download label) |
 | `apk.export` | `serial`, `package`, `fileName` (simple label ending in `.apk`) |
 
@@ -233,6 +235,38 @@ Transient staging performs local transport and inspection. The separate retained
 workflow below owns inspected single-APK install, launch and runtime observation.
 Device file push and the remaining advanced deployment options still use the
 existing typed CLI/WPF during migration.
+
+## APK readiness and runtime reads
+
+After staging an APK and selecting one ready target, **Read APK readiness**
+calls the same Core preflight factory as `apk preflight`. It reports manifest
+SDK/launcher facts, the device API level, installed-byte classification,
+exported launcher, checks and readiness for deploy/launch/diagnose. These are
+advisory APK/platform facts; they neither approve a mutation nor establish app
+or OpenXR readiness. This read is separate from retained-operation preparation.
+
+**Observe exact installed APK** invokes exact Core runtime observation. Package
+absence is structured evidence; installed mismatch or unverified bytes cannot
+be silently accepted or changed to a weaker policy. **Observe matching development
+metadata** is a distinct explicit choice. It compares stable package/version,
+APK paths and update metadata around observation, while installed bytes, signer,
+unique build and transaction provenance remain unverified. No caller-reported
+install reference is accepted by this browser slice.
+
+These actions use the transient one-use ledger, shared gate and current immutable
+artifact lease through Core completion and projection, with a five-minute
+lifetime. They require no Native API state directory or integrity key. Results
+use `artifactRead` with the artifact receipt, serial, kind, verification policy
+and typed `preflight`, `runtime` or `development` facts. Native source paths are
+replaced with display filenames/private markers, and preflight suggestions
+contain only purpose/readiness; private CLI arguments are omitted. Runtime v6
+keeps nullable process corroboration and separate activity/focus dimensions.
+
+The UI validates source/target/policy bindings, clears facts on scope changes,
+and rejects late responses from an earlier authentication or selection. It never
+persists or replays these reads, chooses a fallback verification policy, or
+clears an original unknown mutation. An explicit local connector connection
+can still read a USB headset while the wider network is offline.
 
 ## Bounded file pull and single-APK export
 

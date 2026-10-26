@@ -23,6 +23,8 @@ release packaging remains separate.
 
 On a Windows NTFS host, the browser also stages a selected local APK, inspects
 it through shared Core, and downloads/removes its verified temporary bytes.
+Artifact-bound readiness preflight and exact or explicitly weaker development
+runtime reads work without configuring the retained owner.
 It can also capture bounded headset file pulls and single-APK exports, then
 verify streamed saves where the browser supports a file picker. The configured
 durable owner supports reviewed inspected install, resolved launch and runtime

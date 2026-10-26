@@ -9,7 +9,8 @@ public sealed record BrowserCommandOutcome(
     OperatorExecutionResult? Result = null, string? Error = null,
     OperatorMutationReceipt? Mutation = null,
     BrowserArtifactInspectionOutcome? ArtifactInspection = null,
-    BrowserArtifactTransferOutcome? ArtifactTransfer = null);
+    BrowserArtifactTransferOutcome? ArtifactTransfer = null,
+    BrowserArtifactReadOutcome? ArtifactRead = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
@@ -31,7 +32,7 @@ public sealed class BrowserCommands
     private readonly BrowserOperationGate _operationGate;
     private readonly Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? _capture;
     public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
-        ? _capture is not null ? [.. Actions, "apk.inspect", "files.pull", "apk.export"] : [.. Actions, "apk.inspect"] : Actions;
+        ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.pull", "apk.export"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
     private bool _running;
@@ -121,14 +122,24 @@ public sealed class BrowserCommands
                     : "completed";
                 if (artifactLease is not null)
                 {
-                    var inspection = result.ApkArtifactInspection;
-                    if (inspection is null || inspection.Sha256 != artifactLease.Receipt.Sha256 ||
-                        inspection.SizeBytes != artifactLease.Receipt.SizeBytes)
-                        outcome = new(request.RequestId, request.Action, "failed", Error: "artifact_inspection_binding_mismatch");
+                    var projection = new BrowserArtifactReadProjection(artifactLease);
+                    if (artifact!.Action != "apk.inspect")
+                    {
+                        var read = projection.Project(artifact, result);
+                        outcome = read is null ? new(request.RequestId, request.Action, "failed", Error: "artifact_read_binding_mismatch") :
+                            new(request.RequestId, request.Action, state, ArtifactRead: read);
+                    }
                     else
-                        // Core commands and inspector source paths stay inside the connector.
-                        outcome = new(request.RequestId, request.Action, state, ArtifactInspection: new(
-                            artifactLease.Receipt, inspection with { Path = artifactLease.Receipt.FileName }));
+                    {
+                        var inspection = result.ApkArtifactInspection;
+                        if (inspection is null || inspection.Sha256 != artifactLease.Receipt.Sha256 ||
+                            inspection.SizeBytes != artifactLease.Receipt.SizeBytes)
+                            outcome = new(request.RequestId, request.Action, "failed", Error: "artifact_inspection_binding_mismatch");
+                        else
+                            // Core commands and inspector source paths stay inside the connector.
+                            outcome = new(request.RequestId, request.Action, state, ArtifactInspection: new(
+                                artifactLease.Receipt, projection.Inspection(inspection)));
+                    }
                 }
                 else outcome = new(request.RequestId, request.Action, state, result);
             }
