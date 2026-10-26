@@ -16,7 +16,8 @@ public enum KioskDirectOperatorAction
     DeleteStaging,
     Install,
     InstallStatus,
-    Adopt
+    Adopt,
+    RequestResult
 }
 
 public sealed record KioskDirectOperatorCommand(
@@ -58,6 +59,22 @@ public sealed record KioskDirectOperatorCommand(
 
     public static KioskDirectOperatorCommand RequestStatus(string requestId) =>
         New(KioskDirectOperatorAction.RequestStatus, RequestId: RequireRequestId(requestId));
+
+    public static KioskDirectOperatorCommand RequestResult(
+        string requestId,
+        RustyKioskCommand expectedCommand,
+        string? expectedValue)
+    {
+        if (!Enum.IsDefined(expectedCommand))
+        {
+            throw new ArgumentOutOfRangeException(nameof(expectedCommand));
+        }
+        return New(
+            KioskDirectOperatorAction.RequestResult,
+            KioskCommand: expectedCommand,
+            Value: expectedCommand.ValidateValue(expectedValue),
+            RequestId: RequireRequestId(requestId));
+    }
 
     public static KioskDirectOperatorCommand Cancel(string requestId, bool operatorConfirmed) =>
         New(
@@ -269,6 +286,31 @@ public sealed class KioskDirectOperatorExecutor(RustyKioskDirectClient client)
                             cancellationToken)
                         .ConfigureAwait(false);
                     return Result(command, request.MutationStage, request.Message, request.RequestId, RequestReceipt: request);
+                }
+
+            case KioskDirectOperatorAction.RequestResult:
+                {
+                    var requestId = Require(command.RequestId);
+                    var expectedCommand = command.KioskCommand ??
+                        throw new InvalidOperationException("The expected typed Kiosk action is missing.");
+                    try
+                    {
+                        var kiosk = await _client.WaitForKioskResultAsync(
+                                requestId,
+                                expectedCommand,
+                                cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+                        var stage = RustyKioskReadback.Confirms(expectedCommand, command.Value, kiosk)
+                            ? OperatorMutationStage.Confirmed
+                            : OperatorMutationStage.PendingWearerAction;
+                        return Result(command, stage, kiosk.Message, requestId, KioskResult: kiosk);
+                    }
+                    catch (TimeoutException)
+                    {
+                        var lifecycle = await _client.ReadKioskRequestStatusAsync(requestId, cancellationToken)
+                            .ConfigureAwait(false);
+                        return Result(command, lifecycle.MutationStage, lifecycle.Message, requestId, RequestReceipt: lifecycle);
+                    }
                 }
 
             case KioskDirectOperatorAction.CancelRequest:

@@ -12,7 +12,7 @@ public static class BrowserShellAssets
     {
         "/index.html", "/agent.html", "/app.js", "/pwa.js", "/retained-view.js", "/styles.css",
         "/usb-proof.js", "/usb-proof-core.js", "/vendor/tango-adb.js",
-        "/transfer-view.js", "/verified-download.js", "/apk-read-view.js", "/file-push-view.js", "/kiosk-view.js", "/direct-connection-view.js", "/profile-view.js", "/vendor/noble-sha256.js", "/vendor/NOBLE_HASHES_NOTICES.txt",
+        "/transfer-view.js", "/verified-download.js", "/apk-read-view.js", "/file-push-view.js", "/kiosk-view.js", "/direct-connection-view.js", "/direct-command-view.js", "/profile-view.js", "/vendor/noble-sha256.js", "/vendor/NOBLE_HASHES_NOTICES.txt",
         "/manifest.webmanifest", "/icons/qfm-192.png", "/icons/qfm-512.png"
     });
 

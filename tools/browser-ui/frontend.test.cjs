@@ -78,7 +78,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','profile-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -360,4 +360,37 @@ for (const kind of ['import','revoke','changed-host-import']) test(`real app pre
   await f.page.locator('#apply-hold').dispatchEvent('click');assert.equal(f.mutations().length,0,'Execute-time guard preserves local profile uncertainty');
   assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-profile-v1'))),reference);
   assert.equal(f.calls.some(call=>call.path.includes('/profiles/')||call.body?.action?.startsWith('profile.')),false);
+});
+
+for (const kind of ['command-only','other-original','changed-host-command','crossed-connection']) test(`real app limits Direct command cleanup exemption: ${kind}`,async t=>{
+  const directActions=['kiosk.direct.connect-usb','kiosk.direct.status','kiosk.direct.close','kiosk.direct.invoke','kiosk.direct.request-status','kiosk.direct.request-result','kiosk.direct.request-cancel'];
+  const f=await fixture(t,{session:route=>route.fulfill({json:{sessionId:'fixture-session',actions:['devices','device.status','device.keep-awake',...directActions]}})});
+  const connectRequestId='11111111-1111-4111-8111-111111111111',connectionId='22222222-2222-4222-8222-222222222222',requestId='33333333-3333-4333-8333-333333333333';
+  const connection={sessionId:'fixture-session',connectRequestId,usbOperationId:'usb_'+connectRequestId.replaceAll('-',''),serial:'FIXTURE-A',productChannel:'stable',connectionId,expiresAtUtc:new Date(Date.now()+300000).toISOString()};
+  const original={...connection,requestId,action:'kiosk.direct.invoke',logicalRequestId:'kiosk_'+requestId.replaceAll('-',''),command:'status',value:null};
+  delete original.expiresAtUtc;
+  if(kind==='changed-host-command')original.sessionId='old-host-session';
+  if(kind==='crossed-connection')original.connectionId='44444444-4444-4444-8444-444444444444';
+  const commandReference={original,cancellation:null};
+  await f.page.evaluate(({connection,commandReference,other})=>{
+    sessionStorage.setItem('qfm-browser-direct-connection-v1',JSON.stringify({original:null,connection}));
+    sessionStorage.setItem('qfm-browser-direct-command-v1',JSON.stringify(commandReference));
+    if(other)sessionStorage.setItem('qfm-browser-original-v1',JSON.stringify({requestId:'55555555-5555-4555-8555-555555555555',sessionId:'fixture-session',action:'device.keep-awake',target:'FIXTURE-A'}));
+  },{connection,commandReference,other:kind==='other-original'});
+  await f.page.reload();assert.equal(f.calls.length,0,'Reload sends no command or recovery');
+  await f.connect();await f.selectA();await f.page.locator('#power-confirm').check();
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  assert.equal(await f.page.locator('#direct-connect').isDisabled(),true);
+  assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);
+  const permitsCleanup=kind==='command-only';
+  assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),!permitsCleanup);
+  assert.equal(f.calls.filter(call=>call.body?.action?.startsWith('kiosk.direct.')).length,0,'Authentication and global controls stay inert');
+  if(permitsCleanup){
+    await f.page.locator('#direct-close-confirm').check();await f.page.locator('#direct-close').click();await f.settled();
+    const closing=f.calls.filter(call=>call.body?.action==='kiosk.direct.close');assert.equal(closing.length,1);assert.equal(closing[0].body.connectionId,connectionId);
+  }else{
+    await f.page.locator('#direct-close').evaluate(button=>{button.disabled=false;});await f.page.locator('#direct-close').dispatchEvent('click');
+    assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.close').length,0,'Execute-time guard refuses the crossed or additional-owner exemption');
+  }
+  assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-command-v1'))),commandReference,'Cleanup never acknowledges a command');
 });

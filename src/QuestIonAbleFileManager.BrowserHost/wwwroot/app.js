@@ -6,12 +6,13 @@ import {createApkReadView} from './apk-read-view.js';
 import {createFilePushView} from './file-push-view.js';
 import {createKioskView} from './kiosk-view.js';
 import {createDirectConnectionView} from './direct-connection-view.js';
+import {createDirectCommandView} from './direct-command-view.js';
 import {createProfileView} from './profile-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
   artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false}, profileCapability:{supported:false}, stagingGeneration:0 };
-let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, profileView;
+let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, directCommandView, profileView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -33,7 +34,7 @@ const saveOwnedArtifact = receipt => {
 const artifactBytes = value => value >= 1024*1024*1024 ? `${value/(1024*1024*1024)} GiB` : `${value/(1024*1024)} MiB`;
 function controls() {
   const connected = localHostMode && Boolean(host.token && host.session), ready = Boolean(readySelected());
-  const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved() && !filePushView?.hasUnresolved() && !kioskView?.hasUnresolved() && !directConnectionView?.hasUnresolved() && !profileView?.hasUnresolved();
+  const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved() && !filePushView?.hasUnresolved() && !kioskView?.hasUnresolved() && !directConnectionView?.hasUnresolved() && !directCommandView?.hasUnresolved() && !profileView?.hasUnresolved();
   byId('refresh').disabled = !connected || host.busy;
   byId('read-status').disabled = !connected || !ready || host.busy;
   byId('apply-hold').disabled = !mutatable || !ready || !byId('power-confirm').checked;
@@ -64,6 +65,7 @@ function controls() {
   filePushView?.update();
   kioskView?.update();
   directConnectionView?.update();
+  directCommandView?.update();
   profileView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
@@ -116,7 +118,7 @@ function consume(value, action, projectLive = true) {
   if (host.original && value.requestId === host.original.requestId && ((value.state === 'completed' && (!mutations.has(action) || receiptConfirmed || endpointReady)) || value.state === 'failed')) recordOriginal(null);
 }
 async function execute(action, fields = {}) {
-  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && (host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || profileView?.hasUnresolved()))) return;
+  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && (host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || profileView?.hasUnresolved()))) return;
   const requestId = crypto.randomUUID(); host.busy = true;
   const generation = connectionGeneration;
   if (mutations.has(action)) recordOriginal({ requestId, sessionId:host.session, action, target:fields.serial || fields.host });
@@ -196,13 +198,19 @@ byId('usb-selection').addEventListener('change',()=>{byId('usb-reading').hidden=
 byId('usb-read').addEventListener('click',()=>usbAction(()=>usb.read(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-reconnect').addEventListener('click',()=>usbAction(()=>usb.reconnect(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-disconnect').addEventListener('click',()=>usbAction(()=>usb.disconnect(byId('usb-selection').value)));
-retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 transferView=createTransferView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,selectedPackage:byId('package-name').value,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult,saveArtifact:saveOwnedArtifact});
 apkReadView=createApkReadView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult});
-filePushView=createFilePushView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,artifactStaging:host.artifactStaging,stagingGeneration:host.stagingGeneration,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
-kioskView=createKioskView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || directConnectionView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
-directConnectionView=createDirectConnectionView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
-profileView=createProfileView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.profileCapability,authGeneration:connectionGeneration,selected:readySelected() || null,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+filePushView=createFilePushView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,artifactStaging:host.artifactStaging,stagingGeneration:host.stagingGeneration,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+kioskView=createKioskView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || profileView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+const otherDirectBlockers = () => Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || profileView?.hasUnresolved());
+const directCleanupConnectionId = () => {
+  const reference = directCommandView?.getCleanupReference();
+  return !otherDirectBlockers() && reference?.sessionId === host.session ? reference.connectionId : null;
+};
+directConnectionView=createDirectConnectionView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,actions:host.actions,externalUnresolved:otherDirectBlockers() || Boolean(directCommandView?.hasUnresolved()),cleanupConnectionId:directCleanupConnectionId()}),setBusy:value=>{host.busy=value;controls();},showResult});
+directCommandView=createDirectCommandView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,authGeneration:connectionGeneration,connection:directConnectionView?.getConnectionReference(),externalUnresolved:otherDirectBlockers() || Boolean(directConnectionView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
+profileView=createProfileView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.profileCapability,authGeneration:connectionGeneration,selected:readySelected() || null,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {

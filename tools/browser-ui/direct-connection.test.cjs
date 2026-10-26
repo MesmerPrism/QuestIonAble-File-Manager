@@ -174,3 +174,27 @@ test('original GET crossing a same-session authentication cycle preserves uncert
   let held,release,first=true;const received=new Promise(resolve=>release=resolve);const f=await fixture(t,{respond:route=>route.abort('failed'),status:(route,value)=>{if(first){first=false;held=()=>route.fulfill({json:value});release();return;}return route.fulfill({json:value});}});await f.connect();const before=await f.stored();await f.page.locator('#direct-original-status').click();await received;await f.update({connected:false});await f.update({connected:true});await held();await f.page.waitForFunction(()=>window.busyCalls.length>=3);assert.deepEqual(await f.stored(),before);assert.equal(await f.page.evaluate(()=>window.direct.hasUnresolved()),true);
   await f.page.locator('#direct-original-status').click();await f.page.waitForFunction(()=>!window.direct.hasUnresolved());assert.equal((await f.stored()).connection.connectionId,handle);assert.equal(f.calls.filter(c=>c.method==='POST').length,1);
 });
+
+test('sanitized metadata getter returns an independent same-host copy and no lost custody',async t=>{
+  const f=await fixture(t);await f.connect();
+  const ref=await f.page.evaluate(()=>{const ref=window.direct.getConnectionReference();ref.serial='CHANGED';return window.direct.getConnectionReference();});
+  assert.equal(ref.serial,'QUEST-A');assert.equal(ref.connectionId,handle);assert.equal(ref.sessionId,'session-a');
+  assert.deepEqual(Object.keys(ref).sort(),['sessionId','connectRequestId','usbOperationId','serial','productChannel','connectionId','expiresAtUtc'].sort());
+  await f.update({sessionId:'session-b'});assert.equal(await f.page.evaluate(()=>window.direct.getConnectionReference()),null);
+});
+
+test('cleanup exception permits only exact saved close and never new connect or lost custody',async t=>{
+  const f=await fixture(t);await f.connect();await f.update({externalUnresolved:true,cleanupConnectionId:handle});
+  assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),false);assert.equal(await f.page.locator('#direct-connect-confirm').isDisabled(),true);
+  await f.update({cleanupConnectionId:'b1234567-1234-1234-1234-123456789abc'});assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),true);
+  await f.update({cleanupConnectionId:handle,sessionId:'session-b'});assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),true);
+  assert.equal(f.calls.length,1);
+});
+
+test('sanitized connection metadata remains available after expiry for cached command recovery and explicit cleanup',async t=>{
+  const f=await fixture(t);await f.connect();const before=await f.page.evaluate(()=>window.direct.getConnectionReference());await f.page.evaluate(()=>{const now=Date.now();Date.now=()=>now+600000;window.direct.update();});assert.deepEqual(await f.page.evaluate(()=>window.direct.getConnectionReference()),before);assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),false);assert.equal(await f.page.locator('#direct-status').isDisabled(),true);assert.equal(f.calls.length,1);
+});
+
+test('uncertain own close hides adopted metadata and cannot receive the command cleanup exception',async t=>{
+  const f=await fixture(t,{respond:(route,body,value)=>body.action==='kiosk.direct.close'?route.abort('failed'):route.fulfill({json:value})});await f.connect();await f.update({externalUnresolved:true,cleanupConnectionId:handle});await f.close();assert.equal(await f.page.evaluate(()=>window.direct.getConnectionReference()),null);assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),true);assert.ok((await f.stored()).original);assert.equal(f.calls.length,2);
+});
