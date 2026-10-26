@@ -14,6 +14,7 @@ node --test tools/browser-ui/direct-connection.test.cjs
 node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
 node --test tools/browser-ui/fleet-status.test.cjs
+node --test tools/browser-ui/diagnostics.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -92,3 +93,11 @@ sibling UNKNOWN references, no storage/replay, and desktop/mobile controls.
 They never resolve real Fleet configuration, metadata or protected replay state.
 The real-app suite also verifies that the card is capability-gated and does not
 acknowledge generic or profile writes.
+
+Diagnostic fixtures cover reviewed source/target consent, expiry, original
+reference persistence before dispatch, explicit status/cancel after reload,
+lost preparation or execution replies, crossed authentication generations,
+shared uncertainty blocking, separate archive copies and verified Save results.
+They use synthetic responses and download handles, with no native capture or
+device effects. The full-app suite checks the shipped card's integration with
+existing staging and sibling operation references.

@@ -36,7 +36,7 @@ requirements stay with shared Core.
 | Package list / single APK export + SHA256 | `apk list`; bounded single-APK export with opaque receipt/checksum implemented. | Export is only installed APK, no app data/OBBs/assets/entitlements. Splits reject before streaming; package paths rechecked afterwards. |
 | APK inspect/preflight | Staged inspect and actual SDK/installed-byte/launcher readiness preflight implemented; retained operation preparation is separate. | Windows protected staging and host Build Tools. Readiness reads need no Native API state/key; effect preparation retains its stable configured owner. |
 | Install single / complete split set / parallel targets | Retained inspected single-APK install implemented; bundle/parallel projections pending. | Existing retained v1 replace/grant options and exact installed-byte readback; no downgrade/test-only expansion or queued offline install. Complete atomic split/parallel workflows remain with CLI. |
-| Deploy / launch / observe / diagnose / launch-diagnose | Reviewed retained exact single-target deploy, resolved launch and observation; transient exact and explicit development-metadata runtime reads implemented. Diagnostic projections pending. | Deploy uses an explicit v2 digest/operation domain in the same durable owner; restricted replace/grant options only. Metadata observation never proves installed bytes/signer/unique build. Transport/process/focus evidence is not app readiness. |
+| Deploy / launch / observe / diagnose / launch-diagnose | Reviewed retained exact single-target deploy, resolved launch, observation and private read-only diagnostic capture/download implemented; transient exact and explicit development-metadata runtime reads implemented. Launch-diagnose remains pending. | Deploy and diagnostics have explicit versioned digest/operation domains in the same durable owner. Diagnostics bind exact installed bytes and publish a bounded private ZIP only after durable acknowledgement. Lost originals never replay. Capture completeness and transport/process/focus evidence do not establish app readiness. |
 | Stop / exact uninstall / permissions / exact-property snapshot-clear-restore | Existing closed APK factories; browser permission observation implemented, other projections pending. | Preserve package/byte ownership, explicit destructive cleanup/property confirmation, immutable snapshots and no replay after unknown effects. No generic property/shell UI. |
 | Status / power / bounded keep-awake / restore normal | `device status/keep-awake`; browser implemented. | Fresh readback; proximity duration does not restore stay-on. No supervisor/watchdog custody transfer. |
 | CPU/GPU performance set/clear | `device performance`; browser implemented. | Fixed reviewed levels and matching device-settings confirmation/readback. |
@@ -59,14 +59,14 @@ worker/offline test. Platform smoke tests use invented targets and fake runners,
 and establish no device effects. See `tools/browser-ui/README.md` and
 `browser-operator.md` for callable checks.
 
-Continue with retained diagnostic output and the remaining APK workflows,
-retaining unknown-effect artifact custody. Protected local staging/inspection,
-file transfer, retained single-APK install/deploy/launch and runtime reads are
-implemented. Portable native-path staging, complete split/parallel workflows,
-properties and diagnostic browser projections remain outstanding. The bounded
-optional diagnostic collector is shared Core infrastructure; it does not yet
-provide durable output custody or a browser download. Remaining Kiosk, Fleet,
-profile enrollment and distribution work follow the same action inventory.
+Continue with the remaining APK workflows, retaining unknown-effect artifact
+custody. Protected local staging/inspection, file transfer, retained single-APK
+install/deploy/launch, runtime reads and private diagnostic capture/download are
+implemented. Diagnostic output remains in the authenticated owner; browser Save
+uses a separately verified transient copy and never captures again. Portable
+native-path staging, complete split/parallel workflows, properties and
+launch-diagnose remain outstanding. Remaining Kiosk, Fleet, profile enrollment
+and distribution work follow the same action inventory.
 Update each row at tested checkpoints, with device evidence separate from
 source, browser and packaging proof. Do not block the existing product developer
 loop on completion of this UI migration.

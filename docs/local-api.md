@@ -179,9 +179,10 @@ become unknown. Terminal and unknown records retain the existing bounded
 
 Core also provides the closed
 `questionable.file_manager.local_api.v3` contract for `apk.diagnose`.
-This slice is an in-process registry API; the dedicated HTTP executable and
-browser do not yet expose v3 routes. The existing CLI diagnostic command keeps
-its separate explicit directory-output workflow.
+The browser host projects this in-process registry through its closed v3
+routes and private diagnostic controls; see [browser operations](browser-operator.md#retained-private-apk-diagnostics).
+The dedicated Local API HTTP executable does not expose v3 routes. The existing
+CLI diagnostic command keeps its separate explicit directory-output workflow.
 
 The registry provides `GetV3Capabilities`, `PreflightV3Async`,
 `ExecuteV3Async`, `GetV3Status`, `CancelV3`, and

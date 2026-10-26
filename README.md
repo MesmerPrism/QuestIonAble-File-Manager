@@ -50,6 +50,10 @@ saves where the browser supports a file picker. Push confirms remote size only.
 The configured
 durable owner supports reviewed inspected install, resolved launch, exact
 single-target deployment and runtime observation without replay after reconnect.
+Its private diagnostics control captures bounded evidence for an exact installed
+APK, preserves the original operation for explicit status recovery, and prepares
+a separate verified ZIP download copy. Capture neither launches an app nor
+establishes app readiness; unresolved captures never replay.
 Other hosts show explicit protected-staging/owner limitations. The current CLI/WPF remains available for
 the remaining operations while browser parity continues.
 

@@ -432,6 +432,53 @@ receipt or establish application/OpenXR readiness. Unknown mutations keep new
 device changes blocked; use the existing typed owner recovery route and its
 actual evidence before any further mutation.
 
+## Retained private APK diagnostics
+
+On a configured Windows NTFS companion, stage one base APK and select one ready
+headset. **Prepare exact diagnostics** copies and inspects the source in the
+same retained owner used by v1/v2. Review the APK identity, size, SHA-256 and
+target, then approve private capture once before the short preparation expires.
+Capture verifies the exact installed APK; it never installs, launches or stops
+an app. The ZIP can contain private device/package facts and logs.
+
+The v3 contract is exactly `questionable.file_manager.local_api.v3`. These POST
+routes require the same bearer, current session and exact-origin admission as
+other browser routes. JSON bodies have the existing 4 KiB/five-second receive
+limits and reject duplicate, unknown or encoded fields.
+
+| Route suffix under `/browser/v3/retained/` | Exact fields |
+| --- | --- |
+| `preflight` | `contractVersion`, `command:"apk.diagnose"`, `artifactId`, `sha256`, `sizeBytes`, `serial`; optional bounded `expiresInSeconds`. |
+| `execute`, `status`, `cancel` | `contractVersion`, original `operationId`, original `commandDigest`. |
+| `output` | The same original binding plus published `outputId`, `sizeBytes` and `sha256`. |
+
+There is no caller output path, package/UID/PID/filter, shell input or install
+policy. Preparation is not installed readiness proof. Core owns bounded capture,
+the authenticated journal and archive publication. A completed/partial capture
+describes its evidence set and leaves app, OpenXR and wearer readiness unknown.
+See the [Core v3 contract](local-api.md#v3-retained-diagnostics-in-core) for
+capture limits, quota, retention and output custody.
+
+The card saves only a small allowlisted original reference in tab session
+storage, before preparation and again before execution. It stores no APK,
+logs, raw result, credential or output path. Lost preparation may leave an owner
+row whose ID the browser never received; preserve that uncertainty for owner
+recovery. Reload, reconnect, selection and expiry send no diagnostic operation.
+Read original status or request cancellation explicitly, using the saved
+operation/digest regardless of the current upload or selected target. Status of
+another operation never clears uncertainty; cancellation is not rollback.
+
+After publication, **Prepare ZIP download copy** binds the original output ID,
+size and SHA-256, holds its native read lease and stages a separately verified
+`apk-diagnostics.zip` copy. Save uses the existing streamed verifier, or bounded
+buffered download with its weaker final-save claim. Copying never captures
+again. Copy receipts stay only in memory/current host session. A lost copy reply
+can leave a bounded transient copy; explicit staging Clear removes only owned
+unleased transient files. Remove/Clear never deletes the retained archive or
+clears the diagnostic original. New archive reads end at owner retention expiry;
+an already held read may finish. UNKNOWN outputs have no browser force/forget
+or destructive cleanup route.
+
 ## Optional Kiosk catalog and selection
 
 Kiosk is optional. Choose one ready target and exactly `stable` or `labs`; the

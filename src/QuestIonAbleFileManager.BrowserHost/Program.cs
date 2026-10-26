@@ -181,6 +181,9 @@ finally
     // An admitted private write retains its bytes/gate through real verification
     // and rollback; cooperative cancellation is not an acknowledgement.
     await commands.DrainProfilesAsync();
+    // Retained capture/copy can hold the shared gate through native acknowledgement.
+    // Join it before Direct cleanup starts its bounded wait for that same gate.
+    await retained.DrainAsync();
     try
     {
         if (!await directConnections.ShutdownAsync())

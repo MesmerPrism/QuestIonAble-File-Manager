@@ -8,6 +8,7 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
 const originalKey = 'qfm-browser-original-v1';
+const diagnosticsKey = 'qfm-browser-diagnostics-original-v1';
 let browser;
 test.before(async () => { browser = await chromium.launch({ headless: true }); });
 test.after(async () => { await browser?.close(); });
@@ -29,7 +30,7 @@ test('Local APK Save preserves uncertain close and pending cleanup after disconn
   assert.equal(await f.page.locator('#token').inputValue(),'');
 });
 
-async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session, files, expectedLostResponse = false, blockApp = false } = {}) {
+async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session, files, diagnostics, expectedLostResponse = false, blockApp = false } = {}) {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   // Exercise the bounded fallback here. Picker/streaming behavior has its own
   // real-DOM suite with explicit destination handles and synthetic byte streams.
@@ -56,6 +57,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
     if (url.pathname.startsWith('/browser/')) {
       const request = route.request(), body = request.method() === 'POST' && request.headers()['content-type']?.startsWith('application/json') ? request.postDataJSON() : null;
       calls.push({ method: request.method(), path: url.pathname, body });
+      if (url.pathname.startsWith('/browser/v3/retained/') && diagnostics) return diagnostics({route,body,path:url.pathname});
       if (url.pathname === '/browser/v1/session') return session ? session(route) : route.fulfill({ json: { sessionId: 'fixture-session', artifactStaging:{supported:true}, actions:['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal','files.list','apk.list','apk.permissions','device.performance','device.performance-clear','wifi.disconnect','device.actor-observe','device.actor-identity','adb.forwards','apk.inspect'] } });
       const artifact={id:'00000000000040008000000000000003',fileName:'fixture.apk',sizeBytes:3,sha256:createHash('sha256').update(Buffer.from([1,2,3])).digest('hex')};
       if(url.pathname==='/browser/v1/artifacts'&&request.method()==='POST')return route.fulfill({status:201,json:{state:'staged',scope:'localOnly',deviceDispatched:false,artifact}});
@@ -78,7 +80,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -431,4 +433,49 @@ test('real app Fleet read reply is discarded after authentication is cleared',as
   assert.equal(await f.page.locator('#fleet-status-facts').isHidden(),true);
   assert.equal(await f.page.locator('#fleet-status-read').isDisabled(),true);
   assert.equal((await f.page.locator('#result-json').textContent()).includes('fixture-release'),false);
+});
+
+const diagnosticsVersion='questionable.file_manager.local_api.v3';
+const diagnosticsLimits={maximumProcessLogs:8,recentLogLinesPerCapture:400,maximumPayloadFiles:14,maximumPayloadFileBytes:262144,maximumPayloadBytes:3670016,maximumArchiveBytes:4194304,reservedOutputBytes:8388608,reservedOutputFiles:15,maximumRequiredStandardOutputBytes:262144,maximumRequiredStandardErrorBytes:262144,maximumOptionalStandardOutputBytes:262144,maximumOptionalStandardErrorBytes:262144,maximumInputArtifactBytes:1073741824,maximumBinaryFramingBytes:256,maximumProcessTimeoutSeconds:300};
+function diagnosticsSession(sessionId='fixture-session') {return {sessionId,actions:['devices','device.status','device.keep-awake','device.normal'],artifactStaging:{supported:true,maximumFileBytes:1073741824},retainedOperations:{supported:true,contractVersions:['questionable.file_manager.local_api.v1','questionable.file_manager.local_api.v2',diagnosticsVersion]}};}
+function diagnosticsPrepared() {return {contractVersion:diagnosticsVersion,operationId:'api-'+'a'.repeat(32),command:'apk.diagnose',commandDigest:'b'.repeat(64),expiresAt:new Date(Date.now()+120000).toISOString(),serial:'FIXTURE-A',artifact:{sizeBytes:3,sha256:createHash('sha256').update(Buffer.from([1,2,3])).digest('hex'),identity:{packageName:'com.example.fixture',versionCode:1,versionName:'1.0',signerSha256:'a'.repeat(64),splitName:null}},outputIntent:{outputId:'diag-'+'c'.repeat(32),policyVersion:'exact-installed-diagnostic-output.v1',archiveFormat:'zip-store.v1',plannedLeafDigest:'d'.repeat(64),limits:{...diagnosticsLimits}}};}
+function diagnosticsCompleted(prepared) {return {contractVersion:diagnosticsVersion,operationId:prepared.operationId,command:'apk.diagnose',commandDigest:prepared.commandDigest,expiresAt:prepared.expiresAt,stage:'completed',consumed:true,serial:prepared.serial,output:{intent:prepared.outputIntent,phase:'available',available:true,resourceCount:8,debtCount:0,errorCode:null,archive:{outputId:prepared.outputIntent.outputId,fileName:'apk-diagnostics.zip',sizeBytes:3,sha256:'e'.repeat(64),publishedAt:new Date().toISOString()}},diagnosticSummary:{diagnosticContract:'questionable.file_manager.apk_diagnostic_bundle.v3',capturedAt:new Date().toISOString(),captureState:'complete',payloadCount:6,failedCount:0,truncatedCount:0,applicationReadiness:'unknown',applicationReadinessAuthority:false,openXrReadiness:'unknown',openXrReadinessAuthority:false,wearerVisibility:'unknown',wearerVisibilityAuthority:false},errorCode:null};}
+async function stageDiagnosticsSource(f) {await f.selectA();await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});await f.page.locator('#stage-apk').click();await f.settled();}
+
+test('real app diagnostic original survives lost capture and recovers without target, upload or replay',async t=>{
+  let sessionNumber=0,prepared,executeCount=0,statusCount=0;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:diagnosticsSession(++sessionNumber===1?'fixture-session':'replacement-session')}),diagnostics:async({route,body,path})=>{
+    if(path.endsWith('/preflight')) {prepared=diagnosticsPrepared();return route.fulfill({json:prepared});}
+    if(path.endsWith('/execute')) {executeCount++;const saved=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),diagnosticsKey);assert.equal(saved.executionSent,true);assert.equal(saved.operationId,body.operationId);assert.equal(saved.commandDigest,body.commandDigest);return route.abort('failed');}
+    if(path.endsWith('/status')) {statusCount++;assert.deepEqual(body,{contractVersion:diagnosticsVersion,operationId:prepared.operationId,commandDigest:prepared.commandDigest});return route.fulfill({json:diagnosticsCompleted(prepared)});}
+    return route.abort('blockedbyclient');
+  }});
+  assert.equal(f.calls.length,0);await f.connect();assert.equal(f.calls.length,1);await stageDiagnosticsSource(f);
+  await f.page.locator('#diagnostics-prepare').click();await f.settled();await f.page.locator('#diagnostics-consent').check();await f.page.locator('#diagnostics-capture').click();await f.settled();
+  assert.equal(executeCount,1);assert.equal(statusCount,0);assert.equal(await f.page.locator('#diagnostics-capture').isDisabled(),true);
+  await f.page.locator('#power-confirm').check();assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  const saved=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),diagnosticsKey);
+  await f.page.locator('#disconnect-host').click();await f.page.reload();await f.connect();
+  assert.equal(executeCount,1);assert.equal(statusCount,0);assert.equal(await f.page.locator('#selection').textContent(),'Choose a headset to read its current state.');
+  await f.page.locator('#diagnostics-status').click();await f.settled();assert.equal(statusCount,1);assert.equal(executeCount,1);
+  assert.equal(await f.page.locator('#diagnostics-copy').isEnabled(),true);
+  const recovered=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),diagnosticsKey);assert.equal(recovered.operationId,saved.operationId);assert.equal(recovered.stage,'completed');
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/output')).length,0);
+  await f.selectA();await f.page.locator('#power-confirm').check();assert.equal(await f.page.locator('#apply-hold').isEnabled(),true);
+});
+
+test('real app sibling unknown blocks diagnostic preparation through pure uncertainty getters',async t=>{
+  const f=await fixture(t,{session:route=>route.fulfill({json:diagnosticsSession()})});
+  const original={requestId:'00000000-0000-4000-8000-000000000077',sessionId:'fixture-session',action:'device.normal',target:'FIXTURE-A'};
+  await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:originalKey,value:original});await f.page.reload();await f.connect();await stageDiagnosticsSource(f);
+  assert.equal(await f.page.locator('#diagnostics-prepare').isDisabled(),true);assert.equal(f.calls.filter(call=>call.path.startsWith('/browser/v3/retained/')).length,0);
+  assert.deepEqual(await f.outstanding(),original);
+});
+
+test('real app uncertain diagnostic preparation blocks mutations but sends no automatic recovery calls',async t=>{
+  const f=await fixture(t,{session:route=>route.fulfill({json:diagnosticsSession()})});
+  const original={contractVersion:diagnosticsVersion,command:'apk.diagnose',phase:'preflight-unknown',attemptId:'00000000-0000-4000-8000-000000000078',sessionId:'old-session',artifactId:'00000000000040008000000000000003',artifactSha256:'a'.repeat(64),artifactSizeBytes:3,serial:'FIXTURE-A',operationId:null,commandDigest:null,outputId:null,plannedLeafDigest:null,expiresAt:null,executionSent:false,cancelPending:false,stage:'clientUncertain'};
+  await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:diagnosticsKey,value:original});await f.page.reload();await f.connect();await f.selectA();await f.page.locator('#power-confirm').check();
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);assert.equal(await f.page.locator('#diagnostics-capture').isDisabled(),true);assert.equal(await f.page.locator('#diagnostics-status').isDisabled(),true);assert.equal(f.calls.filter(call=>call.path.startsWith('/browser/v3/retained/')).length,0);
+  assert.deepEqual(await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),diagnosticsKey),original);
 });
