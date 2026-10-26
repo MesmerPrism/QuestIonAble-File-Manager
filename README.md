@@ -27,9 +27,9 @@ Artifact-bound readiness preflight and exact or explicitly weaker development
 runtime reads work without configuring the retained owner.
 It can also capture bounded headset file pulls and single-APK exports, then
 verify streamed saves where the browser supports a file picker. The configured
-durable owner supports reviewed inspected install, resolved launch and runtime
-observation without replay after reconnect. Other hosts show explicit
-protected-staging/owner limitations. The current CLI/WPF remains available for
+durable owner supports reviewed inspected install, resolved launch, exact
+single-target deployment and runtime observation without replay after reconnect.
+Other hosts show explicit protected-staging/owner limitations. The current CLI/WPF remains available for
 the remaining operations while browser parity continues.
 
 > This is an independent open-source project. It is not affiliated with or

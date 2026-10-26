@@ -110,8 +110,9 @@ The standalone native host adds these authenticated routes on its existing
 explicit listener; it uses the same registry, state root, integrity key,
 journal/anchor, exclusive state owner, staging custody, and capacity limits.
 Starting a second owner or initializing separate v2 state is unnecessary.
-The browser host continues to use its existing v1 routes; this native foundation
-does not itself expose a browser deploy button or complete browser migration.
+The browser host projects this same owner through its explicitly versioned
+retained routes and reviewed deploy control. See [browser operations](browser-operator.md);
+other advanced deployment policies remain outside this slice.
 
 | Route | Core registry entry point | Request |
 | --- | --- | --- |
