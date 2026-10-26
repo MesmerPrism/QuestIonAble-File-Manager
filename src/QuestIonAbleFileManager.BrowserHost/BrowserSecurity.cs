@@ -23,7 +23,7 @@ public sealed class BrowserSecurity
         "/", "/index.html", "/agent.html", "/app.js", "/pwa.js", "/retained-view.js", "/sw.js", "/manifest.webmanifest",
         "/icons/qfm-192.png", "/icons/qfm-512.png", "/styles.css", "/usb-proof.js", "/usb-proof-core.js",
         "/vendor/tango-adb.js", "/vendor/TANGO_NOTICES.txt", "/vendor/tango-packages.json",
-        "/transfer-view.js", "/verified-download.js", "/apk-read-view.js", "/file-push-view.js", "/vendor/noble-sha256.js",
+        "/transfer-view.js", "/verified-download.js", "/apk-read-view.js", "/file-push-view.js", "/kiosk-view.js", "/vendor/noble-sha256.js",
         "/vendor/NOBLE_HASHES_NOTICES.txt", "/vendor/noble-hashes-packages.json",
         "/THIRD_PARTY_NOTICES.md", "/vendor/THIRD_PARTY_NOTICES.md",
         "/vendor/LICENSE", "/vendor/LICENSE.txt"

@@ -5,6 +5,13 @@ using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
+[CollectionDefinition("Command runner deadlines", DisableParallelization = true)]
+public sealed class CommandRunnerDeadlineCollection;
+
+// Windows redirected anonymous pipes use blocking ThreadPool work internally.
+// Other process fixtures can starve the timer/continuation workers, so these
+// wall-clock assertions run separately without weakening the actual deadline.
+[Collection("Command runner deadlines")]
 public sealed class CommandRunnerDeadlineTests
 {
     [Theory]
@@ -17,13 +24,15 @@ public sealed class CommandRunnerDeadlineTests
         using var fixture = new HeldPipeFixture(mode);
         var timer = Stopwatch.StartNew();
         await Assert.ThrowsAsync<TimeoutException>(() => Invoke(mode, fixture, TimeSpan.FromSeconds(3)));
+        var invocationElapsed = timer.Elapsed;
         Assert.True(File.Exists(fixture.Marker), "The actual parent reached its exit boundary before the deadline.");
         var parentId = int.Parse(File.ReadAllText(fixture.Marker));
         Assert.True(HasExited(parentId), "This is a drain timeout, not a still-running parent timeout.");
         Assert.True(File.Exists(fixture.ChildReady), "The descendant actually opened its inherited pipes.");
         Assert.False(HasExited(fixture.ChildId), "The descendant still holds the pipes at the drain deadline.");
         fixture.AssertChildIdentity();
-        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(6), "The deadline must not await the child's eight-second natural exit.");
+        Assert.True(timer.Elapsed < TimeSpan.FromSeconds(6),
+            $"The deadline must not await the child's eight-second natural exit. Invocation: {invocationElapsed}; including fixture checks: {timer.Elapsed}.");
     }
 
     [Theory]
@@ -53,7 +62,10 @@ public sealed class CommandRunnerDeadlineTests
     {
         if (!OperatingSystem.IsWindows()) return;
         var runner = new CommandRunner();
-        var arguments = Arguments("[Console]::Out.Write('ok'); [Console]::Error.Write('note')");
+        // Consume the stream-in source before exiting: otherwise a fast child
+        // can close stdin while the runner is still flushing the test input.
+        var input = mode == "stream-in" ? "[Console]::In.ReadToEnd() | Out-Null; " : string.Empty;
+        var arguments = Arguments(input + "[Console]::Out.Write('ok'); [Console]::Error.Write('note')");
         if (mode == "ordinary")
         {
             var result = await runner.RunAsync(PowerShell, arguments, TimeSpan.FromSeconds(10));

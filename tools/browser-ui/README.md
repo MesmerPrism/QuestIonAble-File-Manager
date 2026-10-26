@@ -9,6 +9,7 @@ node --test tools/browser-ui/retained-deploy.test.cjs
 node --test tools/browser-ui/apk-read.test.cjs
 node --test tools/browser-ui/transfers.test.cjs
 node --test tools/browser-ui/file-push.test.cjs
+node --test tools/browser-ui/kiosk.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -36,6 +37,9 @@ and lost-reply/reload behavior without replay or fallback.
 APK read fixtures verify true readiness versus retained preparation, exact and
 development-policy separation, structured absence, no automatic fallback,
 scope-bound late replies and preservation of unknown mutation references.
+Kiosk fixtures cover fixed product channels, explicit activity-opening consent,
+local-only filtering/highlighting, catalog-bound selection, conditional unavailable
+no-ops, original request custody and separate provider facts without reconciliation.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,

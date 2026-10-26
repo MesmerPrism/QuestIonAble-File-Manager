@@ -423,6 +423,70 @@ receipt or establish application/OpenXR readiness. Unknown mutations keep new
 device changes blocked; use the existing typed owner recovery route and its
 actual evidence before any further mutation.
 
+## Optional Kiosk catalog and selection
+
+Kiosk is optional. Choose one ready target and exactly `stable` or `labs`; the
+channel fixes package, activity and provider authority. **Read passive installation
+facts** queries package/control-contract facts without requesting an activity.
+Reported versions, helper/control flags and provider availability establish neither
+fresh signer bytes nor application/connection readiness.
+
+**Open Kiosk and read catalog once** requires explicit activity-opening consent.
+Local filtering and row highlighting send no requests. **Select reviewed row on
+headset once** requires separate consent and one unique installed, launchable
+key/package from a completed catalog in this host session. Fresh reply key/package
+and the bound Core marker must match. This card sends no launch command. Legacy
+normal/guarded launch readback checks guard state and cannot prove that a reviewed
+named app launched; that projection remains separate work.
+
+All four actions use the authenticated existing execute/one-use ledger and shared
+gate. Every request includes `requestId`, `action`, `serial` and `productChannel`:
+
+| Action | Additional exact fields |
+| --- | --- |
+| `kiosk.installation` | None; passive read. |
+| `kiosk.catalog.open` | `confirmed` exactly `true`. |
+| `kiosk.select` | `catalogRequestId`, `key`, `confirmed` exactly `true`. |
+| `kiosk.original-result` | `providerRequestId`, `expectedCommand` exactly `status` or `select`; `key` is required only for `select`. |
+
+The host derives an opening/selection provider ID as `pc-` followed by the outer
+browser GUID without dashes. The UI saves both IDs before dispatch. Core's new
+closed routes bound each process output to 1 MiB and the browser operation to
+90 seconds. Core caps catalog rows at 512, and the browser projects at most 128;
+truncation stays explicit. `kiosk` returns typed installation, catalog/selection,
+provider-state and activity-request facts beside a bound mutation receipt, with
+raw Core results, native vectors, tag-file paths and Direct credentials omitted.
+Activity dispatch acknowledgement does not prove foreground or app readiness.
+
+If the operator is unavailable, a verified installation-only result with no
+request admission/activity and a confirmed conditional marker completes the
+check without pretending a catalog or selection exists. The UI clears stale
+catalog authority; selection was not performed. Rejection, pending, crossed or
+uncertain results after possible admission preserve the original and block other
+mutations. Page loss does not cancel admitted work; nothing automatically retries.
+
+Explicit original browser GET reads only its current-process ledger. A changed
+host session cannot recover that ledger. **Read original provider facts (keep
+original)** uses the saved provider ID/command/target/channel in a new read-only
+lookup, without admission or activity opening. Completed provider facts stay
+separate and never clear or rewrite an unknown original. An incomplete provider
+response cannot distinguish missing from queued and proves no absence of effects.
+Save the reference and use the qualified typed owner recovery route when needed.
+These actions require neither protected artifact staging nor Native API state/key.
+
+The new CLI routes use the same factories and preserve historical `kiosk status`
+behavior:
+
+```powershell
+questionable-file-manager.exe kiosk installation --serial <exact-target> --product-channel stable --json
+questionable-file-manager.exe kiosk catalog-open --serial <exact-target> --product-channel stable --request-id <pc-guid> --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk select --serial <exact-target> --product-channel stable --request-id <pc-guid> --key <returned-key> --confirm-kiosk-control --json
+questionable-file-manager.exe kiosk original-result --serial <exact-target> --product-channel stable --request-id <original-pc-guid> --expected-command status --json
+```
+
+Direct Link, setup/provisioning, tag transport, launch/options and secondary controls
+retain their existing typed CLI/WPF alternatives during migration.
+
 ## Power and existing supervisors
 
 The bounded awake command already applies stay-on, wake and the exact Meta

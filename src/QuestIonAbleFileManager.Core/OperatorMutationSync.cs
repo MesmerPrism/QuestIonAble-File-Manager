@@ -245,6 +245,8 @@ internal static class OperatorMutations
         OperatorCommandKind.InstallApkBundleMany or
         OperatorCommandKind.InstallRustyKiosk or
         OperatorCommandKind.ProvisionRustyKiosk or
+        OperatorCommandKind.OpenRustyKioskCatalog or
+        OperatorCommandKind.SelectRustyKioskApp or
         OperatorCommandKind.PushRustyKioskTags or
         OperatorCommandKind.SetQuestKeepAwake or
         OperatorCommandKind.SetQuestPerformance => true,
@@ -282,6 +284,8 @@ internal static class OperatorMutations
         OperatorCommandKind.ProvisionRustyKiosk =>
             $"Rusty Kiosk {KioskSetupIdentity(command.RustyKioskProduct)} USB authority provisioned",
         OperatorCommandKind.PushRustyKioskTags => "tag file hotloaded by Rusty Kiosk",
+        OperatorCommandKind.OpenRustyKioskCatalog => $"Rusty Kiosk installation inspected; catalog requested if available ({command.RustyKioskProduct?.WireName})",
+        OperatorCommandKind.SelectRustyKioskApp => $"Rusty Kiosk installation inspected; selection {command.RustyKioskValue} requested if available ({command.RustyKioskProduct?.WireName})",
         OperatorCommandKind.SetQuestKeepAwake => command.Enabled == true
             ? "keep-awake enabled"
             : "normal power policy restored",
@@ -301,6 +305,7 @@ internal static class OperatorMutations
             OperatorCommandKind.InstallRustyKiosk => ObserveKioskInstall(command, result),
             OperatorCommandKind.ProvisionRustyKiosk => ObserveKioskProvision(command, result),
             OperatorCommandKind.InvokeRustyKiosk => ObserveKioskCommand(command, result),
+            OperatorCommandKind.OpenRustyKioskCatalog or OperatorCommandKind.SelectRustyKioskApp => ObserveKioskAdbCommand(command, result),
             OperatorCommandKind.PushRustyKioskTags => ObserveKioskTagHotload(result),
             OperatorCommandKind.SetQuestKeepAwake => ObserveKeepAwake(command, result),
             OperatorCommandKind.SetQuestPerformance => ObservePerformance(command, result),
@@ -668,6 +673,30 @@ internal static class OperatorMutations
                 command.RustyKioskCommand == RustyKioskCommand.RequestWifiAdb
                     ? "Meta's wearer approval is still pending; refresh after accepting or declining the prompt."
                     : "The requested Rusty Kiosk state has not appeared in headset readback.");
+    }
+
+    private static OperatorMutationObservation ObserveKioskAdbCommand(OperatorCommand command, OperatorExecutionResult result)
+    {
+        var facts = result.RustyKioskAdbResult ?? throw new InvalidOperationException("Kiosk ADB result facts are missing.");
+        if (facts.Serial != command.Serial || facts.ProductChannel != command.RustyKioskProduct?.WireName ||
+            facts.ProviderRequestId != command.RustyKioskProviderRequestId || facts.ExpectedCommand != command.RustyKioskCommand || facts.Value != command.RustyKioskValue)
+            throw new InvalidDataException("Kiosk ADB result facts did not match their typed request.");
+        if (facts.State == RustyKioskAdbResultState.InstallationOnly && !facts.ActivityOpenRequested && facts.Result is null && facts.Installation?.HostOperatorAvailable == false)
+        {
+            var conditional = command.Kind == OperatorCommandKind.SelectRustyKioskApp
+                ? "Installation facts checked; selection not performed because the operator is unavailable."
+                : "Installation facts checked; catalog not requested because the operator is unavailable.";
+            return new(OperatorMutationStage.Confirmed, conditional, conditional, HeadsetReadback: true);
+        }
+        if (facts.State == RustyKioskAdbResultState.Completed && facts.ActivityOpenRequested && facts.Result is { Accepted: true, Completed: true } kiosk &&
+            kiosk.RequestId == command.RustyKioskProviderRequestId && kiosk.Command == command.RustyKioskCommand &&
+            (command.Kind != OperatorCommandKind.SelectRustyKioskApp || kiosk.State.SelectedKey == command.RustyKioskValue))
+            return OperatorMutationObservation.Confirmed(command.Kind == OperatorCommandKind.SelectRustyKioskApp
+                ? "The exact catalog selection and its activity dispatch request were acknowledged."
+                : "The catalog result and its activity dispatch request were acknowledged.");
+        if (facts.State == RustyKioskAdbResultState.Rejected)
+            return OperatorMutationObservation.Rejected("The provider rejected the typed catalog or selection request.", "No matching catalog or selection effect was confirmed.");
+        return OperatorMutationObservation.Pending("No matching completed catalog or selection effect was confirmed.", "The typed Kiosk request remains pending.");
     }
 
     private static string KioskDesiredState(OperatorCommand command) =>

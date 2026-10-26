@@ -24,7 +24,9 @@ release packaging remains separate.
 On a Windows NTFS host, the browser also stages a selected local APK, inspects
 it through shared Core, and downloads/removes its verified temporary bytes.
 Artifact-bound readiness preflight and exact or explicitly weaker development
-runtime reads work without configuring the retained owner.
+runtime reads work without configuring the retained owner. An optional Kiosk
+card reads installation facts, explicitly opens its catalog, and selects a reviewed
+returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 It can also stage generic files for an explicitly approved push to a full headset
 file path, capture bounded file pulls and single-APK exports, then verify streamed
 saves where the browser supports a file picker. Push confirms remote size only.
