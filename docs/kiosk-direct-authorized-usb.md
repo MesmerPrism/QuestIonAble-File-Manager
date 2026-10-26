@@ -49,6 +49,16 @@ The ID is nonsecret evidence for that bootstrap, not a credential or permission
 to repeat enable. It cannot restore the session key after process exit, and no
 public saved-ID cleanup or session-restoration API is introduced by this seam.
 
+For a logical Kiosk command, Core's four-argument
+`KioskDirectOperatorCommand.Invoke(command, value, operatorConfirmed, requestId)`
+retains a supplied 8–64 character ASCII letter/digit/underscore/hyphen token and
+forwards it to the existing admission client. The three-argument method still
+generates an ID in the client. Keep the logical request ID separate from the
+operator `ActionId`, each signed HTTP request ID, and the USB bootstrap ID.
+After a lost admission reply, use only that original logical ID for explicit
+status/cancellation; do not call Invoke again. This does not add durable session
+credentials or a new retry policy.
+
 If bootstrap enabled the listener, cleanup sends `direct-disable` with the
 originating operation ID, session ID, and exact pre-disable generation. Disable
 is asynchronous. File Manager takes the post-disable generation from the

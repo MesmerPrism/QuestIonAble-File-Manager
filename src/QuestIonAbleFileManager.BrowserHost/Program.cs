@@ -40,11 +40,13 @@ var artifacts = new Lazy<BrowserArtifactStore>(() => new BrowserArtifactStore())
 var operationGate = new BrowserOperationGate();
 var retained = new BrowserRetainedOperations(() => artifacts.Value, operationGate.TryAcquire);
 var transfers = new BrowserTransfers(() => artifacts.Value);
+var directConnections = new BrowserDirectConnections();
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
-}, () => artifacts.Value, operationGate, BrowserArtifactStore.Capability.Supported ? transfers.ExecuteAsync : null);
+}, () => artifacts.Value, operationGate, BrowserArtifactStore.Capability.Supported ? transfers.ExecuteAsync : null,
+    directConnections);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
@@ -158,6 +160,13 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    try
+    {
+        if (!await directConnections.ShutdownAsync())
+        { Console.Error.WriteLine("direct_connection_cleanup_incomplete"); shutdownCode = 3; }
+    }
+    catch (Exception)
+    { Console.Error.WriteLine("direct_connection_cleanup_incomplete"); shutdownCode = 3; }
     try { retained.Dispose(); }
     catch (BrowserRetainedException)
     { Console.Error.WriteLine("retained_owner_cleanup_incomplete"); shutdownCode = 3; }

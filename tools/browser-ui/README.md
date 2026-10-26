@@ -10,6 +10,7 @@ node --test tools/browser-ui/apk-read.test.cjs
 node --test tools/browser-ui/transfers.test.cjs
 node --test tools/browser-ui/file-push.test.cjs
 node --test tools/browser-ui/kiosk.test.cjs
+node --test tools/browser-ui/direct-connection.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -67,3 +68,9 @@ commands, responsive layout and coherent waiting-worker upgrades. It never
 starts QFM's live API, ADB or a USB chooser. It closes its browser/server on exit;
 release the port reservation afterwards. Evidence uses the same external
 `QFM_BROWSER_UI_EVIDENCE` directory as the DOM fixtures.
+
+Direct-connection fixtures exercise the shipped connect/status/close card with
+synthetic acknowledgements only. They check pre-dispatch USB ownership IDs,
+opaque scope, expiry/explicit close, pre-existing listener preservation, original
+UNKNOWN custody, no replay, private-field exclusion and cross-view blocking.
+They do not mint a real credential or enable a listener on a headset.

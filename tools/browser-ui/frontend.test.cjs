@@ -78,7 +78,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -326,4 +326,23 @@ test('public credential form stays disabled when the application module fails to
   assert.equal(await f.page.locator('#connect').isDisabled(), true);
   assert.equal(await f.page.locator('#token').inputValue(), '');
   assert.deepEqual(f.calls, [], 'Static markup accepts no credentials or API request without JavaScript');
+});
+
+for (const kind of ['original','changed-host-connection','same-host-connection']) test(`real app shares Direct custody gating: ${kind}`,async t=>{
+  const f=await fixture(t),connectRequestId='11111111-1111-4111-8111-111111111111';
+  const scope={sessionId:kind==='changed-host-connection'?'old-host-session':'fixture-session',connectRequestId,
+    usbOperationId:'usb_'+connectRequestId.replaceAll('-',''),serial:'FIXTURE-A',productChannel:'stable'};
+  const reference=kind==='original'?{original:{...scope,requestId:connectRequestId,action:'kiosk.direct.connect-usb'},connection:null}:
+    {original:null,connection:{...scope,connectionId:'22222222-2222-4222-8222-222222222222',expiresAtUtc:new Date(Date.now()+300000).toISOString()}};
+  await f.page.evaluate(value=>sessionStorage.setItem('qfm-browser-direct-connection-v1',JSON.stringify(value)),reference);
+  await f.page.reload();assert.equal(f.calls.length,0,'Reload never reconnects or reads an original');
+  await f.connect();await f.selectA();await f.page.locator('#power-confirm').check();
+  const blocked=kind!=='same-host-connection';assert.equal(await f.page.locator('#apply-hold').isDisabled(),blocked);
+  if(blocked){
+    assert.match(await f.page.locator('#direct-state').textContent(),/unknown/i);
+    // Exercise the execute-time guard as well as disabled markup.
+    await f.page.locator('#apply-hold').evaluate(button=>{button.disabled=false;});
+    await f.page.locator('#apply-hold').dispatchEvent('click');assert.equal(f.mutations().length,0);
+  }else{await f.page.locator('#apply-hold').click();await f.settled();assert.equal(f.mutations().length,1);}
+  assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-connection-v1'))),reference);
 });

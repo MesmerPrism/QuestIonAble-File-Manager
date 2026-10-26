@@ -43,6 +43,12 @@ is framework-dependent: retain its sibling assemblies, runtime metadata and
 wwwroot; it is not one of the dedicated Fleet provider trust units. No signed
 release or installed Windows-service behavior is claimed.
 
+For a checked development archive with complete shell, licenses and file
+checksums, use the [optional connector packaging guide](browser-connector-package.md).
+The package has no native apphost or bundled runtime/ADB and changes no signed
+installer/update channel. Extracted Windows and WSL Linux runtime checks are
+separate from other RID publish targets and macOS runtime validation.
+
 ## Installable shell and offline help
 
 Open the exact local host address, then use **Install QFM** when the browser
@@ -486,6 +492,78 @@ questionable-file-manager.exe kiosk original-result --serial <exact-target> --pr
 
 Direct Link, setup/provisioning, tag transport, launch/options and secondary controls
 retain their existing typed CLI/WPF alternatives during migration.
+
+## Optional USB Direct connection
+
+The Direct card opens one short-lived authenticated Kiosk operator connection
+from an already authorized **classic USB** target and explicit Stable/Labs
+channel. This does not enable Wi-Fi ADB or restart the shared daemon. The host
+must also be able to reach Kiosk's issued HTTP endpoint; the endpoint and
+credential never cross into the browser. Native retained configuration,
+protected artifact staging and Fleet/profile enrollment are independent.
+
+Explicit connect performs the existing Core USB bootstrap and adoption:
+authenticated status, completed typed Kiosk Status and signed staging inventory.
+Only that complete acknowledgement publishes a connection handle. “Connected”
+describes the adopted operator transport; it establishes no app foreground,
+readiness or fresh installed-signer proof. The initial card exposes no generic
+Invoke, launch, file, install, tag or manual-pairing command.
+
+| Action | Exact request fields beyond `requestId` and `action` |
+| --- | --- |
+| `kiosk.direct.connect-usb` | `serial`, `productChannel:stable|labs`, `confirmed:true` |
+| `kiosk.direct.status` | `connectionId` |
+| `kiosk.direct.close` | `connectionId`, `confirmed:true` |
+
+These use the existing execute route, one-use request namespace, shared gate
+and original-result GET. No body accepts an endpoint, credential, private
+session/generation, provider authority or arbitrary command. The USB operation
+ID is `usb_` plus the connect request UUID without hyphens and is retained before
+the single POST. Each opaque connection handle stays bound to that host session,
+connect request, exact target and product. Status and close use this saved scope,
+independently of the currently selected headset/channel.
+
+Responses have `result:null` and the optional typed `kioskDirectConnection`
+projection. Actual Core USB bootstrap, Direct adoption and cleanup receipts
+remain distinct; no browser wrapper fabricates a standard headset mutation
+receipt. Raw Direct results, endpoint, key, private session/generation, staging
+inventory names, native arguments and exception text are omitted.
+
+**Read signed status** is explicit and never bootstraps or adopts again. It does
+not acknowledge a lost connect/close response. **Close this connection** erases
+the native key and awaits Core cleanup: an owned listener must be confirmed
+disabled and stopped on its post-disable generation; a pre-existing wearer
+listener is preserved. Preservation does not mean that listener stopped. An
+incomplete cleanup remains `cleanup_unknown`; repeated close is Core's memoized
+result, not an implicit fresh cleanup attempt.
+
+Expiry revokes use of the handle and erases its key. The nonsecret cleanup
+reference remains so explicit close can still clean up an expired connection.
+Expiry itself sends no USB cleanup command. Orderly host shutdown waits for its
+active operation, revokes the key, and attempts cleanup under the same shared
+gate. A bounded failure to acquire cleanup custody reports a fixed
+incomplete-cleanup diagnostic rather than overlapping another operation.
+A process crash or lost USB transport can still leave cleanup uncertain.
+
+Ordinary bootstrap process reads are capped at 1 MiB with strict UTF-8 and no
+unexpected diagnostics; the existing sensitive byte parser retains its 16 KiB
+limits and buffer clearing. The operation uses the existing 90-second browser
+deadline, followed when needed by Core's independent bounded cleanup. A page
+disconnect cannot cancel admitted resource custody or release its gate early.
+
+Tab session storage holds only the small original operation and current
+connection references, allowing an explicit close after reload. No connection
+facts, API result or credential enters the offline cache. Loading, reloading,
+authenticating, changing selection and expiry send no operation automatically.
+Late/crossed or lost effect replies preserve UNKNOWN and block further device
+changes. Same-host-session original GET can recover its actual acknowledgement;
+status, expiry and separate cleanup do not rewrite that original. A changed
+host session cannot restore the old in-memory client, ledger or key. Save the
+reference for owner investigation; this initial slice adds no public saved-ID
+cleanup or credential-restoration route. Do not reconnect to infer the old
+outcome. The existing [typed Direct CLI](kiosk-direct-authorized-usb.md) remains
+the alternative for the other Direct workflows and its own explicitly scoped
+live-session operations.
 
 ## Power and existing supervisors
 
