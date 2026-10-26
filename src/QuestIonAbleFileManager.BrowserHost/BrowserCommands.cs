@@ -11,7 +11,8 @@ public sealed record BrowserCommandOutcome(
     BrowserArtifactInspectionOutcome? ArtifactInspection = null,
     BrowserArtifactTransferOutcome? ArtifactTransfer = null,
     BrowserArtifactReadOutcome? ArtifactRead = null,
-    BrowserArtifactPushOutcome? ArtifactPush = null);
+    BrowserArtifactPushOutcome? ArtifactPush = null,
+    BrowserKioskOutcome? Kiosk = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
@@ -19,7 +20,7 @@ public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artif
 
 public sealed record BrowserCommandRequest(string RequestId, string Action, OperatorCommand Command, bool Mutation);
 
-public sealed class BrowserCommands
+public sealed partial class BrowserCommands
 {
     public const string ContractVersion = "questionable.file_manager.browser.v1";
     public const int MaximumRequestBytes = 4096;
@@ -27,7 +28,8 @@ public sealed class BrowserCommands
     public static readonly string[] Actions =
         ["devices", "device.status", "wifi.enable", "wifi.connect", "wifi.disconnect", "device.keep-awake", "device.normal",
          "files.list", "apk.list", "apk.permissions", "device.performance", "device.performance-clear",
-         "device.actor-observe", "device.actor-identity", "adb.forwards"];
+         "device.actor-observe", "device.actor-identity", "adb.forwards",
+         "kiosk.installation", "kiosk.catalog.open", "kiosk.select", "kiosk.original-result"];
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
     private readonly Func<BrowserArtifactStore>? _artifactStore;
     private readonly BrowserOperationGate _operationGate;
@@ -76,6 +78,8 @@ public sealed class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
+        if (BrowserKioskCommands.IsKioskAction(body))
+            return await ExecuteKioskAsync(BrowserKioskCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserTransferCommands.IsTransferAction(body))
             return await ExecuteTransferAsync(BrowserTransferCommands.Parse(body), stopping).ConfigureAwait(false);
         var artifact = BrowserArtifactCommands.IsArtifactAction(body) ? BrowserArtifactCommands.Parse(body) : null;
