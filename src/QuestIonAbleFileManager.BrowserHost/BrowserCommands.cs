@@ -8,9 +8,12 @@ public sealed record BrowserCommandOutcome(
     string RequestId, string Action, string State,
     OperatorExecutionResult? Result = null, string? Error = null,
     OperatorMutationReceipt? Mutation = null,
-    BrowserArtifactInspectionOutcome? ArtifactInspection = null);
+    BrowserArtifactInspectionOutcome? ArtifactInspection = null,
+    BrowserArtifactTransferOutcome? ArtifactTransfer = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
+public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
+    string? SourcePath = null, string? PackageName = null, string? ChecksumText = null);
 
 public sealed record BrowserCommandRequest(string RequestId, string Action, OperatorCommand Command, bool Mutation);
 
@@ -26,8 +29,9 @@ public sealed class BrowserCommands
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
     private readonly Func<BrowserArtifactStore>? _artifactStore;
     private readonly BrowserOperationGate _operationGate;
+    private readonly Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? _capture;
     public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
-        ? [.. Actions, "apk.inspect"] : Actions;
+        ? _capture is not null ? [.. Actions, "apk.inspect", "files.pull", "apk.export"] : [.. Actions, "apk.inspect"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
     private bool _running;
@@ -49,11 +53,13 @@ public sealed class BrowserCommands
     }
 
     public BrowserCommands(Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> execute,
-        Func<BrowserArtifactStore>? artifactStore = null, BrowserOperationGate? operationGate = null)
+        Func<BrowserArtifactStore>? artifactStore = null, BrowserOperationGate? operationGate = null,
+        Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? capture = null)
     {
         _execute = execute;
         _artifactStore = artifactStore;
         _operationGate = operationGate ?? new BrowserOperationGate();
+        _capture = capture;
     }
 
     public void RequireSession(string session)
@@ -68,7 +74,11 @@ public sealed class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
+        if (BrowserTransferCommands.IsTransferAction(body))
+            return await ExecuteTransferAsync(BrowserTransferCommands.Parse(body), stopping).ConfigureAwait(false);
         var artifact = BrowserArtifactCommands.IsArtifactAction(body) ? BrowserArtifactCommands.Parse(body) : null;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+        timeout.CancelAfter(TimeSpan.FromSeconds(artifact is null ? 90 : BrowserArtifactStore.TransferTimeoutSeconds));
         if (artifact is not null)
         {
             // A consumed ID remains consumed even after its artifact was removed.
@@ -79,7 +89,7 @@ public sealed class BrowserCommands
                 if (_requests.Count >= MaximumRequests) throw new BrowserRequestException("session_capacity_reached", 409);
             }
         }
-        await using var artifactLease = await AcquireArtifactAsync(artifact, stopping).ConfigureAwait(false);
+        await using var artifactLease = await AcquireArtifactAsync(artifact, timeout.Token).ConfigureAwait(false);
         var request = artifact is null ? Parse(body) : new BrowserCommandRequest(
             artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), false);
         IDisposable operationLease;
@@ -96,8 +106,6 @@ public sealed class BrowserCommands
         }
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-            timeout.CancelAfter(TimeSpan.FromSeconds(90));
             BrowserCommandOutcome outcome;
             try
             {
@@ -142,6 +150,53 @@ public sealed class BrowserCommands
         finally { lock (_admission) { _running = false; operationLease.Dispose(); } }
     }
 
+    private async Task<BrowserCommandOutcome> ExecuteTransferAsync(BrowserTransferRequest request, CancellationToken stopping)
+    {
+        IDisposable operationLease;
+        lock (_admission)
+        {
+            if (_requests.ContainsKey(request.RequestId)) throw new BrowserRequestException("request_already_consumed", 409);
+            if (_capture is null) throw new BrowserRequestException("artifact_staging_unavailable", 503);
+            if (_running) throw new BrowserRequestException("busy", 409);
+            if (_requests.Count >= MaximumRequests) throw new BrowserRequestException("session_capacity_reached", 409);
+            operationLease = _operationGate.TryAcquire() ?? throw new BrowserRequestException("busy", 409);
+            _requests[request.RequestId] = new(request.RequestId, request.Action, "running"); _running = true;
+        }
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            timeout.CancelAfter(TimeSpan.FromSeconds(BrowserArtifactStore.TransferTimeoutSeconds));
+            BrowserCommandOutcome outcome;
+            try
+            {
+                var capture = await _capture(request, timeout.Token).ConfigureAwait(false);
+                BrowserArtifactCommands.RequireArtifactId(capture.Artifact.Id);
+                BrowserArtifactCommands.RequireHash(capture.Artifact.Sha256);
+                if (capture.Serial != request.Serial || capture.Artifact.FileName != request.FileName ||
+                    capture.Artifact.SizeBytes is < 0 or > BrowserArtifactCommands.MaximumArtifactBytes ||
+                    (request.Action == "files.pull" && (capture.SourcePath != request.RemotePath || capture.PackageName is not null || capture.ChecksumText is not null)) ||
+                    (request.Action == "apk.export" && (capture.PackageName != request.PackageName ||
+                        capture.ChecksumText != $"{capture.Artifact.Sha256}  {capture.Artifact.FileName}\n")))
+                    throw new BrowserRequestException("capture_binding_invalid");
+                outcome = new(request.RequestId, request.Action, "completed", ArtifactTransfer: capture);
+            }
+            catch (Exception exception)
+            {
+                var code = exception switch
+                {
+                    SplitPackageException => "split_export_unsupported",
+                    BrowserRequestException error when error.Code == "target_not_ready" => error.Code,
+                    BrowserArtifactException error when error.Code is "artifact_size_limit" or "artifact_byte_capacity" or "artifact_file_capacity" => error.Code,
+                    OperationCanceledException => "capture_cancelled",
+                    _ => "capture_failed"
+                };
+                outcome = new(request.RequestId, request.Action, "failed", Error: code);
+            }
+            _requests[request.RequestId] = outcome; return outcome;
+        }
+        finally { lock (_admission) { _running = false; operationLease.Dispose(); } }
+    }
+
     private async Task<BrowserArtifactLease?> AcquireArtifactAsync(BrowserArtifactCommandRequest? artifact,
         CancellationToken cancellation)
     {
@@ -151,12 +206,13 @@ public sealed class BrowserCommands
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-            timeout.CancelAfter(TimeSpan.FromSeconds(90));
+            timeout.CancelAfter(TimeSpan.FromSeconds(BrowserArtifactStore.TransferTimeoutSeconds));
             return await _artifactStore().AcquireAsync(artifact.ArtifactId, artifact.Sha256,
                 artifact.SizeBytes, timeout.Token).ConfigureAwait(false);
         }
         catch (BrowserArtifactException exception) { throw new BrowserRequestException(exception.Code, 409); }
         catch (PlatformNotSupportedException) { throw new BrowserRequestException("artifact_staging_unavailable", 503); }
+        catch (OperationCanceledException) { throw new BrowserRequestException("artifact_operation_timeout", 408); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         { throw new BrowserRequestException("artifact_access_failed", 409); }
     }

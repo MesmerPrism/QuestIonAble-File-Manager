@@ -39,11 +39,12 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 var artifacts = new Lazy<BrowserArtifactStore>(() => new BrowserArtifactStore());
 var operationGate = new BrowserOperationGate();
 var retained = new BrowserRetainedOperations(() => artifacts.Value, operationGate.TryAcquire);
+var transfers = new BrowserTransfers(() => artifacts.Value);
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
-}, () => artifacts.Value, operationGate);
+}, () => artifacts.Value, operationGate, BrowserArtifactStore.Capability.Supported ? transfers.ExecuteAsync : null);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {

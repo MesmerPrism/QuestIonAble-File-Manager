@@ -14,6 +14,9 @@ test.after(async () => { await browser?.close(); });
 
 async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session, files, expectedLostResponse = false, blockApp = false } = {}) {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
+  // Exercise the bounded fallback here. Picker/streaming behavior has its own
+  // real-DOM suite with explicit destination handles and synthetic byte streams.
+  await context.addInitScript(() => Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}));
   t.after(() => context.close());
   const page = await context.newPage(), calls = [], errors = [], consoleProblems = [], blocked = [], retained = new Map();
   page.on('pageerror', error => errors.push(error.message));
@@ -40,7 +43,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       const artifact={id:'00000000000040008000000000000003',fileName:'fixture.apk',sizeBytes:3,sha256:createHash('sha256').update(Buffer.from([1,2,3])).digest('hex')};
       if(url.pathname==='/browser/v1/artifacts'&&request.method()==='POST')return route.fulfill({status:201,json:{state:'staged',scope:'localOnly',deviceDispatched:false,artifact}});
       if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='DELETE')return route.fulfill({json:{state:'removed',scope:'localOnly',deviceDispatched:false}});
-      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='GET')return route.fulfill({contentType:'application/octet-stream',body:Buffer.from([1,2,3])});
+      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='GET')return route.fulfill({contentType:'application/octet-stream',headers:{'Content-Length':'3','X-Qfm-Artifact-Sha256':artifact.sha256,'X-Qfm-Artifact-Size-Bytes':'3'},body:Buffer.from([1,2,3])});
       if(url.pathname==='/browser/v1/artifacts/cleanup')return route.fulfill({json:{state:'cleaned',count:1,scope:'localOnly',deviceDispatched:false}});
       if (url.pathname.startsWith('/browser/v1/requests/')) return route.fulfill({ json: reconcile(url.pathname.split('/').at(-1)) || { error: 'request_not_found' } });
       if (url.pathname === '/browser/v1/execute') {
@@ -58,7 +61,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';

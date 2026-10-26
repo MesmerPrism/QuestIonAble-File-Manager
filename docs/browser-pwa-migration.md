@@ -32,8 +32,8 @@ requirements stay with shared Core.
 | Discover USB / connected Wi-Fi, select target, refresh | `devices`; browser implemented. | Host ADB and ready exact target; no page-load discovery. |
 | Classic Wi-Fi enable/connect/disconnect | `wifi enable/connect/disconnect`; browser implemented. | Host transport effect, endpoint readback and exact confirmation. |
 | Directory list/open/up | `files list`; browser implemented. | Serial-scoped shell-readable absolute paths and literal file-name rendering. |
-| Pull/download and push/upload | `files pull/push`; browser pending. | Browser-selected bytes and bounded host-owned staging/download handles; no caller-selected local path. Preserve partial/uncertain transfer and clean only owned data. CLI explicit file paths remain supported. |
-| Package list / single APK export + SHA256 | `apk list/export`; browser list implemented, export pending. | Export is only installed APK, no app data/OBBs/assets/entitlements. Split exports stay explicit rejection with supported complete-set alternative. |
+| Pull/download and push/upload | Bounded ordinary Core pull to opaque browser download implemented; push pending. | One opened regular file, independently checked captured bytes; no caller-selected local path. Streaming verified save, bounded fallback and exact-owned cleanup. Uncertain remote writes require separate custody. |
+| Package list / single APK export + SHA256 | `apk list`; bounded single-APK export with opaque receipt/checksum implemented. | Export is only installed APK, no app data/OBBs/assets/entitlements. Splits reject before streaming; package paths rechecked afterwards. |
 | APK inspect/preflight | `apk inspect` over opaque staged upload; retained v1 preflight implemented. | Windows protected staging, configured stable Local API owner and host Build Tools. Exact digest/length, signer/version and target joins remain with Core. |
 | Install single / complete split set / parallel targets | Retained inspected single-APK install implemented; bundle/parallel projections pending. | Existing retained v1 replace/grant options and exact installed-byte readback; no downgrade/test-only expansion or queued offline install. Complete atomic split/parallel workflows remain with CLI. |
 | Deploy / launch / observe / diagnose / launch-diagnose | Retained resolved launch and runtime.observe implemented; advanced deploy/diagnostic projections pending. | Existing durable owner, original unknown-result custody and separate later read-only observation. Exact installed identity is required; transport/process/focus evidence is not app readiness. |
@@ -68,3 +68,10 @@ profiles, Fleet and portable distribution follow the same action inventory.
 Update each row at tested checkpoints, with device evidence separate from
 source, browser and packaging proof. Do not block the existing product developer
 loop on completion of this UI migration.
+
+Current protected capacity is 1 GiB per artifact, eight files and 2 GiB total.
+Streaming Save verifies incrementally before file close where supported;
+buffered fallback remains bounded to 256 MiB and cannot assert final disk-save
+completion. Retained-operation preparation is not complete CLI `apk preflight`
+parity: SDK compatibility, installed-byte classification and launcher-readiness
+views still need their separate projection.
