@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
@@ -21,14 +22,28 @@ public sealed class BoundedByteReadTests
         Assert.Empty(result.CommandResult.StandardError);
         Assert.True(destination.CanWrite);
         Assert.Single(runner.StreamCalls);
-        Assert.Equal(new[] { "-s", "FIXTURE", "shell", "-T", "-n" }, runner.StreamCalls[0].Take(5));
-        Assert.Equal(8, runner.MaximumBytes);
+        Assert.Equal(new[] { "-s", "FIXTURE", "exec-out", "sh", "-c" }, runner.StreamCalls[0].Take(5));
+        Assert.InRange(runner.MaximumBytes, 8, 8 + 256);
         Assert.Equal(TimeSpan.FromMinutes(5), runner.Timeout);
         Assert.Contains("[ ! -f /proc/$$/fd/3 ]", runner.StreamCalls[0][5]);
         Assert.Contains("stat -L -c %s -- /proc/$$/fd/3", runner.StreamCalls[0][5]);
         Assert.Equal(2, runner.StreamCalls[0][5].Split("stat -L -c %d:%i:%s:%Y:%Z -- /proc/$$/fd/3").Length - 1);
         Assert.DoesNotContain("/proc/self/fd/3", runner.StreamCalls[0][5]);
         Assert.Contains("-gt 8", runner.StreamCalls[0][5]);
+    }
+
+    [Fact]
+    public async Task FramingNeverTransformsBinaryPayloadAndSurvivesSingleByteWireChunks()
+    {
+        var bytes = Enumerable.Range(0, 256).Select(value => (byte)value).Concat(new byte[] { 13, 10, 0, 10, 13 }).ToArray();
+        var runner = new Runner(bytes) { ChunkBytes = 1 };
+        using var destination = new MemoryStream();
+        var result = await new AdbClient("fixture-adb", runner)
+            .PullFileBoundedAsync("FIXTURE", "/sdcard/binary.bin", destination, bytes.Length);
+        Assert.Equal(bytes, destination.ToArray());
+        Assert.Equal(bytes.Length, result.BytesWritten);
+        Assert.Equal(Hash(bytes), result.Sha256);
+        Assert.True(runner.MaximumBytes > bytes.Length);
     }
 
     [Fact]
@@ -132,6 +147,18 @@ public sealed class BoundedByteReadTests
     [InlineData("stderr-error")]
     [InlineData("wrong-count")]
     [InlineData("wrong-hash")]
+    [InlineData("missing-trailer")]
+    [InlineData("wrong-header-nonce")]
+    [InlineData("wrong-trailer-nonce")]
+    [InlineData("extra-bytes")]
+    [InlineData("invalid-size")]
+    [InlineData("long-header")]
+    [InlineData("merged-prefix-error")]
+    [InlineData("merged-payload-error")]
+    [InlineData("merged-trailer-error")]
+    [InlineData("header-only")]
+    [InlineData("truncated-payload")]
+    [InlineData("windows-text-expansion")]
     public async Task PartialOrUnverifiableTransferNeverReturnsSuccess(string scenario)
     {
         var runner = new Runner(scenario.Contains("overflow", StringComparison.Ordinal) ? [1, 2, 3, 4, 5] : [1, 2, 3]) { Scenario = scenario };
@@ -217,6 +244,7 @@ public sealed class BoundedByteReadTests
     {
         public string Scenario { get; init; } = "success";
         public Action? CancelDuringTransfer { get; init; }
+        public int ChunkBytes { get; init; } = int.MaxValue;
         public List<string[]> NativeCalls { get; } = [];
         public List<string[]> StreamCalls { get; } = [];
         public long MaximumBytes { get; private set; }
@@ -232,14 +260,36 @@ public sealed class BoundedByteReadTests
         public async Task<StreamingCommandResult> RunToStreamAsync(string fileName, IReadOnlyList<string> arguments, Stream destination, long maximumBytes, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested(); StreamCalls.Add(arguments.ToArray()); MaximumBytes = maximumBytes; Timeout = timeout;
-            if (Scenario is "swallowed-overflow" or "swallowed-destination") { try { await destination.WriteAsync(bytes, cancellationToken); } catch (IOException) { } }
-            else await destination.WriteAsync(bytes, cancellationToken);
-            CancelDuringTransfer?.Invoke(); cancellationToken.ThrowIfCancellationRequested();
+            var nonce = Regex.Match(arguments[5], "qfm-byte-transfer:v2:([0-9a-f]{32}):").Groups[1].Value;
+            Assert.Equal(32, nonce.Length);
             var declared = Scenario == "short" ? bytes.Length + 1 : bytes.Length;
-            var stderr = Scenario == "missing-frame" ? "" : $"qfm-byte-transfer:v1:{declared}\n";
-            if (Scenario == "stderr-error") stderr += "Permission denied\n";
+            var header = $"qfm-byte-transfer:v2:{nonce}:{declared}\n";
+            var trailer = $"\nqfm-byte-transfer:complete:v2:{nonce}:{declared}\n";
+            if (Scenario == "wrong-header-nonce") header = header.Replace(nonce, new string('0', 32), StringComparison.Ordinal);
+            if (Scenario == "wrong-trailer-nonce") trailer = trailer.Replace(nonce, new string('0', 32), StringComparison.Ordinal);
+            if (Scenario == "invalid-size") header = $"qfm-byte-transfer:v2:{nonce}:-1\n";
+            if (Scenario == "long-header") header = new string('x', 300) + "\n";
+            if (Scenario == "missing-frame") header = "";
+            if (Scenario == "missing-trailer") trailer = "";
+            if (Scenario == "merged-prefix-error") header = "Permission denied\n" + header;
+            if (Scenario == "merged-payload-error") header += "Permission denied\n";
+            if (Scenario == "merged-trailer-error") trailer = "Permission denied\n" + trailer;
+            var wire = Encoding.ASCII.GetBytes(header).Concat(bytes).Concat(Encoding.ASCII.GetBytes(trailer))
+                .Concat(Scenario == "extra-bytes" ? new byte[] { 0 } : []).ToArray();
+            if (Scenario == "header-only") wire = Encoding.ASCII.GetBytes(header);
+            if (Scenario == "truncated-payload") wire = Encoding.ASCII.GetBytes(header).Concat(bytes.Take(1)).ToArray();
+            if (Scenario == "windows-text-expansion") wire = wire.SelectMany(value => value == 10 ? new byte[] { 13, 10 } : [value]).ToArray();
+            for (var offset = 0; offset < wire.Length; offset += Math.Min(ChunkBytes, wire.Length - offset))
+            {
+                var chunk = wire.AsMemory(offset, Math.Min(ChunkBytes, wire.Length - offset));
+                if (Scenario is "swallowed-overflow" or "swallowed-destination")
+                { try { await destination.WriteAsync(chunk, cancellationToken); } catch (IOException) { } }
+                else await destination.WriteAsync(chunk, cancellationToken);
+            }
+            CancelDuringTransfer?.Invoke(); cancellationToken.ThrowIfCancellationRequested();
+            var stderr = Scenario == "stderr-error" ? "Permission denied\n" : "";
             return new(new(fileName, arguments, Scenario == "native-error" ? 1 : 0, "", stderr, TimeSpan.Zero),
-                Scenario == "wrong-count" ? bytes.Length + 1 : bytes.Length, Scenario == "wrong-hash" ? new string('0', 64) : Hash(bytes));
+                Scenario == "wrong-count" ? wire.Length + 1 : wire.Length, Scenario == "wrong-hash" ? new string('0', 64) : Hash(wire));
         }
     }
 }
