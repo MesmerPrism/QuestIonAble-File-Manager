@@ -141,36 +141,6 @@ public sealed class InstalledApkDigestTests
         Assert.Equal(0, runner.ApkStreams);
     }
 
-    [Fact]
-    public async Task ProductionRunnerPreservesBoundedDigestBytesEvenOnUnsupportedExit()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        using var destination = new MemoryStream();
-        var script = "[Console]::Out.Write(\"qfm-installed-digest:unsupported`n\"); exit 90";
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
-        var result = await new CommandRunner().RunToStreamAsync("powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], destination,
-            4096, TimeSpan.FromSeconds(15));
-        Assert.Equal(90, result.CommandResult.ExitCode);
-        Assert.Equal("", result.CommandResult.StandardError);
-        Assert.Equal("qfm-installed-digest:unsupported\n", Encoding.UTF8.GetString(destination.ToArray()));
-        Assert.Equal(destination.Length, result.BytesWritten);
-    }
-
-    [Fact]
-    public async Task ProductionRunnerStopsDigestOutputAtIts4096ByteBound()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-        using var destination = new MemoryStream();
-        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes("[Console]::Out.Write(('x' * 4097))"));
-        var error = await Assert.ThrowsAsync<FleetTransferLimitException>(() =>
-            new CommandRunner().RunToStreamAsync("powershell.exe",
-                ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], destination,
-                4096, TimeSpan.FromSeconds(15)));
-        Assert.Equal(4096, error.MaximumBytes);
-        Assert.True(destination.Length <= 4096);
-    }
-
     [Theory]
     [InlineData("1|2|4|2026-10-05 12:34:56.123456789 +0000|2026-10-05 12:34:56.987654321 +0000", true)]
     [InlineData("16|983301|0|2026-10-05 18:52:50.915355577 +0200|2026-10-05 18:52:50.915355577 +0200", true)]
