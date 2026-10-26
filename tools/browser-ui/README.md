@@ -4,6 +4,7 @@ Run with Node and Playwright 1.62.1 plus its matching Chromium installed:
 
 ```powershell
 node --test tools/browser-ui/frontend.test.cjs
+node --test tools/browser-ui/pwa.test.cjs
 ```
 
 `require('playwright')` uses normal Node resolution, including an explicitly
@@ -23,3 +24,20 @@ loading deliberately blocked, proving its disabled default needs no JavaScript.
 Set `QFM_BROWSER_UI_EVIDENCE` to an external/private output directory to save
 desktop host and mobile public-origin screenshots. Product/live-device QA is
 separate; these fixtures do not establish hardware behavior.
+
+`pwa.test.cjs` checks the rendered worker template, content identity, static-only
+cache boundary and real icon dimensions without opening a listener. The
+opt-in real worker test requires an explicitly reserved loopback port:
+
+```powershell
+$env:QFM_BROWSER_UI_PORT = '<reserved-port>'
+node --test tools/browser-ui/pwa-browser.test.cjs
+```
+
+It starts only an inert static/synthetic-session fixture server, installs the
+actual worker, checks Chromium installability, stops the server and opens the
+cached app/help. It verifies no private/API cache, no automatic reconnect
+commands, responsive layout and coherent waiting-worker upgrades. It never
+starts QFM's live API, ADB or a USB chooser. It closes its browser/server on exit;
+release the port reservation afterwards. Evidence uses the same external
+`QFM_BROWSER_UI_EVIDENCE` directory as the DOM fixtures.

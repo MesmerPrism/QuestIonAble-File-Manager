@@ -8,9 +8,14 @@ apps back to a Windows file.
 The repository also ships a CLI over the same core operations so every GUI
 action can be automated and tested.
 
-An optional, separately started [browser operator host](docs/browser-operator.md)
-projects ordinary device status, classic WiFi setup and power controls through
-those same Core handlers. Its bundled read-only WebUSB proof needs no headset
+An optional, separately started [browser operator PWA](docs/browser-operator.md)
+projects file browsing, package/permission observations, device status,
+classic WiFi setup, power/performance and developer observations through
+those same Core handlers. Its installable shell/help works offline without
+queuing device actions. The .NET connector supports Windows, Linux and macOS
+composition; protected Windows services stay explicit platform capabilities.
+See the [complete migration status](docs/browser-pwa-migration.md) for remaining
+transfer, APK, Kiosk, profile and distribution work. Its bundled read-only WebUSB proof needs no headset
 app; direct USB access can conflict with a running host ADB connection. This
 development surface is separate from the inspected-deployment API and signed
 release packaging.

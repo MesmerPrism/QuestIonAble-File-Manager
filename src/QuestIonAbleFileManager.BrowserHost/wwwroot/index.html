@@ -3,6 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QFM Browser</title><link rel="stylesheet" href="./styles.css">
+  <link rel="manifest" href="./manifest.webmanifest"><meta name="theme-color" content="#8a4638">
+  <link rel="icon" href="./icons/qfm-192.png" type="image/png">
+  <script type="module" src="./pwa.js"></script>
   <script type="module" src="./app.js"></script>
 </head>
 <body>
@@ -10,12 +13,14 @@
   <header><a class="brand" href="./">QFM Browser</a><a href="./agent.html">Agent guide</a></header>
   <h1>Manage your Quest</h1>
   <p class="intro">No headset app required. Your browser is an adapter to authorized device controls.</p>
+  <div class="app-availability"><p id="network-status" role="status">Live host controls require an explicit connection.</p><button id="install-app" type="button" hidden>Install QFM</button></div>
+  <details class="install-guide"><summary>Install and offline help</summary><p id="install-help">Use your browser menu to install or add QFM to your home screen when supported.</p><p>Start the QFM connector on this computer and open its exact address for live controls. Another device's localhost points to that device, so use the connector on the computer attached to your Quest. <a href="./agent.html">Read setup, supported capabilities and recovery guidance</a>.</p></details>
   <nav class="tabs" aria-label="Connection mode"><button id="host-tab" aria-current="page">QFM host</button><button id="usb-tab">USB proof</button></nav>
   <section id="host-view" aria-labelledby="host-tab">
     <section class="connection panel" aria-labelledby="connect-title">
       <div><h2 id="connect-title">Connect to QFM</h2>
         <form id="connect-form"><label for="token">Session token</label><div class="input-action"><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Enter session token" required disabled><button class="primary" id="connect" disabled>Connect</button></div></form>
-        <p class="hint">Use the token from your local QFM host. It stays in this tab.</p><p id="local-host-link" hidden><a href="http://127.0.0.1:8127/">Open the local QFM host</a>. Start it first using the agent guide.</p>
+        <p class="hint">Use the token from your local QFM host. It stays in this tab.</p><p id="host-capabilities" class="hint">Connect to check this host's available capabilities.</p><p id="local-host-link" hidden><a href="http://127.0.0.1:8127/">Open the local QFM host</a>. Start it first using the agent guide.</p>
       </div>
       <div class="connection-status"><span>Status</span><p id="host-status" role="status">Not connected</p><button id="disconnect-host" class="text-button" hidden>Disconnect</button></div>
     </section>
@@ -29,7 +34,7 @@
         <section class="panel" aria-labelledby="wifi-title"><h2 id="wifi-title">WiFi connection</h2>
           <form id="wifi-form"><div class="wifi-fields"><div><label for="wifi-host">Known headset address</label><input id="wifi-host" placeholder="Headset IP address" autocomplete="off" spellcheck="false" maxlength="253"></div><div><label for="wifi-port">Port</label><input id="wifi-port" type="number" value="5555" min="1" max="65535" required></div></div>
             <label class="check"><input id="wifi-confirm" type="checkbox"> I approve this WiFi ADB change</label>
-            <div class="actions"><button id="wifi-connect" type="submit" disabled>Connect WiFi</button><button id="wifi-enable" type="button" disabled>Enable from selected USB</button></div>
+            <div class="actions"><button id="wifi-connect" type="submit" disabled>Connect WiFi</button><button id="wifi-enable" type="button" disabled>Enable from selected USB</button><button id="wifi-disconnect" type="button" disabled>Disconnect endpoint</button></div>
           </form>
         </section>
       </div>
@@ -39,9 +44,13 @@
         <h3>Keep awake</h3><label class="duration" for="duration">Proximity duration <select id="duration"><option value="60000">1 minute</option><option value="3600000" selected>1 hour</option><option value="28800000">8 hours</option></select></label><p class="hint">Stay-awake remains on until Restore normal. This duration applies to the proximity hold.</p>
         <label class="check"><input id="power-confirm" type="checkbox"> I approve this device settings change</label>
         <div class="actions"><button id="apply-hold" disabled>Apply hold</button><button id="restore-normal" disabled>Restore normal</button></div>
+        <h3>Performance overrides</h3><div class="performance-fields"><label for="cpu-level">CPU level<select id="cpu-level"><option value="">Keep current</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label><label for="gpu-level">GPU level<select id="gpu-level"><option value="">Keep current</option><option>0</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label></div><p class="hint">Uses the device settings approval above. Clear removes both overrides.</p><div class="actions"><button id="apply-performance" disabled>Apply levels</button><button id="clear-performance" disabled>Clear overrides</button></div>
       </section>
     </div>
     <p class="hint supervision">Coordinate with the active device supervisor before changing power or transports. This page does not take over watchdog custody.</p>
+    <section class="panel" aria-labelledby="files-title"><h2 id="files-title">Headset files</h2><form id="file-form"><label for="remote-path">Folder path</label><div class="input-action"><input id="remote-path" value="/sdcard" maxlength="256" spellcheck="false" autocomplete="off"><button id="browse-files" disabled>Browse folder</button><button id="parent-folder" type="button" disabled>Up</button></div></form><p id="files-state" class="hint">Select a ready headset to browse its shell-accessible storage.</p><ul id="file-entries" class="file-entries" aria-label="Headset files"></ul><p class="hint">Upload, download and APK export are still available in the existing QFM desktop/CLI while their browser migration is completed.</p></section>
+    <section class="panel" aria-labelledby="apps-title"><div class="section-heading"><h2 id="apps-title">Installed apps</h2><button id="list-packages" disabled>List third-party apps</button></div><ul id="packages" class="package-list" aria-label="Installed packages"></ul><form id="permissions-form"><label for="package-name">Package name</label><div class="input-action"><input id="package-name" placeholder="Select a listed app or enter its exact package" maxlength="256" autocomplete="off" spellcheck="false"><button id="read-permissions" disabled>Read permissions</button></div></form><p id="permissions-state" class="hint">Permission facts are read-only; they do not grant access or decide app readiness.</p></section>
+    <details class="panel"><summary>Developer observations</summary><p class="hint">Read facts from the selected headset. Results do not prove app or streaming readiness.</p><label for="actor-pid">Process ID</label><input id="actor-pid" type="number" min="1" max="2147483647" placeholder="Exact current PID"><div class="actions"><button id="read-actor" disabled>Read actor</button><button id="read-actor-identity" disabled>Read actor identity</button><button id="read-forwards" disabled>Read ADB forwards</button></div><p class="hint">These observations are shown in Latest result. Reading forwards does not change shared ADB mappings.</p></details>
   </section>
   <section id="usb-view" hidden aria-labelledby="usb-tab">
     <section class="panel"><h2>Read-only USB proof</h2><p>Read serial, boot identity and battery directly through WebUSB. No host ADB executable or headset app is used by this mode.</p>

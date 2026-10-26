@@ -45,7 +45,7 @@ var app = builder.Build();
 app.Use(async (context, next) =>
 {
     context.Response.Headers.CacheControl = "no-store";
-    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; worker-src 'self'; manifest-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
     var staticNavigation = BrowserSecurity.IsStaticNavigation(context.Request.Method,
@@ -103,11 +103,14 @@ app.Use(async (context, next) =>
     await next(context);
 });
 app.UseDefaultFiles();
-app.UseStaticFiles(new StaticFileOptions { ServeUnknownFileTypes = true, DefaultContentType = "text/plain" });
+var staticTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+staticTypes.Mappings[".webmanifest"] = "application/manifest+json";
+app.UseStaticFiles(new StaticFileOptions { ServeUnknownFileTypes = true, DefaultContentType = "text/plain", ContentTypeProvider = staticTypes });
 app.MapGet("/browser/v1/session", () => new
 {
     contractVersion = BrowserCommands.ContractVersion, sessionId = commands.SessionId,
-    actions = BrowserCommands.Actions, maxRequests = BrowserCommands.MaximumRequests
+    actions = BrowserCommands.Actions, maxRequests = BrowserCommands.MaximumRequests,
+    platformCapabilities = OperatorPlatformCapabilities.Current
 });
 app.MapGet("/browser/v1/requests/{requestId}", (string requestId) =>
 {

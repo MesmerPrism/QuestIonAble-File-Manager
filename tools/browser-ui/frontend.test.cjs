@@ -11,7 +11,7 @@ let browser;
 test.before(async () => { browser = await chromium.launch({ headless: true }); });
 test.after(async () => { await browser?.close(); });
 
-async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, expectedLostResponse = false, blockApp = false } = {}) {
+async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session, files, expectedLostResponse = false, blockApp = false } = {}) {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   t.after(() => context.close());
   const page = await context.newPage(), calls = [], errors = [], consoleProblems = [], blocked = [], retained = new Map();
@@ -35,9 +35,12 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, expecte
     if (url.pathname.startsWith('/browser/')) {
       const request = route.request(), body = request.method() === 'POST' ? request.postDataJSON() : null;
       calls.push({ method: request.method(), path: url.pathname, body });
-      if (url.pathname === '/browser/v1/session') return route.fulfill({ json: { sessionId: 'fixture-session' } });
+      if (url.pathname === '/browser/v1/session') return session ? session(route) : route.fulfill({ json: { sessionId: 'fixture-session', actions:['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal','files.list','apk.list','apk.permissions','device.performance','device.performance-clear','wifi.disconnect','device.actor-observe','device.actor-identity','adb.forwards'] } });
       if (url.pathname.startsWith('/browser/v1/requests/')) return route.fulfill({ json: reconcile(url.pathname.split('/').at(-1)) || { error: 'request_not_found' } });
       if (url.pathname === '/browser/v1/execute') {
+        if(body.action==='files.list'){const result={requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},remoteEntries:[{name:'Download',fullPath:'/sdcard/Download',isDirectory:true},{name:'<script>fixture</script>.txt',fullPath:'/sdcard/fixture.txt',isDirectory:false}]}};return files ? files(route,result) : route.fulfill({json:result});}
+        if(body.action==='apk.list')return route.fulfill({json:{requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},packages:['example.fixture.app']}}});
+        if(body.action==='apk.permissions')return route.fulfill({json:{requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},apkPermissionObservation:{packageName:body.package}}}});
         if (body.action === 'devices') return route.fulfill({ json: { requestId: body.requestId, state: 'completed', result: { devices } } });
         if (body.action === 'device.status') return route.fulfill({ json: { requestId: body.requestId, state: 'completed', result: {
           command: { serial: body.serial }, questControlStatus: { wakefulness: 'Awake', displayState: 'ON', proximityState: 'CLOSE', capturedAt: '2026-01-01T00:00:00Z' }
@@ -48,7 +51,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, expecte
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -72,9 +75,10 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, expecte
   async function hold() { await page.locator('#power-confirm').check(); await page.locator('#apply-hold').click(); }
   async function settled() { await page.waitForFunction(() => !document.querySelector('#refresh').disabled); }
   const outstanding = () => page.evaluate(key => JSON.parse(sessionStorage.getItem(key) || 'null'), originalKey);
-  const mutations = () => calls.filter(call => call.body && !['devices', 'device.status'].includes(call.body.action));
+  const mutations = () => calls.filter(call => call.body && !['devices', 'device.status','files.list','apk.list','apk.permissions','device.actor-observe','device.actor-identity','adb.forwards'].includes(call.body.action));
   t.after(() => assert.deepEqual(errors, [], 'No uncaught frontend runtime errors'));
   t.after(() => assert.deepEqual(consoleProblems.filter(message =>
+    !message.includes('Service Worker registration blocked by Playwright') &&
     !(expectedLostResponse && message.includes('net::ERR_FAILED')) &&
     !(blockApp && message.includes('net::ERR_BLOCKED_BY_CLIENT')) &&
     !message.includes('status of 409')), [], 'No unexpected console errors or warnings'));
@@ -95,6 +99,97 @@ test('definite preadmission rejection clears original and permits a separately a
   assert.equal(await f.outstanding(), null);
   assert.equal(f.mutations().length, 2);
   assert.notEqual(f.mutations()[0].body.requestId, f.mutations()[1].body.requestId);
+});
+
+test('offline clears credentials and live state, preserves uncertain original and reconnect never replays', async t => {
+  const f = await fixture(t, { mutation: ({ route }) => route.abort('failed'), expectedLostResponse: true });
+  await f.connect(); await f.selectA(); await f.hold(); await f.settled();
+  const original = await f.outstanding(), count = f.calls.length;
+  await f.page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  assert.match(await f.page.locator('#network-status').textContent(), /Offline/);
+  assert.equal(await f.page.locator('#refresh').isDisabled(), true);
+  assert.equal(await f.page.locator('#connect').isDisabled(), false, 'An explicit loopback connection remains possible');
+  assert.equal(await f.page.locator('#token').inputValue(), '');
+  assert.equal(await f.page.locator('#power-value').textContent(), 'Unknown');
+  assert.equal((await f.outstanding()).requestId, original.requestId);
+  await f.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  assert.equal(await f.page.locator('#refresh').isDisabled(), true);
+  assert.equal(f.calls.length, count, 'Connectivity events cannot execute or reconcile commands');
+  assert.equal((await f.outstanding()).requestId, original.requestId);
+});
+
+test('late session response cannot reconnect a tab after offline', async t => {
+  let release;
+  const f=await fixture(t,{session:route => new Promise(resolve => {release=async()=>{await route.fulfill({json:{sessionId:'fixture-session'}});resolve();};})});
+  await f.page.locator('#token').fill('fixture-only-not-a-real-credential'); await f.page.locator('#connect').click();
+  await f.page.waitForFunction(() => document.querySelector('#connect').disabled);
+  await f.page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  assert.ok(release); await release();
+  await f.page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await f.page.waitForFunction(() => !document.querySelector('#connect').disabled);
+  assert.equal(await f.page.locator('#host-status').textContent(),'Offline — disconnected');
+  assert.equal(await f.page.locator('#refresh').isDisabled(),true);
+  assert.equal(f.calls.length,1);
+});
+
+test('network-offline signal still allows explicit local USB connector use without automatic requests', async t => {
+  const f=await fixture(t);
+  await f.page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  assert.equal(f.calls.length,0);
+  await f.connect(); await f.selectA();
+  assert.equal(await f.page.locator('#power-value').textContent(),'Awake');
+  assert.equal(f.mutations().length,0);
+});
+
+test('file and package views use typed read routes, render literal names and clear on target change', async t => {
+  const f=await fixture(t); await f.connect(); await f.selectA();
+  await f.page.locator('#browse-files').click(); await f.settled();
+  assert.ok(f.calls.some(call=>call.body?.action==='files.list' && call.body.path==='/sdcard'));
+  assert.match(await f.page.locator('#file-entries').textContent(),/<script>fixture<\/script>.txt/);
+  assert.equal(await f.page.locator('#file-entries script').count(),0);
+  await f.page.getByRole('button',{name:'Open Download',exact:true}).click(); await f.settled();
+  assert.equal(f.calls.at(-1).body.path,'/sdcard/Download');
+  await f.page.locator('#list-packages').click(); await f.settled();
+  await f.page.getByRole('button',{name:'example.fixture.app',exact:true}).click();
+  await f.page.locator('#read-permissions').click(); await f.settled();
+  assert.equal(f.calls.at(-1).body.package,'example.fixture.app');
+  assert.equal(f.mutations().length,0);
+  await f.page.locator('.device-button').filter({hasText:'FIXTURE-B'}).click(); await f.settled();
+  assert.equal(await f.page.locator('#file-entries').textContent(),'');
+  assert.equal(await f.page.locator('#package-name').inputValue(),'');
+});
+
+test('performance and disconnect require fresh scoped approvals and preserve typed fields', async t => {
+  const f=await fixture(t); await f.connect(); await f.selectA();
+  assert.equal(await f.page.locator('#apply-performance').isDisabled(),true);
+  await f.page.locator('#power-confirm').check(); await f.page.locator('#cpu-level').selectOption('3');
+  assert.equal(await f.page.locator('#power-confirm').isChecked(),false);
+  await f.page.locator('#gpu-level').selectOption('2'); await f.page.locator('#power-confirm').check();
+  await f.page.locator('#apply-performance').click(); await f.settled();
+  assert.equal(f.calls.at(-1).body.action,'device.performance'); assert.equal(f.calls.at(-1).body.cpu,3); assert.equal(f.calls.at(-1).body.gpu,2);
+  assert.equal(await f.page.locator('#power-confirm').isChecked(),false);
+  await f.page.locator('#wifi-host').fill('192.0.2.20');await f.page.locator('#wifi-confirm').check();
+  await f.page.locator('#wifi-disconnect').click();await f.settled();
+  assert.equal(f.calls.at(-1).body.action,'wifi.disconnect');assert.equal(f.calls.at(-1).body.serial,'192.0.2.20:5555');
+});
+
+test('late folder result stays bound to its original target after selection changes', async t => {
+  let release;
+  const f=await fixture(t,{files:(route,result)=>new Promise(resolve=>{release=async()=>{await route.fulfill({json:result});resolve();};})});
+  await f.connect();await f.selectA();await f.page.locator('#browse-files').click();
+  await f.page.locator('.device-button').filter({hasText:'FIXTURE-B'}).click();
+  assert.match(await f.page.locator('#selection').textContent(),/FIXTURE-B/);
+  assert.ok(release);await release();await f.settled();
+  assert.equal(await f.page.locator('#file-entries').textContent(),'');
+});
+
+test('disconnect and host-session replacement clear approvals and old target views', async t => {
+  const f=await fixture(t);await f.connect();await f.selectA();await f.page.locator('#browse-files').click();await f.settled();
+  await f.page.locator('#wifi-confirm').check();await f.page.locator('#power-confirm').check();
+  await f.page.locator('#disconnect-host').click();
+  assert.equal(await f.page.locator('#wifi-confirm').isChecked(),false);assert.equal(await f.page.locator('#power-confirm').isChecked(),false);
+  assert.equal(await f.page.locator('#file-entries').textContent(),'');
+  await f.connect();assert.equal(await f.page.locator('#refresh').isDisabled(),false);assert.equal(await f.page.locator('#file-entries').textContent(),'');
 });
 
 test('lost response retains original across reload, blocks replay and reconciles by GET only', async t => {
