@@ -240,12 +240,16 @@ Choose an exact ready target and one full headset file path, then **Stage
 download**. Package export instead chooses an exact package and an `.apk` label.
 These read-only actions use the normal `/execute` one-use request ledger and
 shared operation gate. Core rediscovers the selected target, reads one opened
-regular remote file through raw shell-v2 without a PTY/stdin, enforces the byte
-ceiling before and during copying, and validates completion/length/hash evidence.
+regular remote file through the binary `exec-out` transport. An internal fresh
+nonce, bounded size header, exact payload length and completion trailer preserve
+binary data while proving the fixed script finished its source checks. The byte
+ceiling applies before and during copying; Core independently validates both
+wire and payload counts/hashes. Text shell output is not a binary file channel.
 The protected store independently hashes the finished bytes before publishing
 an opaque receipt. Its five-minute capture deadline includes output verification.
 Failure, overflow, cancellation or source/package-path drift cannot publish a
-successful partial download. Unsupported shell-v2 fails closed.
+successful partial download. Missing, malformed, extra or mismatched framing
+fails closed; remote exit-zero alone is not capture completion.
 
 Results use `artifactTransfer` with `{artifact,serial,sourcePath,packageName,
 checksumText}`. Native output paths and process arguments stay on the host.

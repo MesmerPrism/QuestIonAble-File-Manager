@@ -15,16 +15,20 @@ those same Core handlers. Its installable shell/help works offline without
 queuing device actions. The .NET connector supports Windows, Linux and macOS
 composition; protected Windows services stay explicit platform capabilities.
 See the [complete migration status](docs/browser-pwa-migration.md) for remaining
-transfer, APK, Kiosk, profile and distribution work. Its bundled read-only WebUSB proof needs no headset
+file push, advanced APK, Kiosk, profile and distribution work. Its bundled read-only WebUSB proof needs no headset
 app; direct USB access can conflict with a running host ADB connection. This
-development surface is separate from the inspected-deployment API and signed
-release packaging.
+frontdoor retains its own origin/session boundary; configured retained APK
+operations reuse the existing inspected-deployment owner in-process. Signed
+release packaging remains separate.
 
 On a Windows NTFS host, the browser also stages a selected local APK, inspects
 it through shared Core, and downloads/removes its verified temporary bytes.
-Other hosts show an explicit protected-staging limitation. These local actions
-do not install an app; the current CLI/WPF remains available for device APK
-operations while browser parity continues.
+It can also capture bounded headset file pulls and single-APK exports, then
+verify streamed saves where the browser supports a file picker. The configured
+durable owner supports reviewed inspected install, resolved launch and runtime
+observation without replay after reconnect. Other hosts show explicit
+protected-staging/owner limitations. The current CLI/WPF remains available for
+the remaining operations while browser parity continues.
 
 > This is an independent open-source project. It is not affiliated with or
 > endorsed by Meta. Meta Quest is a trademark of Meta Platforms, Inc.
