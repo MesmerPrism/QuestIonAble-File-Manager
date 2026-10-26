@@ -31,10 +31,15 @@ internal sealed record BrowserRetainedOwnerCalls(
     Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiPreflightResult>>? PreflightV2 = null,
     Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiOperationStatus>>? ExecuteV2 = null,
     Func<ReadOnlyMemory<byte>, LocalApiOperationStatus>? StatusV2 = null,
-    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus>? CancelV2 = null);
+    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus>? CancelV2 = null,
+    Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiV3PreflightResult>>? PreflightV3 = null,
+    Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiV3OperationStatus>>? ExecuteV3 = null,
+    Func<ReadOnlyMemory<byte>, LocalApiV3OperationStatus>? StatusV3 = null,
+    Func<ReadOnlyMemory<byte>, LocalApiV3OperationStatus>? CancelV3 = null,
+    Func<string, string, string, long, string, CancellationToken, Task<BrowserRetainedOutputLease>>? AcquireDiagnosticOutput = null);
 
 /// <summary>In-process adapter to the existing explicitly configured, versioned retained owner.</summary>
-public sealed class BrowserRetainedOperations : IDisposable
+public sealed partial class BrowserRetainedOperations : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly Func<BrowserArtifactStore> _artifacts;
@@ -47,6 +52,9 @@ public sealed class BrowserRetainedOperations : IDisposable
     private int _calls;
     private int _localBusy;
     private bool _disposed;
+    private volatile bool _closing;
+    private bool _disposing;
+    private TaskCompletionSource? _drained;
 
     public BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, Func<IDisposable?>? tryAcquireOperation = null)
         : this(artifacts, tryAcquireOperation, Environment.GetEnvironmentVariable, OperatingSystem.IsWindows()) { }
@@ -56,32 +64,38 @@ public sealed class BrowserRetainedOperations : IDisposable
     {
         _artifacts = artifacts;
         _tryAcquireOperation = tryAcquireOperation ?? TryAcquireLocal;
-        _configuredCapability = () => ConfigurationCapability(readEnvironment, platformSupported);
+        _configuredCapability = () => ConfigurationCapability(readEnvironment, platformSupported, v3: true);
         _owner = new(() =>
         {
             // Settings and integrity key come from the configured existing owner, once.
             var settings = LocalApiStateSettings.FromEnvironment(readEnvironment);
             var registry = new LocalApiCommandRegistry(AdbClient.CreateDefault(), settings);
             return new(registry.PreflightAsync, registry.ExecuteAsync, registry.GetStatus, registry.Cancel, registry.Dispose,
-                registry.PreflightV2Async, registry.ExecuteV2Async, registry.GetV2Status, registry.CancelV2);
+                registry.PreflightV2Async, registry.ExecuteV2Async, registry.GetV2Status, registry.CancelV2,
+                registry.PreflightV3Async, registry.ExecuteV3Async, registry.GetV3Status, registry.CancelV3,
+                async (id, digest, output, size, hash, token) =>
+                {
+                    var lease = await registry.AcquireDiagnosticOutputAsync(id, digest, output, size, hash, token).ConfigureAwait(false);
+                    return new(lease.Descriptor, lease.Stream, lease);
+                });
         }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     internal BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, BrowserRetainedOwnerCalls owner,
-        Func<IDisposable?>? tryAcquireOperation = null) : this(artifacts, () => owner, tryAcquireOperation) { }
+        Func<IDisposable?>? tryAcquireOperation = null) : this(artifacts, () => owner, tryAcquireOperation, HasV3(owner)) { }
 
     internal BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, Func<BrowserRetainedOwnerCalls> ownerFactory,
-        Func<IDisposable?>? tryAcquireOperation = null)
+        Func<IDisposable?>? tryAcquireOperation = null, bool supportsV3 = false)
     {
         _artifacts = artifacts;
         _tryAcquireOperation = tryAcquireOperation ?? TryAcquireLocal;
-        _configuredCapability = () => Configured();
+        _configuredCapability = () => Configured(supportsV3);
         _owner = new(ownerFactory);
     }
 
-    public BrowserRetainedCapability Capability => _ownerFailure ?? (_owner.IsValueCreated
+    public BrowserRetainedCapability Capability => _closing ? new(false, "retained_owner_closed", "The retained owner is closing.", "Wait for the current owner to finish safely.") : _ownerFailure ?? (_owner.IsValueCreated
         ? new(true, "available", "The configured retained owner is open in this process.", "Preserve its state and key; reconcile original operation IDs before any new recovery action.",
-            HasV2(_owner.Value) ? [LocalApiContract.Version, LocalApiV2Contract.Version] : [LocalApiContract.Version])
+            OwnerVersions(_owner.Value))
         : _configuredCapability());
 
     public async Task<LocalApiPreflightResult> PreflightAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation = default)
@@ -246,7 +260,7 @@ public sealed class BrowserRetainedOperations : IDisposable
     {
         using var document = ParseObject(body); var root = document.RootElement;
         RequireFields(root, version == LocalApiContract.Version ? ["operationId", "commandDigest"] : ["contractVersion", "operationId", "commandDigest"]);
-        if (version == LocalApiV2Contract.Version && Text(root, "contractVersion") != version)
+        if (version != LocalApiContract.Version && Text(root, "contractVersion") != version)
             throw new BrowserRetainedException("contract_unsupported");
         var id = Text(root, "operationId");
         if (!id.StartsWith("api-", StringComparison.Ordinal)) throw new BrowserRetainedException("operation_binding_invalid");
@@ -313,7 +327,7 @@ public sealed class BrowserRetainedOperations : IDisposable
         var capability = Capability;
         if (!capability.Supported) throw new BrowserRetainedException(capability.Code, capability.Code switch { "retained_platform_unsupported" => 501, "state_in_use" => 409, _ => 503 });
     }
-    private static BrowserRetainedCapability ConfigurationCapability(Func<string, string?> read, bool supported)
+    private static BrowserRetainedCapability ConfigurationCapability(Func<string, string?> read, bool supported, bool v3 = false)
     {
         if (!supported) return new(false, "retained_platform_unsupported", "The retained LocalApi owner requires Windows protected staging.", "Use the configured Windows companion; portable read/control routes remain separate.");
         var state = read(LocalApiStateSettings.StateDirectoryEnvironmentVariable);
@@ -322,28 +336,45 @@ public sealed class BrowserRetainedOperations : IDisposable
             return new(false, "retained_configuration_missing", "Retained operations need the explicitly configured existing durable owner.", "Configure QUESTIONABLE_FILE_MANAGER_API_STATE and QUESTIONABLE_FILE_MANAGER_API_JOURNAL_SECRET privately, preserving the existing state and key.");
         if (Encoding.UTF8.GetByteCount(secret) is < 32 or > 512)
             return new(false, "retained_configuration_invalid", "The private journal configuration is invalid.", "Use the existing valid 32–512 byte journal secret; never replace a key to bypass retained uncertainty.");
-        return Configured();
+        return Configured(v3);
     }
-    private static BrowserRetainedCapability Configured() => new(true, "configured_not_opened", "Configuration is present; the owner is validated on an explicit request.", "Preserve the configured state and journal secret across browser sessions and companion restarts.", [LocalApiContract.Version, LocalApiV2Contract.Version]);
+    private static BrowserRetainedCapability Configured(bool v3 = false) => new(true, "configured_not_opened", "Configuration is present; the owner is validated on an explicit request.", "Preserve the configured state and journal secret across browser sessions and companion restarts.", v3 ? [LocalApiContract.Version, LocalApiV2Contract.Version, LocalApiV3Contract.Version] : [LocalApiContract.Version, LocalApiV2Contract.Version]);
     private IDisposable? TryAcquireLocal() => Interlocked.CompareExchange(ref _localBusy, 1, 0) == 0
         ? new Release(() => Interlocked.Exchange(ref _localBusy, 0)) : null;
     private IDisposable EnterCall()
     {
         lock (_sync)
         {
-            if (_disposed) throw new BrowserRetainedException("retained_owner_closed", 503);
-            _calls++; return new Release(() => { lock (_sync) _calls--; });
+            if (_disposed || _closing) throw new BrowserRetainedException("retained_owner_closed", 503);
+            _calls++; return new Release(() =>
+            {
+                TaskCompletionSource? drained;
+                lock (_sync) { _calls--; drained = _calls == 0 ? _drained : null; }
+                drained?.TrySetResult();
+            });
+        }
+    }
+    public Task DrainAsync()
+    {
+        lock (_sync)
+        {
+            _closing = true;
+            if (_calls == 0) return Task.CompletedTask;
+            return (_drained ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
         }
     }
     public void Dispose()
     {
+        BrowserRetainedOwnerCalls? owner;
         lock (_sync)
         {
             if (_disposed) return;
-            if (_calls != 0) throw new BrowserRetainedException("retained_operation_in_use", 409);
-            if (_owner.IsValueCreated) _owner.Value.Dispose();
-            _disposed = true;
+            if (_calls != 0 || _disposing) throw new BrowserRetainedException("retained_operation_in_use", 409);
+            _closing = true; _disposing = true;
+            owner = _owner.IsValueCreated ? _owner.Value : null;
         }
+        try { owner?.Dispose(); lock (_sync) _disposed = true; }
+        finally { lock (_sync) _disposing = false; }
     }
     internal static BrowserRetainedException Translate(Exception exception) => exception switch
     {
