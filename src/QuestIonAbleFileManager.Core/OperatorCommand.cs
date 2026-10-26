@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
@@ -50,7 +51,11 @@ public enum OperatorCommandKind
     ObserveDevelopmentApp,
     InstallDevelopmentApk,
     ObserveDeviceActor,
-    ObserveDeviceActorIdentity
+    ObserveDeviceActorIdentity,
+    InspectRustyKioskInstallation,
+    OpenRustyKioskCatalog,
+    SelectRustyKioskApp,
+    ReadRustyKioskRequest
 }
 
 public enum QuestConnectivityProfileInputKind
@@ -94,7 +99,8 @@ public sealed class OperatorCommand
         string? propertyManifestPath = null,
         string? propertySnapshotPath = null,
         string? reportedInstallReference = null,
-        int actorPid = 0)
+        int actorPid = 0,
+        string? rustyKioskProviderRequestId = null)
     {
         Kind = kind;
         CliArguments = new ReadOnlyCollection<string>(cliArguments.ToArray());
@@ -116,6 +122,7 @@ public sealed class OperatorCommand
         RustyKioskCommand = rustyKioskCommand;
         RustyKioskValue = rustyKioskValue;
         RustyKioskProduct = rustyKioskProduct;
+        RustyKioskProviderRequestId = rustyKioskProviderRequestId;
         Enabled = enabled;
         DurationMilliseconds = durationMilliseconds;
         CpuLevel = cpuLevel;
@@ -168,6 +175,9 @@ public sealed class OperatorCommand
 
     public RustyKioskProductContract? RustyKioskProduct { get; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RustyKioskProviderRequestId { get; }
+
     public bool? Enabled { get; }
 
     public int DurationMilliseconds { get; }
@@ -209,7 +219,7 @@ public sealed class OperatorCommand
     }
 }
 
-public static class OperatorCommands
+public static partial class OperatorCommands
 {
     public static OperatorCommand ParseConnectivityProfileCliArguments(
         IReadOnlyList<string> arguments)
@@ -1614,7 +1624,8 @@ public sealed record OperatorExecutionResult(
     ApkPropertyMutationResult? ApkPropertyMutationResult = null,
     DevelopmentAppRuntimeObservation? DevelopmentAppRuntimeObservation = null,
     DevelopmentApkInstallResult? DevelopmentApkInstallResult = null,
-    DeviceActorIdentityObservation? DeviceActorIdentityObservation = null);
+    DeviceActorIdentityObservation? DeviceActorIdentityObservation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RustyKioskAdbResult? RustyKioskAdbResult = null);
 
 public sealed class OperatorCommandExecutor
 {
@@ -1698,7 +1709,8 @@ public sealed class OperatorCommandExecutor
         var parallelReportsDispatch = command.Kind is
             OperatorCommandKind.InstallApkMany or OperatorCommandKind.InstallApkBundleMany;
         var developmentInstallReportsDispatch = command.Kind == OperatorCommandKind.InstallDevelopmentApk;
-        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch;
+        var kioskAdbReportsDispatch = command.Kind is OperatorCommandKind.OpenRustyKioskCatalog or OperatorCommandKind.SelectRustyKioskApp;
+        var reportsDispatch = propertyReportsDispatch || launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch || kioskAdbReportsDispatch;
         if (!reportsDispatch)
         {
             tracker.Dispatched();
@@ -1711,7 +1723,7 @@ public sealed class OperatorCommandExecutor
                 progress,
                 privateInput,
                 propertyReportsDispatch ? tracker : null,
-                launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
+                launchReportsDispatch || parallelReportsDispatch || developmentInstallReportsDispatch || kioskAdbReportsDispatch ? tracker.Dispatched : null).ConfigureAwait(false);
             var observation = OperatorMutations.Observe(command, result);
             var receipt = propertyReportsDispatch
                 ? tracker.CompleteAfterReportedDispatch(observation)
@@ -2153,6 +2165,21 @@ public sealed class OperatorCommandExecutor
                         RustyKioskInstallationStatus: status,
                         RustyKioskOperatorResult: operatorResult);
                 }
+
+            case OperatorCommandKind.InspectRustyKioskInstallation:
+                return new(command, RustyKioskAdbResult: await client.GetRustyKioskAdbInstallationAsync(
+                    Require(command.Serial, nameof(command.Serial)), command.RustyKioskProduct, cancellationToken).ConfigureAwait(false));
+            case OperatorCommandKind.OpenRustyKioskCatalog:
+            case OperatorCommandKind.SelectRustyKioskApp:
+                return new(command, RustyKioskAdbResult: await client.InvokeKioskAdbRequestAsync(
+                    Require(command.Serial, nameof(command.Serial)), Require(command.RustyKioskProviderRequestId, nameof(command.RustyKioskProviderRequestId)),
+                    command.RustyKioskCommand ?? throw new InvalidOperationException("The bounded Kiosk command is missing."), command.RustyKioskValue,
+                    command.RustyKioskProduct, cancellationToken, deviceDispatchObserved).ConfigureAwait(false));
+            case OperatorCommandKind.ReadRustyKioskRequest:
+                return new(command, RustyKioskAdbResult: await client.ReadRustyKioskRequestAsync(
+                    Require(command.Serial, nameof(command.Serial)), Require(command.RustyKioskProviderRequestId, nameof(command.RustyKioskProviderRequestId)),
+                    command.RustyKioskCommand ?? throw new InvalidOperationException("The expected Kiosk command is missing."), command.RustyKioskValue,
+                    command.RustyKioskProduct, cancellationToken).ConfigureAwait(false));
 
             case OperatorCommandKind.ProvisionRustyKiosk:
                 return new OperatorExecutionResult(

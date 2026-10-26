@@ -48,6 +48,14 @@ internal static class CliApplication
     };
     private static readonly IReadOnlyList<CliAgentRouteAdmission> AgentRouteAdmissions =
     [
+        new("kiosk_installation", "kiosk installation --serial <serial> --product-channel <stable|labs> --json",
+            ["kiosk", "installation", "--serial", "QUEST123", "--product-channel", "stable", "--json"], true),
+        new("kiosk_catalog_open", "kiosk catalog-open --serial <serial> --product-channel <stable|labs> --request-id <pc-id> --confirm-kiosk-control --json",
+            ["kiosk", "catalog-open", "--serial", "QUEST123", "--product-channel", "stable", "--request-id", "pc-00000000000040008000000000000001", "--confirm-kiosk-control", "--json"], true),
+        new("kiosk_select", "kiosk select --serial <serial> --product-channel <stable|labs> --request-id <pc-id> --key <catalog-key> --confirm-kiosk-control --json",
+            ["kiosk", "select", "--serial", "QUEST123", "--product-channel", "stable", "--request-id", "pc-00000000000040008000000000000001", "--key", "package:example.app", "--confirm-kiosk-control", "--json"], true),
+        new("kiosk_original_result", "kiosk original-result --serial <serial> --product-channel <stable|labs> --request-id <pc-id> --expected-command <status|select> [--key <catalog-key>] --json",
+            ["kiosk", "original-result", "--serial", "QUEST123", "--product-channel", "stable", "--request-id", "pc-00000000000040008000000000000001", "--expected-command", "status", "--json"], true),
         new("apk_development_install", "apk install --serial <serial> --file <apk> --verification development-metadata --json [install flags]",
             ["apk", "install", "--serial", "QUEST123", "--file", "example.apk", "--verification", "development-metadata", "--json"], true),
         new("apk_development_observe", "apk observe --serial <serial> --file <apk> --verification development-metadata --json [--reported-install-reference <opaque-reference>]",
@@ -90,6 +98,13 @@ internal static class CliApplication
         if (arguments.Count < 2)
         {
             return false;
+        }
+
+        if (string.Equals(arguments[0], "kiosk", StringComparison.OrdinalIgnoreCase))
+        {
+            routeId = arguments[1].ToLowerInvariant() switch
+            { "installation" => "kiosk_installation", "catalog-open" => "kiosk_catalog_open", "select" => "kiosk_select", "original-result" => "kiosk_original_result", _ => string.Empty };
+            return routeId.Length > 0;
         }
 
         if (string.Equals(arguments[0], "apk", StringComparison.OrdinalIgnoreCase))
@@ -272,6 +287,7 @@ internal static class CliApplication
 
     private static Task<int> RunAgentRouteAsync(string routeId, string[] arguments) => routeId switch
     {
+        "kiosk_installation" or "kiosk_catalog_open" or "kiosk_select" or "kiosk_original_result" => RunKioskAdbWorkflowAsync(arguments),
         "apk_development_install" => RunDevelopmentInstallJsonAsync(arguments),
         "apk_development_observe" => RunDevelopmentObservationJsonAsync(arguments),
         "apk_preflight" => RunApkPreflightJsonAsync(arguments),
@@ -288,6 +304,33 @@ internal static class CliApplication
         "adb_forward_inventory" => RunAdbForwardInventoryJsonAsync(arguments),
         _ => throw new ArgumentException("The advertised agent route has no CLI dispatcher.", nameof(routeId))
     };
+
+    private static async Task<int> RunKioskAdbWorkflowAsync(string[] arguments)
+    {
+        const string schema = "questionable.file_manager.kiosk_adb_result.v1";
+        var admitted = false;
+        try
+        {
+            var command = OperatorCommands.ParseKioskAdbCliArguments(arguments);
+            var client = AdbClient.CreateDefault(GetOption(arguments, "--adb"));
+            admitted = command.Kind is OperatorCommandKind.OpenRustyKioskCatalog or OperatorCommandKind.SelectRustyKioskApp;
+            var execution = await new OperatorCommandExecutor(client).ExecuteAsync(command);
+            WriteJson(new { schema, result = execution.RustyKioskAdbResult, mutation = execution.MutationReceipt, failure = (object?)null });
+            return execution.MutationReceipt is null ? 0 : RustyKioskCliExitCodes.For(execution.MutationReceipt,
+                execution.RustyKioskAdbResult?.State != RustyKioskAdbResultState.Rejected);
+        }
+        catch (OperatorMutationExecutionException exception)
+        {
+            WriteJson(new { schema, result = (object?)null, mutation = exception.MutationReceipt, failure = new { code = "operation_unknown", stateChangePossible = true } });
+            return 3;
+        }
+        catch (Exception exception)
+        {
+            var input = !admitted && exception is ArgumentException or InvalidOperationException;
+            WriteJson(new { schema, result = (object?)null, mutation = (object?)null, failure = new { code = input ? "input_rejected" : admitted ? "operation_unknown" : "operation_failed", stateChangePossible = admitted } });
+            return input ? 2 : admitted ? 3 : 1;
+        }
+    }
 
     private static async Task<int> RunDevelopmentObservationJsonAsync(string[] arguments)
     {

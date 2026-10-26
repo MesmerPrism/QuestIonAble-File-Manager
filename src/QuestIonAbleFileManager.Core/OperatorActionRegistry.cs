@@ -32,6 +32,14 @@ public static class OperatorActionRegistry
     public static IReadOnlyList<OperatorActionRouteDescriptor> AgentRoutes { get; } =
         new ReadOnlyCollection<OperatorActionRouteDescriptor>(
         [
+            new("kiosk_installation", "kiosk installation --serial --product-channel --json", "OperatorCommands.InspectRustyKioskInstallation", false,
+                "bounded passive installation and provider-contract facts; no activity dispatch or app readiness"),
+            new("kiosk_catalog_open", "kiosk catalog-open --serial --product-channel --request-id --confirm-kiosk-control --json", "OperatorCommands.OpenRustyKioskCatalog", true,
+                "explicit fixed Kiosk activity dispatch request and bound catalog facts, never foreground/application readiness"),
+            new("kiosk_select", "kiosk select --serial --product-channel --request-id --key --confirm-kiosk-control --json", "OperatorCommands.SelectRustyKioskApp", true,
+                "explicit exact catalog key selection and activity dispatch request, no app launch"),
+            new("kiosk_original_result", "kiosk original-result --serial --product-channel --request-id --expected-command --json", "OperatorCommands.ReadRustyKioskRequest", false,
+                "bounded result-only facts for one original status/select provider ID; no admission, activity or original reconciliation"),
             new(
                 "apk_development_install",
                 "apk install --serial --file --verification development-metadata --json",
