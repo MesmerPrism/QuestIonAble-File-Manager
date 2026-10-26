@@ -36,7 +36,7 @@ public sealed class BrowserArtifactCommandsTests
 
     [Theory]
     [InlineData(-1)]
-    [InlineData(268435457)]
+    [InlineData(1073741825)]
     public void InvalidSizesReject(long size) => Assert.Throws<BrowserRequestException>(() => BrowserArtifactCommands.Parse(Body(size: size)));
 
     [Fact]
@@ -49,7 +49,7 @@ public sealed class BrowserArtifactCommandsTests
         Assert.Throws<BrowserRequestException>(() => BrowserArtifactCommands.Parse(Encoding.UTF8.GetBytes("{\"nested\":{\"nested\":{\"nested\":{\"nested\":{}}}}}")));
         Assert.Throws<BrowserRequestException>(() => BrowserArtifactCommands.Parse(new byte[4097]));
         Assert.Equal(0, BrowserArtifactCommands.Parse(Body(size: 0)).SizeBytes);
-        Assert.Equal(268435456, BrowserArtifactCommands.Parse(Body(size: 268435456)).SizeBytes);
+        Assert.Equal(1073741824, BrowserArtifactCommands.Parse(Body(size: 1073741824)).SizeBytes);
     }
 
     [Fact]

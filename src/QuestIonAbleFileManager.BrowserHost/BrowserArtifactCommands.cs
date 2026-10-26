@@ -17,7 +17,7 @@ public sealed record BrowserArtifactCommandRequest(string RequestId, string Acti
 /// <summary>Read-only APK inspection bound to process-owned staged bytes, never a caller path.</summary>
 public static class BrowserArtifactCommands
 {
-    public const long MaximumArtifactBytes = 256L * 1024 * 1024;
+    public const long MaximumArtifactBytes = BrowserArtifactStore.MaximumFileBytes;
     private static readonly string[] Fields = ["requestId", "action", "artifactId", "sha256", "sizeBytes"];
 
     public static bool IsArtifactAction(ReadOnlyMemory<byte> body)

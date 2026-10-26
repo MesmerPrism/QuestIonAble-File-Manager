@@ -84,7 +84,7 @@ public static class BrowserArtifactRoutes
     {
         context.Response.Headers.CacheControl = "no-store";
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
-        deadline.CancelAfter(TimeSpan.FromSeconds(90));
+        deadline.CancelAfter(TimeSpan.FromSeconds(BrowserArtifactStore.TransferTimeoutSeconds));
         try { await operation(deadline.Token); }
         catch (Exception exception)
         {
