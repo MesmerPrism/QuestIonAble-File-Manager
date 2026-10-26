@@ -40,6 +40,11 @@ export function createDirectConnectionView({api,getContext,setBusy,showResult}) 
   const lostCustody = context => Boolean((original && original.sessionId !== context.sessionId) || (connection && connection.sessionId !== context.sessionId));
   // Root calls this before update on host changes. Do not cache this decision.
   const hasUnresolved = () => Boolean(original || damaged || !storageAvailable || lostCustody(getContext()));
+  const getConnectionReference = () => {
+    const context = getContext();
+    return live(context) && connection && !original && !damaged && storageAvailable && !lostCustody(context)
+      ? {...connectionReference(connection)} : null;
+  };
   function persist() {
     try {
       const frame = {original:originalReference(original),connection:connectionReference(connection),...(damaged ? {damaged:true} : {})};
@@ -62,7 +67,7 @@ export function createDirectConnectionView({api,getContext,setBusy,showResult}) 
   function contextStamp() {
     const context = getContext();
     return JSON.stringify([context.connected,context.sessionId,context.selected?.serial,context.selected?.isReady,context.selected?.isWifiConnection,element('channel').value,
-      [...(context.actions || [])].sort(),Boolean(context.externalUnresolved),connection?.connectionId,connection?.expiresAtUtc]);
+      [...(context.actions || [])].sort(),Boolean(context.externalUnresolved),context.cleanupConnectionId,connection?.connectionId,connection?.expiresAtUtc]);
   }
   function update() {
     const authContext = getContext(), nextAuth = JSON.stringify([authContext.connected,authContext.sessionId]);
@@ -76,7 +81,7 @@ export function createDirectConnectionView({api,getContext,setBusy,showResult}) 
     const context = getContext(), authenticated = live(context), lost = lostCustody(context), blocked = hasUnresolved();
     const idle = authenticated && !context.busy && !writing && !reading && !probing;
     const canConnect = idle && !blocked && !context.externalUnresolved && !connection && ready(context) && supports(context,connectAction);
-    const canClose = idle && !blocked && !context.externalUnresolved && connection && !lost && supports(context,closeAction);
+    const canClose = idle && !blocked && connection && !lost && (!context.externalUnresolved || context.cleanupConnectionId === connection.connectionId) && supports(context,closeAction);
     element('channel').disabled = !authenticated || writing || reading;
     element('connect-confirm').disabled = !canConnect; element('connect').disabled = !canConnect || !element('connect-confirm').checked;
     element('close-confirm').disabled = !canClose; element('close').disabled = !canClose || !element('close-confirm').checked;
@@ -184,5 +189,5 @@ export function createDirectConnectionView({api,getContext,setBusy,showResult}) 
   });
   // Display-only clock: expiry never dispatches status, close or a replacement.
   setInterval(update,1000);
-  return {update,hasUnresolved};
+  return {update,hasUnresolved,getConnectionReference};
 }
