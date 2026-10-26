@@ -12,6 +12,23 @@ let browser;
 test.before(async () => { browser = await chromium.launch({ headless: true }); });
 test.after(async () => { await browser?.close(); });
 
+test('Local APK Save preserves uncertain close and pending cleanup after disconnect',async t=>{
+  const f=await fixture(t);await f.connect();
+  await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});
+  await f.page.locator('#stage-apk').click();await f.settled();
+  await f.page.evaluate(()=>Object.defineProperty(window,'showSaveFilePicker',{configurable:true,value:()=>Promise.resolve({createWritable:()=>Promise.resolve({
+    write:async()=>{},close:()=>{window.closeEntered=true;return new Promise(()=>{});},abort:()=>new Promise(()=>{})
+  })})}));
+  await f.page.locator('#download-artifact').click();await f.page.waitForFunction(()=>window.closeEntered===true);
+  await f.page.evaluate(()=>window.dispatchEvent(new Event('offline')));
+  await f.page.waitForFunction(()=>document.querySelector('#artifact-state').textContent.includes('failed'));
+  const message=await f.page.locator('#artifact-state').textContent();
+  assert.match(message,/close outcome is unknown/i);assert.match(message,/cleanup.*pending/i);assert.match(message,/check the selected file before another save/i);
+  assert.equal(f.calls.filter(call=>call.method==='GET'&&call.path.startsWith('/browser/v1/artifacts/')).length,1);
+  assert.equal(f.calls.filter(call=>call.method==='DELETE'||call.path.endsWith('/cleanup')).length,0);
+  assert.equal(await f.page.locator('#token').inputValue(),'');
+});
+
 async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session, files, expectedLostResponse = false, blockApp = false } = {}) {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   // Exercise the bounded fallback here. Picker/streaming behavior has its own

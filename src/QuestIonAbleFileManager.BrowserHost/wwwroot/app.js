@@ -155,7 +155,18 @@ for(const [id,action] of [['read-actor','device.actor-observe'],['read-actor-ide
 function clearApkInspection(){for(const id of ['apk-package','apk-version','apk-signer','apk-digest'])text(id,'Unknown');}
 byId('apk-upload').addEventListener('change',()=>{const file=byId('apk-upload').files[0];byId('artifact-name').value=file?.name || '';host.artifact=null;clearApkInspection();text('artifact-state','Selected bytes have not been staged. Previously staged local files remain until explicitly cleared.');controls();});
 byId('artifact-name').addEventListener('input',controls);
-async function localArtifactOperation(operation){if(host.busy || !host.session || !host.artifactStaging.supported)return;host.busy=true;const generation=connectionGeneration;controls();try{await operation(generation);}catch(error){text('artifact-state',`Local artifact operation failed: ${error.message}. ${error.alternative || ''} No automatic retry. Reconnect and use Clear staged files if an upload response was lost.`);}finally{host.busy=false;controls();}}
+async function localArtifactOperation(operation){
+  if(host.busy || !host.session || !host.artifactStaging.supported)return;
+  host.busy=true;const generation=connectionGeneration;controls();
+  try{await operation(generation);}
+  catch(error){
+    const uncertainty=error.saveOutcomeUnknown ? ' The selected file close outcome is unknown. Check the selected file before another Save.' : '';
+    const cleanup=error.cleanupPending ? ' Cleanup is pending; wait and inspect the selected file before another Save.' : '';
+    const recovery=uncertainty || cleanup ? ' Captured bytes remain staged. No automatic retry.' :
+      ' No automatic retry. Reconnect and use Clear staged files if an upload response was lost.';
+    text('artifact-state',`Local artifact operation failed: ${error.message} ${error.alternative || ''}${uncertainty}${cleanup}${recovery}`);
+  }finally{host.busy=false;controls();}
+}
 byId('artifact-form').addEventListener('submit',event=>{event.preventDefault();if(byId('stage-apk').disabled)return;const file=byId('apk-upload').files[0],name=byId('artifact-name').value;if(!file || file.size>artifactMaximum()){text('artifact-state',`Choose one APK no larger than ${artifactMaximum()} bytes.`);return;}localArtifactOperation(async generation=>{const session=host.session;const value=await api('/browser/v1/artifacts',{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream','X-Qfm-File-Name':name}});host.artifact=value.artifact;host.artifactSession=session;if(generation===connectionGeneration)text('artifact-state',`${value.artifact.fileName} staged locally: ${value.artifact.sizeBytes} bytes, SHA-256 ${value.artifact.sha256}.`);});});
 byId('inspect-apk').addEventListener('click',()=>{if(byId('inspect-apk').disabled)return;const artifact=host.artifact;clearApkInspection();text('artifact-state','Reading the staged APK through shared Core inspection…');execute('apk.inspect',{artifactId:artifact.id,sha256:artifact.sha256,sizeBytes:artifact.sizeBytes});});
 byId('remove-artifact').addEventListener('click',()=>{if(byId('remove-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async generation=>{await api(`/browser/v1/artifacts/${artifact.id}`,{method:'DELETE'});if(host.artifact?.id===artifact.id)host.artifact=null;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Staged file removed. Original file unchanged.');}});});
