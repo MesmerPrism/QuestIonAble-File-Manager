@@ -619,10 +619,10 @@ command. Expiry and host restart cannot reconstruct the old credential.
 
 ## Optional Windows Fleet release status
 
-The **Fleet release status** card performs only the typed `fleet status` read.
+The **Get Fleet** card performs only the typed `fleet status` read.
 The session's `fleetInstallerStatus` capability reports Windows implementation
 support; it does not probe configuration, trusted metadata, installed services
-or replay state. Only **Read Fleet release status** activates the dedicated lazy
+or replay state. Only **Read trusted release status** activates the dedicated lazy
 owner. No ready device, ADB client, connectivity profile, Direct connection or
 Native API configuration is required. Other platforms show the Windows owner
 alternative. No guided-install route or button is exposed.
