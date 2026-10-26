@@ -6,12 +6,14 @@ const path = require('node:path');
 const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
 const storageKey = 'qfm-browser-retained-v1';
+const observationKey = 'qfm-browser-observation-v1';
 const id = 'api-' + '1'.repeat(32), digest = '2'.repeat(64), sha = '3'.repeat(64);
+const observationId = 'api-' + '9'.repeat(32), observationDigest = 'a'.repeat(64);
 let browser;
 test.before(async () => {browser = await chromium.launch({headless:true});});
 test.after(async () => {await browser?.close();});
 
-async function fixture(t, {capability={supported:true}, preflight, execute, status, width=1280}={}) {
+async function fixture(t, {capability={supported:true}, preflight, execute, status, observationPreflight, observationExecute, width=1280}={}) {
   const context=await browser.newContext({serviceWorkers:'block',viewport:{width,height:900}});
   t.after(()=>context.close());
   const page=await context.newPage(), calls=[], errors=[];
@@ -19,6 +21,7 @@ async function fixture(t, {capability={supported:true}, preflight, execute, stat
   const state={sessionId:'session-a',connected:true,busy:false,selected:{serial:'QUEST-A',isReady:true},
     artifact:{id:'4'.repeat(32),fileName:'fixture.apk',sha256:sha,sizeBytes:3}, capability, unresolvedTransient:false};
   let ownerStage='preflighted';
+  let observedStage='preflighted', observedReceipt=null;
   const expiresAt=new Date(Date.now()+120000).toISOString();
   const receipt=()=>({operationId:id,commandDigest:digest,command:'apk.install-inspected',expiresAt,
     artifact:{path:`retained://${id}/base.apk`,sizeBytes:3,sha256:sha,identity:{packageName:'com.example.app',versionCode:7,versionName:'1.7',signerSha256:'5'.repeat(64)}},target:{serial:'QUEST-A',isReady:true}});
@@ -27,11 +30,41 @@ async function fixture(t, {capability={supported:true}, preflight, execute, stat
     if(url.origin!=='http://127.0.0.1:18127')return route.abort('blockedbyclient');
     if(url.pathname.startsWith('/browser/')){
       const body=route.request().postDataJSON(); calls.push({path:url.pathname,body});
-      if(url.pathname.endsWith('/preflight'))return preflight?preflight(route,body,receipt()):route.fulfill({json:{...receipt(),command:body.command}});
-      const value={operationId:id,commandDigest:digest,command:'apk.install-inspected',expiresAt:receipt().expiresAt,stage:ownerStage};
-      if(url.pathname.endsWith('/execute')){ownerStage='completed';return execute?execute(route,body,value):route.fulfill({json:{...value,stage:'completed',result:{privatePath:'C:/private/never-persist',capture:'never-persist'}}});}
+      if(url.pathname.endsWith('/preflight')){
+        if(body.command==='runtime.observe'){
+          observedReceipt={...receipt(),operationId:observationId,commandDigest:observationDigest,command:'runtime.observe',target:{serial:body.serial,isReady:true},
+            artifact:{...receipt().artifact,path:`retained://${observationId}/base.apk`,sha256:body.sha256,sizeBytes:body.sizeBytes}};
+          observedStage='preflighted';
+          return observationPreflight?observationPreflight(route,body,observedReceipt):route.fulfill({json:observedReceipt});
+        }
+        return preflight?preflight(route,body,receipt()):route.fulfill({json:{...receipt(),command:body.command}});
+      }
+      const isObservation=body.operationId===observationId;
+      const value={operationId:isObservation?observationId:id,commandDigest:isObservation?observationDigest:digest,command:isObservation?'runtime.observe':'apk.install-inspected',expiresAt:receipt().expiresAt,stage:isObservation?observedStage:ownerStage};
+      if(isObservation){
+        if(url.pathname.endsWith('/execute')){
+          observedStage='running';
+          if(observationExecute)return observationExecute(route,body,{...value,stage:'running'},stage=>{observedStage=stage;});
+          observedStage='completed';return route.fulfill({json:{...value,stage:'completed',result:{processAlive:true,isTopResumed:true,privatePath:'C:/private/observation',capture:'private-observation-capture',secret:'private-observation-secret'}}});
+        }
+        if(url.pathname.endsWith('/status'))return route.fulfill({json:{...value,stage:observedStage}});
+        if(url.pathname.endsWith('/cancel')){
+          if(observedStage==='preflighted')return route.fulfill({status:409,json:{error:'operation_not_running',dispatched:false}});
+          if(observedStage==='running')observedStage='cancellationRequested';
+          return route.fulfill({json:{...value,stage:observedStage}});
+        }
+      }
+      if(url.pathname.endsWith('/execute')){
+        ownerStage='running';
+        if(execute)return execute(route,body,{...value,stage:'running'},stage=>{ownerStage=stage;});
+        ownerStage='completed';return route.fulfill({json:{...value,stage:'completed',result:{privatePath:'C:/private/never-persist',capture:'never-persist'}}});
+      }
       if(url.pathname.endsWith('/status'))return status?status(route,body,value):route.fulfill({json:value});
-      if(url.pathname.endsWith('/cancel')){ownerStage='cancelled';return route.fulfill({json:{...value,stage:'cancelled'}});}
+      if(url.pathname.endsWith('/cancel')){
+        if(ownerStage==='preflighted')return route.fulfill({status:409,json:{error:'operation_not_running',dispatched:false}});
+        if(ownerStage==='running')ownerStage='cancellationRequested';
+        return route.fulfill({json:{...value,stage:ownerStage}});
+      }
       return route.abort('blockedbyclient');
     }
     if(url.pathname==='/retained-fixture.js')return route.fulfill({contentType:'text/javascript',body:`import {createRetainedView} from './retained-view.js';
@@ -48,7 +81,7 @@ async function fixture(t, {capability={supported:true}, preflight, execute, stat
   const prepare=async()=>{await page.locator('#native-prepare').click();await page.waitForFunction(()=>document.querySelector('#native-review').hidden===false);};
   const stored=()=>page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)||'null'),storageKey);
   t.after(()=>assert.deepEqual(errors,[],'No uncaught UI errors'));
-  return {page,calls,update,prepare,stored,setOwnerStage:value=>{ownerStage=value;}};
+  return {page,calls,update,prepare,stored,setOwnerStage:value=>{ownerStage=value;},setObservationStage:value=>{observedStage=value;}};
 }
 
 test('prepare exposes exact review and executes original binding once',async t=>{
@@ -173,13 +206,14 @@ test('lazy owner admission rejection shows the supported owner procedure',async 
 
 test('original status and cancel stay available during executing request',async t=>{
   let finish;
-  const f=await fixture(t,{execute:async(route,body,value)=>{await new Promise(resolve=>{finish=resolve;});await route.fulfill({json:{...value,stage:'cancelled'}});}});
+  const f=await fixture(t,{execute:async(route,body,value,setStage)=>{await new Promise(resolve=>{finish=resolve;});setStage('cancelled');await route.fulfill({json:{...value,stage:'cancelled'}});}});
   await f.prepare();await f.page.locator('#native-confirm').check();await f.page.locator('#native-execute').click();
   await f.page.waitForFunction(()=>window.ctx.busy);
   assert.equal(await f.page.locator('#native-status').isDisabled(),false);assert.equal(await f.page.locator('#native-cancel').isDisabled(),false);
-  await f.page.locator('#native-cancel').click();await f.page.waitForFunction(()=>window.latest?.value.stage==='cancelled');
+  await f.page.locator('#native-cancel').click();await f.page.waitForFunction(()=>window.latest?.value.stage==='cancellationRequested');
+  assert.equal(await f.page.evaluate(()=>window.ctx.busy),true);
   assert.deepEqual(f.calls.find(c=>c.path.endsWith('/cancel')).body,{operationId:id,commandDigest:digest});
-  finish();await f.page.waitForFunction(()=>!window.ctx.busy);
+  finish();await f.page.waitForFunction(()=>!window.ctx.busy&&window.latest?.value.stage==='cancelled');
 });
 
 test('review data stays literal and mobile view has no horizontal overflow',async t=>{
@@ -199,4 +233,106 @@ test('manual reference requires explicit original status and never authorizes ex
   await f.page.waitForFunction(()=>window.latest?.value.stage==='preflighted');
   assert.deepEqual(f.calls[0].body,{operationId:id,commandDigest:digest});
   assert.equal(await f.page.locator('#native-execute').isDisabled(),true);
+});
+
+async function primaryUnknown(f){
+  await f.prepare();await f.page.locator('#native-confirm').check();await f.page.locator('#native-execute').click();
+  await f.page.waitForFunction(()=>window.latest?.value.stage==='outcomeUnknownRecoveryRequired');
+  return f.stored();
+}
+const unknownExecute=(route,body,value,setStage)=>{setStage('outcomeUnknownRecoveryRequired');return route.fulfill({json:{...value,stage:'outcomeUnknownRecoveryRequired'}});};
+
+test('separate runtime observation keeps primary unknown and exposes its own selected scope',async t=>{
+  const f=await fixture(t,{execute:unknownExecute});const original=await primaryUnknown(f);
+  await f.update({selected:{serial:'QUEST-B',isReady:true},artifact:{id:'6'.repeat(32),sha256:'7'.repeat(64),sizeBytes:4}});
+  assert.equal(await f.page.locator('#native-observe-target').textContent(),'QUEST-B');
+  await f.page.locator('#native-observe').click();await f.page.waitForFunction(()=>window.latest?.value.operationId==='api-'+'9'.repeat(32)&&window.latest.value.stage==='completed');
+  assert.deepEqual(await f.stored(),original);
+  assert.deepEqual(f.calls.slice(-2).map(call=>call.body),[
+    {artifactId:'6'.repeat(32),sha256:'7'.repeat(64),sizeBytes:4,command:'runtime.observe',serial:'QUEST-B'},
+    {operationId:observationId,commandDigest:observationDigest}
+  ]);
+  assert.equal(await f.page.locator('#native-prepare').isDisabled(),true);
+  assert.equal(await f.page.evaluate(()=>window.retained.hasUnresolved()),true);
+  assert.match(await f.page.locator('#native-observation-state').textContent(),/separate|Separate/);
+  const observed=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),observationKey);
+  assert.equal(observed.target,'QUEST-B');assert.equal(observed.command,'runtime.observe');
+  for(const forbidden of ['C:/private','private-observation-capture','private-observation-secret','retained://'])assert.equal(JSON.stringify(observed).includes(forbidden),false);
+  const count=f.calls.length;
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);
+  assert.equal(f.calls.length,count);assert.deepEqual(await f.stored(),original);
+});
+
+test('lost observation reply retains separate binding and never replays on reload or status',async t=>{
+  const f=await fixture(t,{execute:unknownExecute,observationExecute:route=>route.abort('failed')});const original=await primaryUnknown(f);
+  await f.page.locator('#native-observe').click();await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('unknown'));
+  assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  const observed=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),observationKey);
+  assert.equal(observed.operationId,observationId);assert.equal(observed.attempted,true);
+  const count=f.calls.length;
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);
+  assert.equal(f.calls.length,count);
+  f.setObservationStage('outcomeUnknownRecoveryRequired');await f.page.locator('#native-observation-status').click();
+  await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('outcomeUnknownRecoveryRequired'));
+  assert.deepEqual(await f.stored(),original);assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/execute')&&call.body.operationId===observationId).length,1);
+  await f.page.locator('#native-observation-cancel').click();
+  await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('outcomeUnknownRecoveryRequired'));
+  assert.equal(await f.page.locator('#native-observe').isDisabled(),true);assert.deepEqual(await f.stored(),original);
+});
+
+test('observation cancellation stays requested until owner execution acknowledgement',async t=>{
+  let finish;
+  const f=await fixture(t,{execute:unknownExecute,observationExecute:async(route,body,value,setStage)=>{await new Promise(resolve=>{finish=resolve;});setStage('cancelled');await route.fulfill({json:{...value,stage:'cancelled'}});}});
+  const original=await primaryUnknown(f);
+  await f.page.locator('#native-observe').click();await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('sent once'));
+  await f.page.locator('#native-observation-cancel').click();await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('cancellationRequested'));
+  assert.equal(await f.page.evaluate(()=>window.ctx.busy),true);assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  finish();await f.page.waitForFunction(()=>!window.ctx.busy&&document.querySelector('#native-observation-state').textContent.includes('cancelled'));
+  assert.equal(await f.page.locator('#native-observe').isDisabled(),false);assert.deepEqual(await f.stored(),original);
+});
+
+test('scope change during separate preflight retains reference without executing or replacing primary',async t=>{
+  let finish;
+  const f=await fixture(t,{execute:unknownExecute,observationPreflight:async(route,body,value)=>{await new Promise(resolve=>{finish=resolve;});await route.fulfill({json:value});}});
+  const original=await primaryUnknown(f);
+  await f.page.locator('#native-observe').click();await f.page.waitForFunction(()=>window.ctx.busy);
+  await f.update({selected:{serial:'QUEST-B',isReady:true}});finish();
+  await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('scope'));
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/execute')&&call.body.operationId===observationId).length,0);
+  assert.deepEqual(await f.stored(),original);assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  assert.equal(await f.page.locator('#native-observation-cancel').isDisabled(),true);
+  assert.match(await f.page.locator('#native-observation-state').textContent(),/expiry/);
+  f.setObservationStage('expired');await f.page.locator('#native-observation-status').click();await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('expired'));
+  assert.equal(await f.page.locator('#native-observe').isDisabled(),false);
+});
+
+test('known preflighted original cannot be cancelled and needs explicit status after expiry',async t=>{
+  const f=await fixture(t);await f.prepare();
+  assert.equal(await f.page.locator('#native-cancel').isDisabled(),true);
+  assert.match(await f.page.locator('#native-state').textContent(),/expiry/);
+  await f.page.locator('#native-cancel').dispatchEvent('click');
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/cancel')).length,0);
+  f.setOwnerStage('expired');await f.page.locator('#native-status').click();await f.page.waitForFunction(()=>window.latest?.value.stage==='expired');
+  assert.equal(await f.page.locator('#native-prepare').isDisabled(),false);
+});
+
+test('reconnect during separate preflight preserves binding without executing even for same scope',async t=>{
+  let finish;
+  const f=await fixture(t,{execute:unknownExecute,observationPreflight:async(route,body,value)=>{await new Promise(resolve=>{finish=resolve;});await route.fulfill({json:value});}});
+  const original=await primaryUnknown(f);
+  await f.page.locator('#native-observe').click();await f.page.waitForFunction(()=>window.ctx.busy);
+  await f.update({connected:false});await f.update({connected:true});finish();
+  await f.page.waitForFunction(()=>document.querySelector('#native-observation-state').textContent.includes('authentication'));
+  assert.equal(f.calls.filter(call=>call.path.endsWith('/execute')&&call.body.operationId===observationId).length,0);
+  assert.equal(await f.page.locator('#native-observation-id').textContent(),observationId);
+  assert.equal(await f.page.locator('#native-observation-cancel').isDisabled(),true);
+  assert.deepEqual(await f.stored(),original);
+});
+
+test('separate observation needs available owner, staged source and one ready selected target',async t=>{
+  const f=await fixture(t,{capability:null});assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  await f.update({capability:{supported:true},artifact:null});assert.equal(await f.page.locator('#native-observe').isDisabled(),true);
+  await f.update({artifact:{id:'4'.repeat(32),sha256:sha,sizeBytes:3},selected:{serial:'QUEST-A',isReady:false}});
+  assert.equal(await f.page.locator('#native-observe').isDisabled(),true);assert.equal(f.calls.length,0);
 });
