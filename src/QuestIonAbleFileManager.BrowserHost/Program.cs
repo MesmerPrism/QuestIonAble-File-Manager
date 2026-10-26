@@ -4,9 +4,9 @@ using System.Text.Json.Serialization;
 using QuestIonAbleFileManager.BrowserHost;
 using QuestIonAbleFileManager.Core;
 
-if (!OperatingSystem.IsWindows() || args.Length != 2 || args[0] != "--listen")
+if (!OperatorPlatformCapabilities.Current.HostAdbSupported || args.Length != 2 || args[0] != "--listen")
 {
-    Console.Error.WriteLine("Windows only. Usage: questionable-file-manager-browser --listen http://127.0.0.1:<port>/");
+    Console.Error.WriteLine("Usage: questionable-file-manager-browser --listen http://127.0.0.1:<port>/");
     return 2;
 }
 BrowserSecurity security;

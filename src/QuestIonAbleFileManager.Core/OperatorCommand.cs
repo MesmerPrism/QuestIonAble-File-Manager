@@ -1619,14 +1619,14 @@ public sealed record OperatorExecutionResult(
 public sealed class OperatorCommandExecutor
 {
     private readonly AdbClient? _client;
-    private readonly FleetInstallerHandoff _fleetInstaller;
-    private readonly QuestConnectivityProfileManager _connectivityProfiles;
+    private readonly Lazy<FleetInstallerHandoff> _fleetInstaller;
+    private readonly Lazy<QuestConnectivityProfileManager> _connectivityProfiles;
 
     public OperatorCommandExecutor(AdbClient client)
         : this(
             client ?? throw new ArgumentNullException(nameof(client)),
-            new FleetInstallerHandoff(null),
-            QuestConnectivityProfileManager.CreateWindows())
+            CreateDefaultFleetInstaller,
+            CreateDefaultConnectivityProfiles)
     {
     }
 
@@ -1636,10 +1636,42 @@ public sealed class OperatorCommandExecutor
         QuestConnectivityProfileManager? connectivityProfiles = null)
     {
         _client = client;
-        _fleetInstaller = fleetInstaller ??
-            throw new ArgumentNullException(nameof(fleetInstaller));
-        _connectivityProfiles = connectivityProfiles ??
-            QuestConnectivityProfileManager.CreateWindows();
+        ArgumentNullException.ThrowIfNull(fleetInstaller);
+        _fleetInstaller = new(() => fleetInstaller);
+        _connectivityProfiles = new(connectivityProfiles is null
+            ? CreateDefaultConnectivityProfiles : () => connectivityProfiles);
+    }
+
+    /// <summary>
+    /// Composes optional host facilities lazily. Factories run only for the
+    /// selected facility's route; ordinary ADB operations do not activate them.
+    /// </summary>
+    public OperatorCommandExecutor(
+        AdbClient? client,
+        Func<FleetInstallerHandoff> fleetInstallerFactory,
+        Func<QuestConnectivityProfileManager> connectivityProfilesFactory)
+    {
+        _client = client;
+        ArgumentNullException.ThrowIfNull(fleetInstallerFactory);
+        ArgumentNullException.ThrowIfNull(connectivityProfilesFactory);
+        _fleetInstaller = new(fleetInstallerFactory);
+        _connectivityProfiles = new(connectivityProfilesFactory);
+    }
+
+    private static FleetInstallerHandoff CreateDefaultFleetInstaller()
+    {
+        var capabilities = OperatorPlatformCapabilities.Current;
+        if (!capabilities.FleetInstallerSupported)
+            throw new PlatformNotSupportedException(capabilities.FleetInstallerUnavailableReason);
+        return new FleetInstallerHandoff(null);
+    }
+
+    private static QuestConnectivityProfileManager CreateDefaultConnectivityProfiles()
+    {
+        var capabilities = OperatorPlatformCapabilities.Current;
+        if (!capabilities.ConnectivityProfilesSupported)
+            throw new PlatformNotSupportedException(capabilities.ConnectivityProfilesUnavailableReason);
+        return QuestConnectivityProfileManager.CreateWindows();
     }
 
     public async Task<OperatorExecutionResult> ExecuteAsync(
@@ -1721,14 +1753,14 @@ public sealed class OperatorCommandExecutor
         {
             return new OperatorExecutionResult(
                 command,
-                ConnectivityProfileStatus: _connectivityProfiles.GetStatus(
+                ConnectivityProfileStatus: _connectivityProfiles.Value.GetStatus(
                     Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId))));
         }
         if (command.Kind == OperatorCommandKind.ConnectivityProfileList)
         {
             return new OperatorExecutionResult(
                 command,
-                ConnectivityProfileList: _connectivityProfiles.List());
+                ConnectivityProfileList: _connectivityProfiles.Value.List());
         }
         if (command.Kind == OperatorCommandKind.ConnectivityProfileImport)
         {
@@ -1737,7 +1769,7 @@ public sealed class OperatorCommandExecutor
                     "Connectivity profile write requires explicit operator confirmation.");
             return new OperatorExecutionResult(
                 command,
-                ConnectivityProfileMutation: await _connectivityProfiles.ImportAsync(
+                ConnectivityProfileMutation: await _connectivityProfiles.Value.ImportAsync(
                     command,
                     privateInput,
                     cancellationToken).ConfigureAwait(false));
@@ -1749,7 +1781,7 @@ public sealed class OperatorCommandExecutor
                     "Connectivity profile revocation requires explicit operator confirmation.");
             return new OperatorExecutionResult(
                 command,
-                ConnectivityProfileMutation: _connectivityProfiles.Revoke(
+                ConnectivityProfileMutation: _connectivityProfiles.Value.Revoke(
                     Require(command.ConnectivityDeviceId, nameof(command.ConnectivityDeviceId)),
                     command.OperatorConfirmed));
         }
@@ -1757,7 +1789,7 @@ public sealed class OperatorCommandExecutor
         {
             return new OperatorExecutionResult(
                 command,
-                FleetInstallerStatus: await _fleetInstaller
+                FleetInstallerStatus: await _fleetInstaller.Value
                     .GetStatusAsync(cancellationToken)
                     .ConfigureAwait(false));
         }
@@ -1770,7 +1802,7 @@ public sealed class OperatorCommandExecutor
             }
             return new OperatorExecutionResult(
                 command,
-                FleetInstallerHandoff: await _fleetInstaller
+                FleetInstallerHandoff: await _fleetInstaller.Value
                     .InstallAsync(cancellationToken, progress)
                     .ConfigureAwait(false));
         }
