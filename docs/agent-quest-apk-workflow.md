@@ -10,6 +10,9 @@ and the choice of build output.
 1. Read the source repository's tracked agent instructions and use its owned
    build command. Do not make File Manager infer or reproduce that build.
 2. Select one explicit `.apk` output and one explicit Quest serial.
+   For a producer-owned hardlinked output, use the verified independent-input
+   copy procedure in [inspected deployment](inspected-deployment.md); preserve
+   the producer's original links.
 3. Run `apk inspect --file <apk> --json` when artifact-only admission is useful.
 4. Run `apk preflight --serial <serial> --file <apk> --json` for the read-only
    artifact/device handoff. A ready result proves SDK compatibility and one
@@ -20,7 +23,7 @@ and the choice of build output.
    `--grant-runtime-permissions`, and `--test-only`.
 6. Treat the returned mutation receipt and install/launch/runtime evidence as
    separate facts. A confirmed deploy proves exact installed bytes and the
-   immediate resolved-component readback; runtime fields report what was seen,
+   bounded fresh resolved-component readback; runtime fields report what was seen,
    not application-owned semantic readiness.
 7. Use `apk observe --serial <serial> --file <apk> --json` for later read-only
    checks against the same artifact. When a durable evidence pack is useful,

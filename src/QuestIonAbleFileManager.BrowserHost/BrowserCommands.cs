@@ -25,6 +25,7 @@ public sealed class BrowserCommands
          "device.actor-observe", "device.actor-identity", "adb.forwards"];
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
     private readonly Func<BrowserArtifactStore>? _artifactStore;
+    private readonly BrowserOperationGate _operationGate;
     public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
         ? [.. Actions, "apk.inspect"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
@@ -48,10 +49,11 @@ public sealed class BrowserCommands
     }
 
     public BrowserCommands(Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> execute,
-        Func<BrowserArtifactStore>? artifactStore = null)
+        Func<BrowserArtifactStore>? artifactStore = null, BrowserOperationGate? operationGate = null)
     {
         _execute = execute;
         _artifactStore = artifactStore;
+        _operationGate = operationGate ?? new BrowserOperationGate();
     }
 
     public void RequireSession(string session)
@@ -73,13 +75,14 @@ public sealed class BrowserCommands
             lock (_admission)
             {
                 if (_requests.ContainsKey(artifact.RequestId)) throw new BrowserRequestException("request_already_consumed", 409);
-                if (_running) throw new BrowserRequestException("busy", 409);
+                if (_running || _operationGate.IsBusy) throw new BrowserRequestException("busy", 409);
                 if (_requests.Count >= MaximumRequests) throw new BrowserRequestException("session_capacity_reached", 409);
             }
         }
         await using var artifactLease = await AcquireArtifactAsync(artifact, stopping).ConfigureAwait(false);
         var request = artifact is null ? Parse(body) : new BrowserCommandRequest(
             artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), false);
+        IDisposable operationLease;
         lock (_admission)
         {
             if (_requests.ContainsKey(request.RequestId))
@@ -87,6 +90,7 @@ public sealed class BrowserCommands
             if (_running) throw new BrowserRequestException("busy", 409);
             if (_requests.Count >= MaximumRequests)
                 throw new BrowserRequestException("session_capacity_reached", 409);
+            operationLease = _operationGate.TryAcquire() ?? throw new BrowserRequestException("busy", 409);
             _requests[request.RequestId] = new(request.RequestId, request.Action, "running");
             _running = true;
         }
@@ -135,7 +139,7 @@ public sealed class BrowserCommands
             _requests[request.RequestId] = outcome;
             return outcome;
         }
-        finally { lock (_admission) { _running = false; } }
+        finally { lock (_admission) { _running = false; operationLease.Dispose(); } }
     }
 
     private async Task<BrowserArtifactLease?> AcquireArtifactAsync(BrowserArtifactCommandRequest? artifact,

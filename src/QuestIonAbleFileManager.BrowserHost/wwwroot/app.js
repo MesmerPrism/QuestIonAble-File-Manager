@@ -1,8 +1,10 @@
 import * as usb from './usb-proof.js';
+import {createRetainedView} from './retained-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
-  artifact:null, artifactSession:'', artifactStaging:{supported:false} };
+  artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false} };
+let retainedView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -14,7 +16,7 @@ const showResult = (value, summary) => { text('result-summary', summary); text('
 const readySelected = () => host.devices.find(d => d.serial === host.selected && d.isReady);
 function controls() {
   const connected = localHostMode && Boolean(host.token && host.session), ready = Boolean(readySelected());
-  const mutatable = connected && !host.busy && !host.original;
+  const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved();
   byId('refresh').disabled = !connected || host.busy;
   byId('read-status').disabled = !connected || !ready || host.busy;
   byId('apply-hold').disabled = !mutatable || !ready || !byId('power-confirm').checked;
@@ -39,6 +41,7 @@ function controls() {
   byId('inspect-apk').disabled = !ownedArtifact || !host.actions.has('apk.inspect');
   for(const id of ['download-artifact','remove-artifact'])byId(id).disabled=!ownedArtifact;
   byId('clear-artifacts').disabled=!staging;
+  retainedView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -69,7 +72,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, { ...options, credentials:'omit', cache:'no-store', redirect:'error', headers:{ 'Authorization':`Bearer ${host.token}`, 'X-Qfm-Session':host.session, ...(options.body ? {'Content-Type':'application/json'} : {}), ...options.headers } });
   const body = await response.text();
   const value = body ? JSON.parse(body) : {};
-  if (!response.ok) { const error = new Error(value.error || `Request rejected (${response.status})`); error.status = response.status; error.dispatched = value.dispatched; throw error; }
+  if (!response.ok) { const error = new Error(value.error || `Request rejected (${response.status})`); error.status = response.status; error.dispatched = value.dispatched; error.alternative=value.alternative; throw error; }
   return value;
 }
 function consume(value, action, projectLive = true) {
@@ -90,7 +93,7 @@ function consume(value, action, projectLive = true) {
   if (host.original && value.requestId === host.original.requestId && ((value.state === 'completed' && (!mutations.has(action) || receiptConfirmed || endpointReady)) || value.state === 'failed')) recordOriginal(null);
 }
 async function execute(action, fields = {}) {
-  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && host.original)) return;
+  if (!host.session || host.busy || !host.actions.has(action) || (mutations.has(action) && (host.original || retainedView?.hasUnresolved()))) return;
   const requestId = crypto.randomUUID(); host.busy = true;
   const generation = connectionGeneration;
   if (mutations.has(action)) recordOriginal({ requestId, sessionId:host.session, action, target:fields.serial || fields.host });
@@ -107,6 +110,7 @@ byId('connect-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!localHostMode || host.busy) {byId('token').value='';return;} host.token = byId('token').value; byId('token').value=''; host.busy=true; const generation=++connectionGeneration; host.session='';host.selected='';host.devices=[];host.actions=new Set();clearStatus();byId('devices').replaceChildren();byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;controls();
   try { const session=await api('/browser/v1/session'); if(generation!==connectionGeneration)return; host.session=session.sessionId;host.actions=new Set(session.actions || ['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal']); text('host-status','Connected');
     host.artifactStaging=session.artifactStaging || {supported:false};
+    host.retainedCapability=session.retainedOperations || {supported:false,reason:'This host has no configured retained operation owner.',alternative:'Use the current typed CLI or configure the Windows companion using the guide.'};
     if(host.artifactSession && host.artifactSession!==host.session){host.artifact=null;clearApkInspection();text('artifact-state','Host session changed. Select and stage bytes again; old handles cannot be reused.');}
     text('artifact-capability',host.artifactStaging.supported ? 'Protected transient staging is supported on this Windows host when its temporary volume and permissions are valid.' : (host.artifactStaging.reason || 'This host does not offer protected browser staging.')+' '+(host.artifactStaging.alternative || 'Use the Windows companion or current QFM desktop/CLI.'));
     const caps=session.platformCapabilities;
@@ -155,6 +159,7 @@ byId('usb-selection').addEventListener('change',()=>{byId('usb-reading').hidden=
 byId('usb-read').addEventListener('click',()=>usbAction(()=>usb.read(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-reconnect').addEventListener('click',()=>usbAction(()=>usb.reconnect(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-disconnect').addEventListener('click',()=>usbAction(()=>usb.disconnect(byId('usb-selection').value)));
+retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original)}),setBusy:value=>{host.busy=value;controls();},showResult});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {

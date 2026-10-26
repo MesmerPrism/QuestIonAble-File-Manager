@@ -9,15 +9,27 @@ public sealed partial class AdbClient
     private static readonly TimeSpan InspectionTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ConnectionTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan TransferTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LaunchReadbackWindow = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LaunchReadbackInterval = TimeSpan.FromMilliseconds(500);
+    private const int MaximumLaunchReadbackObservations = 11;
     private readonly ICommandRunner _runner;
     private readonly AndroidBuildToolPaths? _buildTools;
+    private readonly TimeProvider _launchReadbackTimeProvider;
+    private readonly Func<TimeSpan, CancellationToken, Task> _launchReadbackDelay;
 
     public AdbClient(string adbPath, ICommandRunner? runner = null, AndroidBuildToolPaths? buildTools = null)
+        : this(adbPath, runner, buildTools, TimeProvider.System, Task.Delay) { }
+
+    // Tests may advance time without sleeping; every acknowledgement still comes from fresh runner output.
+    internal AdbClient(string adbPath, ICommandRunner? runner, AndroidBuildToolPaths? buildTools,
+        TimeProvider launchReadbackTimeProvider, Func<TimeSpan, CancellationToken, Task> launchReadbackDelay)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(adbPath);
         AdbPath = adbPath;
         _runner = runner ?? new CommandRunner();
         _buildTools = buildTools;
+        _launchReadbackTimeProvider = launchReadbackTimeProvider ?? throw new ArgumentNullException(nameof(launchReadbackTimeProvider));
+        _launchReadbackDelay = launchReadbackDelay ?? throw new ArgumentNullException(nameof(launchReadbackDelay));
     }
 
     public string AdbPath { get; }
@@ -735,29 +747,15 @@ public sealed partial class AdbClient
             throw new InspectedAppLaunchException(InspectedAppLaunchStage.Dispatch, exception);
         }
         start.EnsureSuccess("Start resolved launcher activity");
-        CommandResult activities;
+        bool observed;
         try
         {
-            activities = await RunForDeviceAsync(
-                serial, ["shell", "dumpsys", "activity", "activities"],
-                InspectionTimeout, cancellationToken).ConfigureAwait(false);
-            activities.EnsureSuccess("Read back launched activity");
+            observed = await ObserveLaunchedComponentAsync(serial, component, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
             throw new InspectedAppLaunchException(InspectedAppLaunchStage.Readback, exception);
         }
-        var observed = activities.StandardOutput.ReplaceLineEndings("\n").Split('\n')
-            .Any(line =>
-                (line.Contains("mResumedActivity", StringComparison.Ordinal) ||
-                 line.Contains("topResumedActivity", StringComparison.OrdinalIgnoreCase)) &&
-                TryReadRuntimeComponent(line, out var observedComponent) &&
-                (string.Equals(observedComponent, component.Canonical, StringComparison.Ordinal) ||
-                 (component.IsActivityAlias &&
-                  string.Equals(
-                      observedComponent,
-                      component.TargetActivity,
-                      StringComparison.Ordinal))));
         return new ResolvedAppLaunchResult(
             artifact with { Path = reportedPath },
             installed,
@@ -768,6 +766,45 @@ public sealed partial class AdbClient
             LauncherIsActivityAlias = component.IsActivityAlias,
             LauncherTargetActivity = component.TargetActivity
         };
+    }
+
+    private async Task<bool> ObserveLaunchedComponentAsync(string serial, ResolvedLauncherComponent component,
+        CancellationToken cancellationToken)
+    {
+        var started = _launchReadbackTimeProvider.GetTimestamp();
+        using var window = new CancellationTokenSource(LaunchReadbackWindow, _launchReadbackTimeProvider);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, window.Token);
+        try
+        {
+            for (var observation = 0; observation < MaximumLaunchReadbackObservations; observation++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var remaining = LaunchReadbackWindow - _launchReadbackTimeProvider.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) return false;
+                // Dispatch happened exactly once above. This finite window performs read-only observations only.
+                var activities = await RunForDeviceAsync(serial, ["shell", "dumpsys", "activity", "activities"],
+                    remaining, linked.Token).ConfigureAwait(false);
+                activities.EnsureSuccess("Read back launched activity");
+                linked.Token.ThrowIfCancellationRequested();
+                if (_launchReadbackTimeProvider.GetElapsedTime(started) >= LaunchReadbackWindow) return false;
+                var facts = ParseActivityRuntimeFacts(activities.StandardOutput.ReplaceLineEndings("\n").Split('\n'));
+                if (facts.ForegroundComponents.Concat(facts.TopResumedComponents).Any(observed =>
+                    string.Equals(observed, component.Canonical, StringComparison.Ordinal) ||
+                    (component.IsActivityAlias && string.Equals(observed, component.TargetActivity, StringComparison.Ordinal))))
+                    return true;
+                if (observation == MaximumLaunchReadbackObservations - 1) return false;
+                remaining = LaunchReadbackWindow - _launchReadbackTimeProvider.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) return false;
+                await _launchReadbackDelay(remaining < LaunchReadbackInterval ? remaining : LaunchReadbackInterval,
+                    linked.Token).ConfigureAwait(false);
+            }
+            return false;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && window.IsCancellationRequested)
+        {
+            // Exhausting the observation window cannot confirm an effect. Preserve pending launch readback.
+            return false;
+        }
     }
 
     private async Task<ResolvedLauncherComponent> ResolveExportedLauncherAsync(

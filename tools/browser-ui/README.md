@@ -4,6 +4,7 @@ Run with Node and Playwright 1.62.1 plus its matching Chromium installed:
 
 ```powershell
 node --test tools/browser-ui/frontend.test.cjs
+node --test tools/browser-ui/retained.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
 
@@ -20,6 +21,10 @@ events and visible/storage state for confirmation, rejection, lost response,
 exact endpoint completion and public-origin fail-closed behavior.
 The public-origin credential form is also checked with application module
 loading deliberately blocked, proving its disabled default needs no JavaScript.
+The retained fixtures exercise exact review/approval, one-use execution, lost
+replies, saved original references, explicit status/cancel, and a separate
+read-only observation while an original remains unknown. They never contact
+the native retained owner or a device.
 
 Set `QFM_BROWSER_UI_EVIDENCE` to an external/private output directory to save
 desktop host and mobile public-origin screenshots. Product/live-device QA is

@@ -20,7 +20,7 @@ public sealed class BrowserSecurity
     public string Origin => ListenUri.GetLeftPart(UriPartial.Authority);
     private static readonly HashSet<string> StaticPaths = new(StringComparer.Ordinal)
     {
-        "/", "/index.html", "/agent.html", "/app.js", "/pwa.js", "/sw.js", "/manifest.webmanifest",
+        "/", "/index.html", "/agent.html", "/app.js", "/pwa.js", "/retained-view.js", "/sw.js", "/manifest.webmanifest",
         "/icons/qfm-192.png", "/icons/qfm-512.png", "/styles.css", "/usb-proof.js", "/usb-proof-core.js",
         "/vendor/tango-adb.js", "/vendor/TANGO_NOTICES.txt", "/vendor/tango-packages.json",
         "/THIRD_PARTY_NOTICES.md", "/vendor/THIRD_PARTY_NOTICES.md",

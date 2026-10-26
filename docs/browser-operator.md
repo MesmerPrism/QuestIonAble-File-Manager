@@ -4,8 +4,9 @@
 closed browser projection of existing QFM Core commands. Ordinary host ADB
 operations require no headset application. Developer mode, protected debugging
 authorization, a suitable USB/network transport and a selected host ADB remain
-prerequisites. It does not expose the existing inspected-deployment API or
-change that API's registry, journal or deployment security boundary.
+prerequisites. Its retained APK projection calls the existing inspected-deployment
+owner in-process, preserving that owner's registry, journal and deployment
+security boundary without opening a second API listener.
 
 ## Start explicitly
 
@@ -209,9 +210,71 @@ keeps staged references in tab memory and rejects them when the host session
 changes. Process restart invalidates IDs; it does not establish durable crash
 recovery or authorize scavenging unrelated files.
 
-The current artifact slice performs local staging and inspection only. Browser
-device push, install/deploy and related uncertain-effect custody remain separate
-migration work. Use the existing typed CLI/WPF for those current operations.
+Transient staging performs local transport and inspection. The separate retained
+workflow below owns inspected single-APK install, launch and runtime observation.
+Device file push and the remaining advanced deployment options still use the
+existing typed CLI/WPF during migration.
+
+## Retained inspected APK operations
+
+On Windows, configure `QUESTIONABLE_FILE_MANAGER_API_STATE` and
+`QUESTIONABLE_FILE_MANAGER_API_JOURNAL_SECRET` privately using the existing
+[Local API state contract](local-api.md). Preserve that exact state and its
+32–512 UTF-8 byte integrity key across sessions and process restarts. The browser
+bearer is a separate credential. This projection needs no standalone Local API
+bearer or listener. Configuration reporting is inert; an explicit retained
+request opens and validates the owner. If another process owns the same state,
+use that existing owner or stop it through its normal lifecycle. Do not choose
+a fresh directory or replace the key to bypass outstanding uncertainty.
+Linux/macOS report this protected retained owner unavailable and offer the
+Windows companion alternative.
+
+Choose and stage an APK, select one ready target, then prepare an inspected
+install, resolved launch or runtime observation. Preparation creates the owner's
+independent protected copy and commits its journal before releasing the transient
+upload lease. Review package, version, signer, SHA-256, size, target, options and
+expiry before approving and executing once. Removing the transient upload does
+not remove this retained copy. A present different APK selection blocks approval;
+after authentication or source removal, explicitly read the original status
+again. Default approval lifetime is 120 seconds, with a maximum of 300 seconds.
+A prepared, unexecuted owner record cannot be cancelled by v1; let its approval
+expire and explicitly read status before replacing that browser reference.
+Single-APK install supports replace-existing and requested runtime permission
+options. Downgrade, test-only, split sets and parallel deployment remain outside
+this retained v1 contract.
+
+All four POST routes require JSON, the same origin/bearer/session checks, the
+4 KiB body bound and strict duplicate/unknown-field rejection:
+
+| Route | Exact request |
+| --- | --- |
+| `/browser/v1/retained/preflight` | `artifactId`, `sha256`, `sizeBytes`, `command`, `serial`; optional `installOptions` and `expiresInSeconds`. Commands are `apk.inspect`, `apk.install-inspected`, `app.launch-resolved`, `runtime.observe`. Only inspect uses null serial. Install options contain exactly boolean `replaceExisting` and `grantRuntimePermissions`. |
+| `/browser/v1/retained/execute` | `operationId` and `commandDigest` from preflight; consumes the existing owner command once. |
+| `/browser/v1/retained/status` | The original `operationId` and `commandDigest`; reads its retained state without executing. |
+| `/browser/v1/retained/cancel` | The original binding; asks the owner to cancel running work. A preflighted record returns `operation_not_running`. Cancellation is not proof that a dispatched mutation had no effect. |
+
+Retained preparation/execution and transient Core commands share one host
+operation gate. Retained status/cancel remain available during execution.
+Execution follows owner/application lifetime, not the page connection lifetime.
+An execute response can be `outcomeUnknownRecoveryRequired`; an exit-zero ADB
+command with incomplete fresh readback never becomes completed. Duplicate execute
+returns 409 without claiming `dispatched:false`. Never replay an unknown
+operation or prepare a new mutation as its substitute.
+
+The browser saves only small operation references in tab session storage, never
+credentials, full results, APKs or private paths. Reload/authentication sends no
+operation automatically. Save the ID and digest promptly: owner terminal record
+retention is bounded to 24 hours, including unknown outcomes. The original record
+and its uncertainty survive host restart through the existing journal. Reading
+status does not rerun observation, reconcile or promote an unknown outcome.
+
+An explicit separate **Observe selected runtime (keep original)** action can
+prepare and execute a new read-only `runtime.observe` while preserving an unknown
+original. It has its own saved binding/status/cancel controls and no automatic
+replay. Those later process/focus facts do not rewrite the original launch
+receipt or establish application/OpenXR readiness. Unknown mutations keep new
+device changes blocked; use the existing typed owner recovery route and its
+actual evidence before any further mutation.
 
 ## Power and existing supervisors
 

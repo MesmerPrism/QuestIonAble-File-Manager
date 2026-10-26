@@ -40,6 +40,16 @@ identity-bound, non-replaceable admission workspace; hashing, Build Tools, and
 ADB receive only that retained copy. The fixed workspace is single-owner,
 bounded, and cleans any prior crash residue before reuse.
 
+Direct source admission currently rejects reparse points and files with more
+than one hard link. If a build owner publishes an APK through multiple hardlink
+names, preserve those producer-owned files. Make one ordinary independent input
+copy at a new, non-overwriting path, verify its size and SHA-256 against the
+producer artifact, then pass that copy to QFM. Retain it for the composed run
+and remove only that task-owned copy when its custody ends. A link-count
+rejection is an input custody restriction, not an APK validity result. Browser
+upload instead creates its own single-link file from selected bytes, subject to
+the browser's separate 256 MiB limit; the CLI admission limit remains 1 GiB.
+
 `apk install` repeats inspection immediately before its serial-scoped install.
 It then reads package paths from that exact serial and computes the complete
 installed base APK's SHA-256 and size on the same opened remote handle. Only a
@@ -111,7 +121,11 @@ ambiguous, explicitly unexported, malformed, or incomplete evidence fails before
 dispatch. Callers cannot supply components, actions, categories,
 intents, extras, paths, shell fragments, or generic ADB arguments. Confirmation
 requires exact canonical resumed-component readback for the dispatched alias or
-its retained alias target.
+its retained alias target. After exactly one start command, Core performs fresh
+read-only activity observations for up to five seconds (at most eleven reads,
+500 ms spacing, each command bounded by the remaining window). It never
+relaunches during this window. Absence, late output, cancellation or failed
+readback cannot confirm the launch.
 
 `apk launch ... --json` writes exactly one
 `questionable.file_manager.apk_launch_result.v1` document to standard output on
