@@ -42,9 +42,9 @@ requirements stay with shared Core.
 | CPU/GPU performance set/clear | `device performance`; browser implemented. | Fixed reviewed levels and matching device-settings confirmation/readback. |
 | Actor / actor identity / shared forward inventory | `device actor-observe/actor-identity-observe`, `adb forwards`; browser implemented. | Read-only facts, exact serial/PID; forward inventory never owns or mutates shared daemon mappings. |
 | Kiosk install/provision/catalog/status and tag file import/export | Bounded passive installation and explicit catalog-open implemented; install/provision/tag transport pending. | Exact Stable/Labs channel and fixed products; catalog open can request Kiosk activity. Reported installation/control flags are not fresh installed-signer verification. Kiosk stays optional. |
-| Kiosk search/filter/tag/select/launch and opaque options | Local returned-catalog filtering and explicitly reviewed ADB selection implemented; launch/options/Direct/tag edits pending. | Select binds a completed host-session catalog and unique eligible key/package. No arbitrary component/URI/extras. Current legacy guard-state launch acknowledgement is not named-app launch proof. |
-| Kiosk launch requirements/cancel, setup-helper, Wi-Fi request/disable/boot policy, accessibility, passthrough and Meta Home | Exhaustive `RustyKioskCommandKind`; browser pending. | Fixed owner routes and wearer decisions; preserve pending requests and supported readback. |
-| Direct Link authentication/USB bootstrap/adoption/status/request status/cancel/disconnect | Explicit USB bootstrap/adoption, signed status and opaque-handle close implemented; manual authentication and logical request controls pending. | Transient host-only credential, exact USB/channel/session binding, finite key expiry and separate owned-stop/pre-existing-preservation cleanup. Lost originals never replay or clear from status; no credential reconstruction or saved-ID restart cleanup. |
+| Kiosk search/filter/tag/select/launch and opaque options | Local returned-catalog filtering and explicitly reviewed ADB selection implemented. Direct normal/kiosk launch of the current selection implemented; named-app launch, opaque options and tag edits pending. | Select binds a completed host-session catalog and unique eligible key/package. Direct launch is a separate operation addressing the selection at execution time. Its guard-state acknowledgement does not prove named-app launch or readiness. |
+| Kiosk launch requirements/cancel, setup-helper, Wi-Fi request/disable/boot policy, accessibility, passthrough and Meta Home | Direct status, controls/apps panels, setup-helper check, launch-requirement preference and pending-launch cancellation implemented. Remaining `RustyKioskCommandKind` projections pending. | Fixed owner routes and wearer decisions; preserve pending requests and supported readback. A launch preference does not change Wi-Fi or approve a wearer prompt. Pending-launch cancellation does not acknowledge an older logical request. |
+| Direct Link authentication/USB bootstrap/adoption/status/request status/cancel/disconnect | Explicit USB bootstrap/adoption, signed status, opaque-handle close and logical request status/result/cancel implemented; manual authentication pending. | Transient host-only credential, exact USB/channel/session binding, finite key expiry and separate owned-stop/pre-existing-preservation cleanup. Invoke saves its logical identity before dispatch. Lifecycle status alone cannot acknowledge it; original typed result and readback are required. Lost originals never replay; no credential reconstruction or saved-ID restart cleanup. |
 | Direct staging list/upload/download/delete and attended single/split install | `kiosk-direct files/install/install-status`; browser pending. | Bounded app-owned staging, exact digest/length install binding; wearer-confirmed PackageInstaller can remain pending. |
 | Fleet release status / guided installer handoff | `fleet status/install`; browser pending. | Windows signed distribution/replay authority. Installation readback separate from handoff dispatch; other OSs need explicit supported distribution guidance. |
 | Connectivity profile list/status/import/create/replace/revoke and USB-to-Direct enrollment | Local Windows profile card implements list/status, manual/private-file stdin enrollment, explicit replace and revoke through the shared manager. | Current-user Credential Manager only; no plaintext fallback or connectivity test. Private input uses a separate bounded route, exact reviewed ID, shared gate and sanitized receipts. Unknown writes never reconcile from status; transient USB Direct credentials are not exported/enrolled. |
@@ -59,12 +59,14 @@ worker/offline test. Platform smoke tests use invented targets and fake runners,
 and establish no device effects. See `tools/browser-ui/README.md` and
 `browser-operator.md` for callable checks.
 
-Continue with device file transfer and full APK workflows, retaining unknown-effect
-artifact custody. Protected local staging/inspection is implemented; portable
-native-path staging is still outstanding. Retained single-APK install, launch and
-observation reuse the Windows Local API owner; advanced deployment remains.
-Kiosk,
-profiles, Fleet and portable distribution follow the same action inventory.
+Continue with retained diagnostic output and the remaining APK workflows,
+retaining unknown-effect artifact custody. Protected local staging/inspection,
+file transfer, retained single-APK install/deploy/launch and runtime reads are
+implemented. Portable native-path staging, complete split/parallel workflows,
+properties and diagnostic browser projections remain outstanding. The bounded
+optional diagnostic collector is shared Core infrastructure; it does not yet
+provide durable output custody or a browser download. Remaining Kiosk, Fleet,
+profile enrollment and distribution work follow the same action inventory.
 Update each row at tested checkpoints, with device evidence separate from
 source, browser and packaging proof. Do not block the existing product developer
 loop on completion of this UI migration.
