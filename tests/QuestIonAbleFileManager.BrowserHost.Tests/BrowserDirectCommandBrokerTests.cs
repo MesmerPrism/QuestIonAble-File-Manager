@@ -17,7 +17,8 @@ public sealed class BrowserDirectCommandBrokerTests
     [InlineData("launch-kiosk", null)]
     public async Task EachCommandUsesOneInvokeAndFreshSignedStatusWithoutAdoptionOrStagingReplay(string command, string? value)
     {
-        var fixture = await Fixture.Create();
+        // A legitimate opaque ID may contain the private port's digits.
+        var fixture = await Fixture.Create("b39873f6-fb8d-45b0-959d-000000000001");
         var outcome = await fixture.Invoke(command, value);
         Assert.Equal("completed", outcome.State); Assert.Null(outcome.Result); Assert.Null(outcome.Mutation);
         var facts = outcome.KioskDirectCommand!;
@@ -30,7 +31,7 @@ public sealed class BrowserDirectCommandBrokerTests
         Assert.False(facts.TypedResult!.SetupHelperReady); // helper ack is not readiness
         Assert.DoesNotContain("private-sentinel", JsonSerializer.Serialize(outcome));
         Assert.DoesNotContain("private_session", JsonSerializer.Serialize(outcome));
-        Assert.DoesNotContain("39873", JsonSerializer.Serialize(outcome));
+        Assert.DoesNotContain(":39873", JsonSerializer.Serialize(outcome));
         Assert.True(await fixture.Owner.ShutdownAsync());
     }
     [Theory]
@@ -321,12 +322,12 @@ public sealed class BrowserDirectCommandBrokerTests
         internal readonly BrowserOperationGate Gate = new();
         internal BrowserDirectConnections Owner = null!; internal BrowserCommands Broker = null!; internal NativeSession Native = null!;
         internal BrowserDirectConnectionOutcome Connection = null!; internal string Handle => Connection.ConnectionId!;
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(string? connectRequestId = null)
         {
             var fixture = new Fixture();
             fixture.Owner = new((context, _) => Task.FromResult<IBrowserDirectSession>(fixture.Native = new(context, fixture.Clock)), fixture.Clock);
             fixture.Broker = new((_, _) => throw new InvalidOperationException("no ADB path"), operationGate: fixture.Gate, directConnections: fixture.Owner);
-            fixture.Connection = (await fixture.Broker.ExecuteAsync(BrowserDirectCommandsTests.Body(id: Guid.NewGuid().ToString("D")))).KioskDirectConnection!;
+            fixture.Connection = (await fixture.Broker.ExecuteAsync(BrowserDirectCommandsTests.Body(id: connectRequestId ?? Guid.NewGuid().ToString("D")))).KioskDirectConnection!;
             return fixture;
         }
         internal Task<BrowserCommandOutcome> Invoke(string command = "status", string? value = null) =>

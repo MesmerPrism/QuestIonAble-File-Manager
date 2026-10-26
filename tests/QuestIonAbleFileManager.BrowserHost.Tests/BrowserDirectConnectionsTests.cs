@@ -110,14 +110,14 @@ public sealed class BrowserDirectConnectionsTests
     public async Task PreexistingListenerClosePreservesItAndRawPrivateFieldsNeverEscape()
     {
         var clock=new Clock(); var owner=new BrowserDirectConnections((context,_)=>Task.FromResult<IBrowserDirectSession>(new FakeSession(context,clock){Owned=false}),clock);
-        var broker=Broker(owner); var connected=await broker.ExecuteAsync(Connect());
+        var broker=Broker(owner); var connected=await broker.ExecuteAsync(Connect("b39873f6-fb8d-45b0-959d-000000000001"));
         var closed=await broker.ExecuteAsync(On("kiosk.direct.close",connected.KioskDirectConnection!.ConnectionId!));
         Assert.Equal("preexisting-preserved",closed.KioskDirectConnection!.Cleanup!.ListenerDisposition);
         var options=new JsonSerializerOptions(JsonSerializerDefaults.Web){Converters={new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)}};
         foreach(var value in new[]{connected,closed})
         {
             var json=JsonSerializer.Serialize(value,options);
-            Assert.DoesNotContain("private-sentinel",json); Assert.DoesNotContain("private_session_123",json); Assert.DoesNotContain("39873",json);
+            Assert.DoesNotContain("private-sentinel",json); Assert.DoesNotContain("private_session_123",json); Assert.DoesNotContain(":39873",json);
         }
     }
 
