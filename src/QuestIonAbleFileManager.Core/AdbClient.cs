@@ -481,6 +481,9 @@ public sealed partial class AdbClient
             throw new FileNotFoundException("The local file to push was not found.", fullLocalPath);
         }
 
+        // Ordinary push accepts a full file destination, not ADB's directory
+        // basename-append behavior. This observation is not atomic write custody.
+        await ReadPushDestinationSizeAsync(serial, remotePath, cancellationToken).ConfigureAwait(false);
         var result = await RunForDeviceAsync(
             serial,
             new[] { "push", fullLocalPath, remotePath },
@@ -2386,18 +2389,9 @@ public sealed partial class AdbClient
         long expectedBytes,
         CancellationToken cancellationToken)
     {
-        var verify = await RunForDeviceAsync(
-            serial,
-            ["shell", $"stat -c %s -- {AndroidInput.ShellQuote(remotePath)}"],
-            InspectionTimeout,
-            cancellationToken).ConfigureAwait(false);
-        verify.EnsureSuccess($"Verify {remotePath}");
-        if (!long.TryParse(
-                verify.StandardOutput.Trim(),
-                System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var actualBytes) ||
-            actualBytes != expectedBytes)
+        var actualBytes = await ReadPushDestinationSizeAsync(serial, remotePath, cancellationToken)
+            .ConfigureAwait(false);
+        if (actualBytes is null || actualBytes != expectedBytes)
         {
             throw new InvalidDataException(
                 $"The headset reported {actualBytes} bytes at {remotePath}; expected {expectedBytes} bytes.");

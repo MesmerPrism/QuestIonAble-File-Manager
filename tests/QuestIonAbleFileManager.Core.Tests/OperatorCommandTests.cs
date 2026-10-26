@@ -466,9 +466,9 @@ public sealed class OperatorCommandTests
                 return Success("Download/\nexample.txt\n");
             }
 
-            if (arguments.Any(static value => value.StartsWith("stat -c %s", StringComparison.Ordinal)))
+            if (arguments.Any(static value => value.Contains("qfm-file-push:v1", StringComparison.Ordinal)))
             {
-                return Success("4\n");
+                return Success("qfm-file-push:v1:81a4:4\n");
             }
 
             return Success("Success\n");
@@ -568,7 +568,9 @@ public sealed class OperatorCommandTests
                 FileName = fileName,
                 Arguments = arguments.ToArray()
             };
-            byte[] bytes = [0x50, 0x4b, 0x03, 0x04];
+            byte[] bytes = arguments.Any(static value => value.Contains("qfm-file-push:v1", StringComparison.Ordinal))
+                ? System.Text.Encoding.UTF8.GetBytes(handled.StandardOutput)
+                : [0x50, 0x4b, 0x03, 0x04];
             if (handled.Succeeded)
             {
                 if (bytes.Length > maximumBytes)
