@@ -9,7 +9,7 @@ using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.Core.Tests;
 
-public sealed class LocalApiTests
+public sealed partial class LocalApiTests
 {
     [Theory]
     [InlineData("http://0.0.0.0:8123/")]

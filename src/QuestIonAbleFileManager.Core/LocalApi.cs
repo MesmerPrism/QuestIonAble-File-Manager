@@ -149,7 +149,7 @@ public sealed record LocalApiOperationStatus(
     string? ErrorCode,
     string? Error);
 
-public sealed class LocalApiCommandRegistry : IDisposable
+public sealed partial class LocalApiCommandRegistry : IDisposable
 {
     private static readonly JsonSerializerOptions StrictJson = new()
     {
@@ -204,6 +204,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
         }
         catch
         {
+            foreach (var operation in _operations.Values) operation.ReleaseHandles();
             journal?.Dispose();
             _stager.Dispose();
             throw;
@@ -234,6 +235,14 @@ public sealed class LocalApiCommandRegistry : IDisposable
             throw Input("request_invalid", $"The preflight JSON is invalid: {exception.Message}");
         }
         request.Validate();
+        return await PreflightRetainedAsync(request, LocalApiContract.Version, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<LocalApiPreflightResult> PreflightRetainedAsync(
+        LocalApiPreflightRequest request,
+        string contractVersion,
+        CancellationToken cancellationToken)
+    {
         LocalApiStagedArtifact staged;
         long reservedBytes = 0;
         long untrackedStagedBytes;
@@ -286,7 +295,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
         try
         {
             var stagedRequest = request with { ApkPath = staged.Path };
-            var command = BuildCommand(stagedRequest);
+            var command = BuildCommandForVersion(stagedRequest, contractVersion);
             var artifact = await _client.CreateApkInspector()
                 .InspectAsync(staged.Path, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(artifact.Identity.SplitName))
@@ -315,11 +324,12 @@ public sealed class LocalApiCommandRegistry : IDisposable
             }
             var now = _timeProvider.GetUtcNow();
             var id = "api-" + Guid.NewGuid().ToString("N");
-            var digest = ComputeCommandDigest(command, artifact);
+            var digest = ComputeDigestForVersion(command, artifact, contractVersion);
             var retained = new RetainedOperation(
                 id, request.Command, digest, now.Add(lifetime), command, artifact, staged,
                 maximumResultBytes: _settings.Limits.MaximumResultBytes,
-                maximumOutputCharacters: _settings.Limits.MaximumOutputCharacters);
+                maximumOutputCharacters: _settings.Limits.MaximumOutputCharacters,
+                contractVersion: contractVersion);
             lock (_operationsGate)
             {
                 if (_operations.ContainsKey(id))
@@ -338,7 +348,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
                 _reservedStageBytes -= reservedBytes;
             }
             return new LocalApiPreflightResult(
-                LocalApiContract.Version,
+                contractVersion,
                 id,
                 request.Command,
                 digest,
@@ -367,12 +377,22 @@ public sealed class LocalApiCommandRegistry : IDisposable
     {
         var request = ParseBound<LocalApiExecuteRequest>(body);
         request.Validate();
+        return ExecuteRetainedAsync(request.OperationId, request.CommandDigest, LocalApiContract.Version, cancellationToken);
+    }
+
+    private Task<LocalApiOperationStatus> ExecuteRetainedAsync(
+        string operationId,
+        string commandDigest,
+        string contractVersion,
+        CancellationToken cancellationToken)
+    {
         RetainedOperation operation;
         lock (_operationsGate)
         {
-            if (!_operations.TryGetValue(request.OperationId, out operation!))
+            if (!_operations.TryGetValue(operationId, out operation!))
                 throw Input("operation_unknown", "The operation identifier is unknown.");
-            if (!FixedDigestEquals(operation.CommandDigest, request.CommandDigest))
+            RequireOperationVersion(operation, contractVersion);
+            if (!FixedDigestEquals(operation.CommandDigest, commandDigest))
                 throw Input("digest_mismatch", "The retained command digest does not match.");
             if (_operations.Values.Count(static item => item.IsRunning) >=
                 _settings.Limits.MaximumRunningOperations)
@@ -399,11 +419,17 @@ public sealed class LocalApiCommandRegistry : IDisposable
     {
         var request = ParseBound<LocalApiOperationRequest>(body);
         request.Validate();
+        return GetRetainedStatus(request.OperationId, LocalApiContract.Version);
+    }
+
+    private LocalApiOperationStatus GetRetainedStatus(string operationId, string contractVersion)
+    {
         RetainedOperation operation;
         lock (_operationsGate)
         {
-            if (!_operations.TryGetValue(request.OperationId, out operation!))
+            if (!_operations.TryGetValue(operationId, out operation!))
                 throw Input("operation_unknown", "The operation identifier is unknown.");
+            RequireOperationVersion(operation, contractVersion);
             operation.ExpireIfNeeded(_timeProvider.GetUtcNow());
             PersistLocked();
         }
@@ -414,11 +440,17 @@ public sealed class LocalApiCommandRegistry : IDisposable
     {
         var request = ParseBound<LocalApiOperationRequest>(body);
         request.Validate();
+        return CancelRetained(request.OperationId, LocalApiContract.Version);
+    }
+
+    private LocalApiOperationStatus CancelRetained(string operationId, string contractVersion)
+    {
         RetainedOperation operation;
         lock (_operationsGate)
         {
-            if (!_operations.TryGetValue(request.OperationId, out operation!))
+            if (!_operations.TryGetValue(operationId, out operation!))
                 throw Input("operation_unknown", "The operation identifier is unknown.");
+            RequireOperationVersion(operation, contractVersion);
             var requested = operation.RequestCancellation();
             PersistLocked();
             return requested;
@@ -474,6 +506,27 @@ public sealed class LocalApiCommandRegistry : IDisposable
         lock (_operationsGate)
         {
             var entries = _journal.Load();
+            // Validate all retained command policies before recovery may delete any
+            // orphan. This also prevents a rejected command from leaking a staged handle.
+            var commands = new Dictionary<string, OperatorCommand>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var entry in entries)
+                {
+                    var request = new LocalApiPreflightRequest(
+                        LocalApiContract.Version, entry.CommandName, entry.StagedPath,
+                        entry.Serial, entry.InstallOptions);
+                    var version = entry.OperationVersion ?? LocalApiContract.Version;
+                    var command = BuildCommandForVersion(request, version);
+                    if (!FixedDigestEquals(entry.CommandDigest, ComputeDigestForVersion(command, entry.Artifact, version)))
+                        throw Input("journal_damaged", "A retained command does not match its durable artifact binding.");
+                    commands.Add(entry.OperationId, command);
+                }
+            }
+            catch
+            {
+                throw Input("journal_damaged", "A retained command failed durable policy or binding validation.");
+            }
             _stager.CleanupUntrackedArtifacts(
                 entries.Select(static entry => Path.GetFullPath(entry.StagedPath))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase));
@@ -505,20 +558,8 @@ public sealed class LocalApiCommandRegistry : IDisposable
                         "journal_damaged",
                         "A retained staged artifact does not match its durable binding.");
                 }
-                var request = new LocalApiPreflightRequest(
-                    LocalApiContract.Version,
-                    entry.CommandName,
-                    entry.StagedPath,
-                    entry.Serial,
-                    entry.InstallOptions);
-                var command = BuildCommand(request);
-                if (!FixedDigestEquals(entry.CommandDigest, ComputeCommandDigest(command, inspected)))
-                {
-                    staged.Dispose();
-                    throw new LocalApiException(
-                        "journal_damaged",
-                        "A retained command does not match its durable artifact binding.");
-                }
+                var contractVersion = entry.OperationVersion ?? LocalApiContract.Version;
+                var command = commands[entry.OperationId];
                 var stage = entry.Stage;
                 var errorCode = entry.ErrorCode;
                 var error = entry.Error;
@@ -544,7 +585,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
                     command, entry.Artifact, staged, entry.Consumed, entry.Dispatched, stage,
                     terminalAt, entry.MutationEvidence, errorCode, error,
                     _settings.Limits.MaximumResultBytes, entry.ResultEvidence,
-                    _settings.Limits.MaximumOutputCharacters));
+                    _settings.Limits.MaximumOutputCharacters, contractVersion));
             }
             SweepLocked(_timeProvider.GetUtcNow());
             PersistLocked();
@@ -703,7 +744,8 @@ public sealed class LocalApiCommandRegistry : IDisposable
         string? error = null,
         int maximumResultBytes = 64 * 1024,
         JsonElement? resultEvidence = null,
-        int maximumOutputCharacters = 4 * 1024)
+        int maximumOutputCharacters = 4 * 1024,
+        string contractVersion = LocalApiContract.Version)
     {
         private static readonly JsonSerializerOptions ResultJson = new()
         {
@@ -720,6 +762,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
         private string? _errorCode = errorCode;
         private string? _error = error;
 
+        public string ContractVersion { get; } = contractVersion;
         public string Id { get; } = id;
         public string CommandName { get; } = commandName;
         public string CommandDigest { get; } = digest;
@@ -1003,7 +1046,7 @@ public sealed class LocalApiCommandRegistry : IDisposable
         {
             var publicPath = ResponseArtifactPath(Id);
             return new LocalApiOperationStatus(
-                LocalApiContract.Version,
+                ContractVersion,
                 Id,
                 CommandName,
                 CommandDigest,
@@ -1113,7 +1156,8 @@ public sealed class LocalApiCommandRegistry : IDisposable
                 return new LocalApiJournalEntry(
                     Id, CommandName, CommandDigest, ExpiresAt, staged.Path, Artifact,
                     Command.Serial, options, _stage, _consumed, _dispatched, _terminalAt,
-                    resultEvidence, _mutationEvidence, _errorCode, _error);
+                    resultEvidence, _mutationEvidence, _errorCode, _error,
+                    ContractVersion == LocalApiContract.Version ? null : ContractVersion);
             }
         }
     }
