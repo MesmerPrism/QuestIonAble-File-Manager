@@ -46,31 +46,29 @@ public sealed partial class AdbClient
         var packageName = artifact.Identity.PackageName;
         var currentUserUid = await ReadCurrentUserPackageUidAsync(
             serial, packageName, cancellationToken).ConfigureAwait(false);
-        var package = await RunForDeviceAsync(
-            serial, ["shell", "dumpsys", "package", packageName], InspectionTimeout, cancellationToken).ConfigureAwait(false);
-        var memory = await RunForDeviceAsync(
-            serial, ["shell", "dumpsys", "meminfo", packageName], InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        var package = await CaptureDiagnosticCommandAsync(
+            serial, ["shell", "dumpsys", "package", packageName], cancellationToken).ConfigureAwait(false);
+        var memory = await CaptureDiagnosticCommandAsync(
+            serial, ["shell", "dumpsys", "meminfo", packageName], cancellationToken).ConfigureAwait(false);
         var model = await ReadDiagnosticPropertyAsync(serial, "ro.product.model", cancellationToken).ConfigureAwait(false);
         var androidRelease = await ReadDiagnosticPropertyAsync(serial, "ro.build.version.release", cancellationToken).ConfigureAwait(false);
         var apiLevel = await ReadDiagnosticPropertyAsync(serial, "ro.build.version.sdk", cancellationToken).ConfigureAwait(false);
         var buildFingerprint = await ReadDiagnosticPropertyAsync(serial, "ro.build.fingerprint", cancellationToken).ConfigureAwait(false);
 
-        var uidLogcat = await RunForDeviceAsync(
+        var uidLogcat = await CaptureDiagnosticCommandAsync(
             serial,
             ["shell", "logcat", "-d", "-v", "threadtime", "-t",
              DiagnosticLogLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
              $"--uid={currentUserUid}"],
-            InspectionTimeout,
             cancellationToken).ConfigureAwait(false);
-        var pidLogcat = new List<(int Pid, CommandResult Result)>();
+        var pidLogcat = new List<(int Pid, TruncatingCommandResult Result)>();
         foreach (var pid in runtime.ProcessIds.Distinct().Order().Take(MaximumDiagnosticProcessCount))
         {
-            var result = await RunForDeviceAsync(
+            var result = await CaptureDiagnosticCommandAsync(
                 serial,
                 ["shell", "logcat", "-d", "-v", "threadtime", "-t",
                  DiagnosticLogLineCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
                  $"--pid={pid}"],
-                InspectionTimeout,
                 cancellationToken).ConfigureAwait(false);
             pidLogcat.Add((pid, result));
         }
@@ -83,10 +81,10 @@ public sealed partial class AdbClient
 
         var capturedAt = DateTimeOffset.UtcNow;
         var device = new ApkDiagnosticDeviceFacts(
-            BoundDiagnosticValue(model.StandardOutput),
-            BoundDiagnosticValue(androidRelease.StandardOutput),
-            BoundDiagnosticValue(apiLevel.StandardOutput),
-            BoundDiagnosticValue(buildFingerprint.StandardOutput));
+            BoundDiagnosticValue(model.CommandResult.StandardOutput, out var modelValueTruncated),
+            BoundDiagnosticValue(androidRelease.CommandResult.StandardOutput, out var releaseValueTruncated),
+            BoundDiagnosticValue(apiLevel.CommandResult.StandardOutput, out var apiValueTruncated),
+            BoundDiagnosticValue(buildFingerprint.CommandResult.StandardOutput, out var fingerprintValueTruncated));
         var stagingDirectory = Path.Combine(
             Path.GetDirectoryName(fullOutputDirectory)!,
             $".{Path.GetFileName(fullOutputDirectory)}.qfm-diagnostics-{Guid.NewGuid():N}");
@@ -106,16 +104,18 @@ public sealed partial class AdbClient
                         facts = device,
                         commandExitCodes = new
                         {
-                            model = model.ExitCode,
-                            androidRelease = androidRelease.ExitCode,
-                            apiLevel = apiLevel.ExitCode,
-                            buildFingerprint = buildFingerprint.ExitCode
+                            model = model.CommandResult.ExitCode,
+                            androidRelease = androidRelease.CommandResult.ExitCode,
+                            apiLevel = apiLevel.CommandResult.ExitCode,
+                            buildFingerprint = buildFingerprint.CommandResult.ExitCode
                         }
                     },
                     cancellationToken,
                     FirstFailure(model, androidRelease, apiLevel, buildFingerprint),
                     "fixed device properties",
-                    "four fixed serial-scoped getprop readbacks").ConfigureAwait(false),
+                    "four fixed serial-scoped getprop readbacks",
+                    truncated: model.Truncated || androidRelease.Truncated || apiLevel.Truncated || buildFingerprint.Truncated ||
+                        modelValueTruncated || releaseValueTruncated || apiValueTruncated || fingerprintValueTruncated).ConfigureAwait(false),
                 await WriteDiagnosticCommandAsync(
                     stagingDirectory, "package", "package.txt", package,
                     "exact inspected package",
@@ -248,12 +248,28 @@ public sealed partial class AdbClient
         return uid;
     }
 
-    private async Task<CommandResult> ReadDiagnosticPropertyAsync(
+    private async Task<TruncatingCommandResult> ReadDiagnosticPropertyAsync(
         string serial,
         string property,
         CancellationToken cancellationToken) =>
-        await RunForDeviceAsync(serial, ["shell", "getprop", property], InspectionTimeout, cancellationToken)
+        await CaptureDiagnosticCommandAsync(serial, ["shell", "getprop", property], cancellationToken)
             .ConfigureAwait(false);
+
+    private async Task<TruncatingCommandResult> CaptureDiagnosticCommandAsync(
+        string serial, IReadOnlyList<string> arguments, CancellationToken cancellationToken)
+    {
+        // This bounds these optional dump/log/property captures, not mandatory
+        // identity, inspector or runtime reads elsewhere in the diagnostic call
+        // graph. A retained owner must close those paths separately as well.
+        if (_runner is ITruncatingCommandRunner collector)
+            return await collector.RunTruncatingAsync(AdbPath, ["-s", serial, .. arguments],
+                MaximumDiagnosticTextFileBytes, MaximumDiagnosticTextFileBytes,
+                InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        // Keep compatibility with injected legacy runners; their upstream
+        // allocation is not bounded by this post-collection evidence limit.
+        var result = await RunForDeviceAsync(serial, arguments, InspectionTimeout, cancellationToken).ConfigureAwait(false);
+        return TruncatingCommandResult.FromLegacy(result, MaximumDiagnosticTextFileBytes, MaximumDiagnosticTextFileBytes);
+    }
 
     private static string ValidateDiagnosticOutputDirectory(string outputDirectory)
     {
@@ -275,17 +291,18 @@ public sealed partial class AdbClient
         string directory,
         string kind,
         string relativePath,
-        CommandResult result,
+        TruncatingCommandResult capture,
         string observationSource,
         string commandSemantic,
         CancellationToken cancellationToken)
     {
+        var result = capture.CommandResult;
         var content =
             $"exit_code={result.ExitCode}\n" +
             $"duration_milliseconds={(long)result.Duration.TotalMilliseconds}\n" +
             "[stdout]\n" + result.StandardOutput.ReplaceLineEndings("\n") +
             "\n[stderr]\n" + result.StandardError.ReplaceLineEndings("\n");
-        var (bytes, truncated) = BoundDiagnosticText(content);
+        var (bytes, truncated) = BoundDiagnosticText(content, capture.Truncated);
         return await WriteDiagnosticBytesAsync(
             directory, kind, relativePath, bytes, cancellationToken, result.ExitCode,
             observationSource, commandSemantic, truncated).ConfigureAwait(false);
@@ -299,14 +316,15 @@ public sealed partial class AdbClient
         CancellationToken cancellationToken,
         int? commandExitCode = null,
         string? observationSource = null,
-        string? commandSemantic = null)
+        string? commandSemantic = null,
+        bool truncated = false)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, DiagnosticJson);
         if (bytes.LongLength > MaximumDiagnosticTextFileBytes)
             throw new InvalidDataException("A fixed diagnostic JSON file exceeded its byte limit.");
         return await WriteDiagnosticBytesAsync(
             directory, kind, relativePath, bytes, cancellationToken, commandExitCode,
-            observationSource, commandSemantic, truncated: false).ConfigureAwait(false);
+            observationSource, commandSemantic, truncated).ConfigureAwait(false);
     }
 
     private static async Task<ApkDiagnosticBundleFile> WriteDiagnosticBytesAsync(
@@ -331,10 +349,10 @@ public sealed partial class AdbClient
         };
     }
 
-    private static (byte[] Bytes, bool Truncated) BoundDiagnosticText(string content)
+    private static (byte[] Bytes, bool Truncated) BoundDiagnosticText(string content, bool sourceTruncated = false)
     {
         var bytes = DiagnosticUtf8.GetBytes(content);
-        if (bytes.Length <= MaximumDiagnosticTextFileBytes)
+        if (bytes.Length <= MaximumDiagnosticTextFileBytes && !sourceTruncated)
             return (bytes, false);
 
         const string marker = "\n[diagnostic capture truncated at fixed byte limit]\n";
@@ -346,11 +364,12 @@ public sealed partial class AdbClient
         return (DiagnosticUtf8.GetBytes(content[..prefixLength] + marker), true);
     }
 
-    private static string BoundDiagnosticValue(string value)
+    private static string BoundDiagnosticValue(string value, out bool truncated)
     {
         var trimmed = value.Trim();
         var maximumBytes = MaximumDiagnosticTextFileBytes / 16;
-        if (DiagnosticUtf8.GetByteCount(trimmed) <= maximumBytes)
+        truncated = DiagnosticUtf8.GetByteCount(trimmed) > maximumBytes;
+        if (!truncated)
             return trimmed;
 
         var prefixLimit = maximumBytes - 32;
@@ -360,6 +379,6 @@ public sealed partial class AdbClient
         return trimmed[..length] + " [truncated]";
     }
 
-    private static int? FirstFailure(params CommandResult[] results) =>
-        results.FirstOrDefault(static result => !result.Succeeded)?.ExitCode;
+    private static int? FirstFailure(params TruncatingCommandResult[] results) =>
+        results.FirstOrDefault(static result => !result.CommandResult.Succeeded)?.CommandResult.ExitCode;
 }

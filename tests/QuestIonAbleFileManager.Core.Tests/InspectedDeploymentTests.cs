@@ -1259,6 +1259,46 @@ public sealed class InspectedDeploymentTests
         }
     }
 
+    [Theory]
+    [InlineData("logcat", 0)]
+    [InlineData("logcat", 7)]
+    [InlineData("getprop", 0)]
+    [InlineData("property-render", 0)]
+    [InlineData("stderr", 7)]
+    public async Task Diagnose_PropagatesCollectorTruncationEvenWhenRetainedPrefixFits(string capture, int exitCode)
+    {
+        var apk = await CreateApkAsync();
+        var parent = Path.Combine(Path.GetTempPath(), $"qfm-diagnostic-collector-{Guid.NewGuid():N}");
+        var output = Path.Combine(parent, "capture"); Directory.CreateDirectory(parent);
+        var source = CreateDeploymentRunner(apk, pidofOutput: "",
+            uidLogcatResult: new CommandResult("", [], exitCode, "short retained prefix", "", TimeSpan.Zero));
+        var runner = new TruncatingDiagnosticRunner(source, capture);
+        try
+        {
+            var result = await new AdbClient("adb", runner, new("aapt2", "apksigner"))
+                .CaptureInspectedApkDiagnosticsAsync("QUEST123", apk, output);
+            var captureKind = capture is "getprop" or "property-render" ? "device" : "logcat_uid";
+            var file = Assert.Single(result.Files, file => file.CaptureKind == captureKind);
+            Assert.True(file.Truncated);
+            Assert.Equal(exitCode == 0 ? 0 : 1, result.FailedCaptureCount);
+            if (captureKind == "logcat_uid")
+            {
+                Assert.Equal(exitCode, file.CommandExitCode);
+                Assert.Contains("[diagnostic capture truncated at fixed byte limit]", await File.ReadAllTextAsync(Path.Combine(output, file.RelativePath)), StringComparison.Ordinal);
+            }
+            Assert.Equal(7, runner.Captures.Count);
+            Assert.All(runner.Captures, call =>
+            {
+                Assert.Equal(256 * 1024, call.OutputBytes); Assert.Equal(256 * 1024, call.ErrorBytes);
+                Assert.Equal(["-s", "QUEST123"], call.Arguments.Take(2));
+            });
+            using var manifest = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(output, "diagnostic-manifest.json")));
+            var evidence = Assert.Single(manifest.RootElement.GetProperty("files").EnumerateArray(), entry => entry.GetProperty("captureKind").GetString() == file.CaptureKind);
+            Assert.True(evidence.GetProperty("truncated").GetBoolean());
+        }
+        finally { File.Delete(apk); Directory.Delete(parent, recursive: true); }
+    }
+
     [Fact]
     public async Task Diagnose_PublishesPartialBundleForNonzeroUidLogcatWithoutReadinessInference()
     {
@@ -2842,6 +2882,26 @@ public sealed class InspectedDeploymentTests
 
     private static CommandResult SilentFailure() =>
         new("", [], 1, "", "", TimeSpan.Zero);
+
+    private sealed class TruncatingDiagnosticRunner(FakeRunner source, string truncatedCapture) : IStreamingCommandRunner, ITruncatingCommandRunner
+    {
+        public List<(IReadOnlyList<string> Arguments, int OutputBytes, int ErrorBytes)> Captures { get; } = [];
+        public Task<CommandResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken token = default) =>
+            source.RunAsync(fileName, arguments, timeout, token);
+        public Task<StreamingCommandResult> RunToStreamAsync(string fileName, IReadOnlyList<string> arguments, Stream destination, long maximumBytes, TimeSpan timeout, CancellationToken token = default) =>
+            source.RunToStreamAsync(fileName, arguments, destination, maximumBytes, timeout, token);
+        public async Task<TruncatingCommandResult> RunTruncatingAsync(string fileName, IReadOnlyList<string> arguments, int maximumStandardOutputBytes, int maximumStandardErrorBytes, TimeSpan timeout, CancellationToken token = default)
+        {
+            Captures.Add((arguments.ToArray(), maximumStandardOutputBytes, maximumStandardErrorBytes));
+            var result = await source.RunAsync(fileName, arguments, timeout, token);
+            if (truncatedCapture == "property-render" && arguments.Contains("getprop"))
+                result = result with { StandardOutput = new string('p', 20 * 1024) };
+            var bounded = TruncatingCommandResult.FromLegacy(result, maximumStandardOutputBytes, maximumStandardErrorBytes);
+            if (truncatedCapture == "stderr" && arguments.Contains("logcat"))
+                return bounded with { StandardErrorTruncated = true };
+            return arguments.Contains(truncatedCapture) ? bounded with { StandardOutputTruncated = true } : bounded;
+        }
+    }
 
     private sealed class FakeRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler,
