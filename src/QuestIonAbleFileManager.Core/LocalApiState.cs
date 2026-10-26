@@ -451,11 +451,13 @@ internal sealed class LocalApiArtifactStager : IDisposable
                 var actualBytes = materialized.Sum(path => measuredLengths[path]);
                 bytes = Math.Min(_limits.MaximumStagedBytes, bytes + Math.Max(0, reservation.ReservedBytes - actualBytes));
                 files += Math.Max(0, reservation.ReservedFiles - materialized.Length);
-                if (!paths.Any(path => string.Equals(Path.GetFileName(path), reservation.InputLeaf, StringComparison.Ordinal)) &&
-                    reservation.MissingInputReservationBytes > 0)
+                if (reservation.MissingInputReservationBytes > 0 &&
+                    !_diagnosticCreationDebts.Any(debt => debt.Resource.Leaf == reservation.InputLeaf))
                 {
-                    bytes = Math.Min(_limits.MaximumStagedBytes, bytes + reservation.MissingInputReservationBytes);
-                    files++;
+                    var inputPath = paths.FirstOrDefault(path => string.Equals(Path.GetFileName(path), reservation.InputLeaf, StringComparison.Ordinal));
+                    var observed = inputPath is null ? 0 : measuredLengths[inputPath];
+                    bytes = Math.Min(_limits.MaximumStagedBytes, bytes + Math.Max(0, reservation.MissingInputReservationBytes - observed));
+                    if (inputPath is null) files++;
                 }
             }
             foreach (var debt in _diagnosticCreationDebts)
@@ -466,12 +468,46 @@ internal sealed class LocalApiArtifactStager : IDisposable
             }
             foreach (var pending in _pendingDiagnosticInputs)
             {
+                if (_diagnosticOutputs.Any(reservation => reservation.InputLeaf == Path.GetFileName(pending.Key)) ||
+                    _diagnosticCreationDebts.Any(debt => debt.Resource.Leaf == Path.GetFileName(pending.Key))) continue;
                 var materialized = measuredLengths.TryGetValue(pending.Key, out var observed);
                 bytes = Math.Min(_limits.MaximumStagedBytes, bytes + Math.Max(0, pending.Value - (materialized ? observed : 0)));
                 if (!materialized) files++;
             }
         }
         return new LocalApiStageInventory(files, bytes);
+    }
+
+    // A live preparation can fail after its input plan was durably recorded but
+    // before ReserveDiagnosticOutput. Attach that SAME authenticated plan as a
+    // faulted cleanup/accounting reservation; no writer or pathname adoption.
+    internal async Task<LocalApiDiagnosticOutputReservation> RetainDiagnosticRecoveryAsync(
+        LocalApiDiagnosticOutputSnapshot snapshot, Func<LocalApiDiagnosticOutputSnapshot, CancellationToken, Task> persist)
+    {
+        LocalApiDiagnosticOutputReservation.ValidateRecovery(snapshot);
+        await _stageGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+        LocalApiDiagnosticOutputReservation? reservation = null;
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            lock (_diagnosticCapacityGate)
+                if (_diagnosticOutputs.Any(existing => existing.Intent.OutputId == snapshot.Intent.OutputId ||
+                    existing.Leaves.Append(existing.InputLeaf).Any(leaf => snapshot.Resources.Any(other => other.Leaf == leaf))))
+                    throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_recovery_order_invalid");
+            reservation = LocalApiDiagnosticOutputReservation.RestoreForCleanup(_stageDirectory, snapshot, persist,
+                _diagnosticLifetime.AcquireRead, _diagnosticLifetime.AcquireOperation,
+                () => LocalApiDiagnosticFileSafety.ValidateGuard(_diagnosticRootGuard!, _stageDirectory));
+            bool rawInputPinned;
+            lock (_diagnosticCapacityGate) rawInputPinned = _diagnosticCreationDebts.Any(debt => debt.Resource.Leaf == reservation.InputLeaf);
+            if (!rawInputPinned) reservation.PinRecoveryWitness();
+            _diagnosticRootGuard ??= LocalApiDiagnosticFileSafety.OpenGuard(_stageDirectory);
+            LocalApiDiagnosticFileSafety.ValidateGuard(_diagnosticRootGuard, _stageDirectory);
+            lock (_diagnosticCapacityGate) _diagnosticOutputs.Add(reservation);
+            _diagnosticInventoryEnabled = true;
+            return reservation;
+        }
+        catch { reservation?.Dispose(); throw; }
+        finally { _stageGate.Release(); }
     }
 
     // Registry must authenticate and validate ALL versions/policies first, then

@@ -125,7 +125,8 @@ public enum LocalApiOperationStage
     Cancelled,
     Expired,
     OutcomeUnknownRecoveryRequired,
-    CleanupDebt
+    CleanupDebt,
+    Preparing
 }
 
 public sealed record LocalApiPreflightResult(
@@ -248,7 +249,9 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
         long untrackedStagedBytes;
         lock (_operationsGate)
         {
+            EnsureRegistryOpenLocked();
             SweepLocked(_timeProvider.GetUtcNow());
+            _journal.EnsureV3Capacity(_operations.Values.Select(item => item.ToJournal()).ToArray(), _reservedV3Rows);
             var inventory = _stager.GetInventory();
             if (CapacityExhausted(
                     _operations.Count,
@@ -257,7 +260,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 throw Input("operation_capacity", "The retained-operation capacity is exhausted.");
             if (CapacityExhausted(
                     inventory.FileCount,
-                    _reservedPreflights,
+                    _reservedPreflights + _reservedDiagnosticFiles,
                     _settings.Limits.MaximumStagedFiles))
                 throw Input("staged_file_capacity", "The staged-file capacity is exhausted.");
             var retainedBytes = _operations.Values.Sum(static operation => operation.Artifact.SizeBytes);
@@ -389,6 +392,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
         RetainedOperation operation;
         lock (_operationsGate)
         {
+            EnsureRegistryOpenLocked();
             if (!_operations.TryGetValue(operationId, out operation!))
                 throw Input("operation_unknown", "The operation identifier is unknown.");
             RequireOperationVersion(operation, contractVersion);
@@ -503,8 +507,8 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
 
     private void LoadJournal()
     {
-        lock (_operationsGate)
-        {
+            // Constructor-only: no public admission exists yet. Recovery may wait
+            // for native reservation IO, so do not hold the registry monitor.
             var entries = _journal.Load();
             // Validate all retained command policies before recovery may delete any
             // orphan. This also prevents a rejected command from leaking a staged handle.
@@ -513,6 +517,14 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
             {
                 foreach (var entry in entries)
                 {
+                    if (!Enum.IsDefined(entry.Stage)) throw Input("journal_damaged", "The retained operation stage is invalid.");
+                    if (entry.OperationVersion == LocalApiV3Contract.Version)
+                    {
+                        commands.Add(entry.OperationId, ValidateV3JournalEntry(entry));
+                        continue;
+                    }
+                    if (entry.Diagnostic is not null || entry.Stage == LocalApiOperationStage.Preparing)
+                        throw Input("journal_damaged", "Diagnostic metadata requires v3.");
                     var request = new LocalApiPreflightRequest(
                         LocalApiContract.Version, entry.CommandName, entry.StagedPath,
                         entry.Serial, entry.InstallOptions);
@@ -527,11 +539,15 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
             {
                 throw Input("journal_damaged", "A retained command failed durable policy or binding validation.");
             }
+            ValidateResourceNamespaces(entries);
+            RestoreV3Entries(entries, commands);
+            _journal.CleanupValidatedTemps();
             _stager.CleanupUntrackedArtifacts(
                 entries.Select(static entry => Path.GetFullPath(entry.StagedPath))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase));
             foreach (var entry in entries)
             {
+                if (entry.OperationVersion == LocalApiV3Contract.Version) continue;
                 if (entry.Stage == LocalApiOperationStage.CleanupDebt &&
                     _stager.TryCleanupDebt(entry.StagedPath))
                 {
@@ -589,16 +605,22 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
             }
             SweepLocked(_timeProvider.GetUtcNow());
             PersistLocked();
-        }
     }
 
-    private void PersistLocked() =>
-        _journal.Save(_operations.Values.Select(static operation => operation.ToJournal()).ToArray());
+    private void PersistLocked()
+    {
+        var entries = _operations.Values.Select(static operation => operation.ToJournal()).ToArray();
+        _journal.EnsureV3Capacity(entries, _reservedV3Rows);
+        _journal.Save(entries);
+    }
 
     public void Dispose()
     {
+        DrainV3Operations();
         lock (_operationsGate)
         {
+            if (_operations.Values.Any(item => item.Diagnostic?.ReadLeases > 0))
+                throw Input("diagnostic_reads_active", "Diagnostic output reads are still active.");
             foreach (var operation in _operations.Values) operation.ReleaseHandles();
             _journal.Dispose();
             _stager.Dispose();
@@ -608,10 +630,11 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
     private void SweepLocked(DateTimeOffset now)
     {
         foreach (var item in _operations.Values)
-            item.ExpireIfNeeded(now);
+            if (item.Diagnostic is { } diagnostic) ExpireV3Locked(diagnostic, now);
+            else item.ExpireIfNeeded(now);
         var cutoff = now - _settings.Limits.EffectiveTerminalRetention;
         var candidates = _operations.Values
-            .Where(item => item.IsSweepable(cutoff) || item.IsCleanupDebt)
+            .Where(item => item.Diagnostic is null && (item.IsSweepable(cutoff) || item.IsCleanupDebt))
             .ToArray();
         if (candidates.Length == 0) return;
         foreach (var item in candidates) item.MarkCleanupDebt(now);
@@ -734,7 +757,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
         DateTimeOffset expiresAt,
         OperatorCommand command,
         ApkArtifactInspection artifact,
-        LocalApiStagedArtifact staged,
+        LocalApiStagedArtifact? staged,
         bool consumed = false,
         bool dispatched = false,
         LocalApiOperationStage stage = LocalApiOperationStage.Preflighted,
@@ -745,7 +768,8 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
         int maximumResultBytes = 64 * 1024,
         JsonElement? resultEvidence = null,
         int maximumOutputCharacters = 4 * 1024,
-        string contractVersion = LocalApiContract.Version)
+        string contractVersion = LocalApiContract.Version,
+        DiagnosticOperation? diagnostic = null)
     {
         private static readonly JsonSerializerOptions ResultJson = new()
         {
@@ -768,11 +792,12 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
         public string CommandDigest { get; } = digest;
         public DateTimeOffset ExpiresAt { get; } = expiresAt;
         public OperatorCommand Command { get; } = command;
-        public ApkArtifactInspection Artifact { get; } = artifact;
+        public DiagnosticOperation? Diagnostic { get; } = diagnostic;
+        public ApkArtifactInspection Artifact => Diagnostic?.Row.Artifact ?? artifact;
         public CancellationTokenSource Cancellation { get; } = new();
         public bool IsRunning
         {
-            get { lock (_gate) return _stage is LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested; }
+            get { lock (_gate) return Diagnostic is { } d ? d.Active : _stage is LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested; }
         }
         public bool IsCleanupDebt
         {
@@ -852,7 +877,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 }
                 _result = SanitizeResultForResponse(
                     boundedResult,
-                    staged.Path,
+                    staged!.Path,
                     ResponseArtifactPath(Id));
                 _mutationEvidence = result.MutationReceipt;
                 _stage = result.MutationReceipt is { Stage: not OperatorMutationStage.Confirmed }
@@ -871,7 +896,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 _error = BoundError(
                     SanitizePrivateText(
                         exception.Message,
-                        staged.Path,
+                        staged!.Path,
                         ResponseArtifactPath(Id)),
                     maximumOutputCharacters);
                 _stage = _dispatched && OperatorMutations.RequiresHeadsetStateChange(Command)
@@ -966,7 +991,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 }
                 return false;
             }
-            if (staged.TryDelete(out var failure))
+            if (staged!.TryDelete(out var failure))
             {
                 Cancellation.Dispose();
                 return true;
@@ -977,7 +1002,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 _error = BoundError(
                     SanitizePrivateText(
                         failure ?? "Owned-handle cleanup failed.",
-                        staged.Path,
+                        staged!.Path,
                         ResponseArtifactPath(Id)),
                     maximumOutputCharacters);
             }
@@ -986,13 +1011,14 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
 
         public void Dispose()
         {
-            staged.TryDelete(out _);
+            staged!.TryDelete(out _);
             Cancellation.Dispose();
         }
 
         public void ReleaseHandles()
         {
-            staged.Dispose();
+            if (Diagnostic is { } d) { d.Staged?.Dispose(); d.Reservation?.Dispose(); d.Cancellation.Dispose(); }
+            staged?.Dispose();
             Cancellation.Dispose();
         }
 
@@ -1052,12 +1078,12 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                 CommandDigest,
                 ExpiresAt,
                 _stage,
-                SanitizeResultForResponse(_result, staged.Path, publicPath),
+                SanitizeResultForResponse(_result, staged!.Path, publicPath),
                 _mutationEvidence,
                 _errorCode,
                 _error is null
                     ? null
-                    : SanitizePrivateText(_error, staged.Path, publicPath));
+                    : SanitizePrivateText(_error, staged!.Path, publicPath));
         }
 
         private static object? SanitizeResultForResponse(
@@ -1143,6 +1169,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
 
         public LocalApiJournalEntry ToJournal()
         {
+            if (Diagnostic is { } d) return d.Row;
             lock (_gate)
             {
                 var options = Command.InstallOptions is { } core
@@ -1154,7 +1181,7 @@ public sealed partial class LocalApiCommandRegistry : IDisposable
                     ? null
                     : JsonSerializer.SerializeToElement(_result, ResultJson);
                 return new LocalApiJournalEntry(
-                    Id, CommandName, CommandDigest, ExpiresAt, staged.Path, Artifact,
+                    Id, CommandName, CommandDigest, ExpiresAt, staged!.Path, Artifact,
                     Command.Serial, options, _stage, _consumed, _dispatched, _terminalAt,
                     resultEvidence, _mutationEvidence, _errorCode, _error,
                     ContractVersion == LocalApiContract.Version ? null : ContractVersion);
