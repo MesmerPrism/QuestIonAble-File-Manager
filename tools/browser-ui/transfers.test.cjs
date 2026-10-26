@@ -38,7 +38,9 @@ async function fixture(t,{capture,remove,saveReject=false,width=1280}={}){
       window.ctx=${JSON.stringify(state)};window.ctx.actions=new Set(window.ctx.actions);window.saved=[];
       if(!sessionStorage.getItem('qfm-browser-retained-v1'))sessionStorage.setItem('qfm-browser-retained-v1','original-unknown-sentinel');
       window.transfers=createTransferView({getContext:()=>window.ctx,setBusy:value=>{window.ctx.busy=value;window.transfers?.update();},
-        showResult:(value,summary)=>window.latest={value,summary},saveArtifact:receipt=>{window.saveBeforeOtherListener=!window.otherSaveListenerRan;window.saved.push(receipt);return ${saveReject?'Promise.reject(new Error("fixture save cancelled"))':'Promise.resolve()'};},
+        showResult:(value,summary)=>window.latest={value,summary},saveArtifact:receipt=>{window.saveBeforeOtherListener=!window.otherSaveListenerRan;window.saved.push(receipt);
+          if(window.saveErrorOverride)return Promise.reject(Object.assign(new Error(window.saveErrorOverride.message),window.saveErrorOverride));
+          return ${saveReject?'Promise.reject(new Error("fixture save cancelled"))':"Promise.resolve(Object.hasOwn(window,'saveResultOverride')?window.saveResultOverride:{state:'saved',mode:'streaming',artifact:receipt})"};},
         api:async(path,options)=>{const response=await fetch(path,{...options,cache:'no-store'});if(!response.ok)throw new Error((await response.json()).error);return response.json();}});
       window.fixtureReady=true;`});
     const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
@@ -178,4 +180,36 @@ test('mobile output and source labels stay literal without horizontal overflow',
   assert.equal(await f.page.locator('#transfer-output-source').textContent(),remote);assert.equal(await f.page.locator('#transfer-output-source img').count(),0);
   assert.equal(await f.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   if(process.env.QFM_BROWSER_UI_EVIDENCE){await fs.mkdir(process.env.QFM_BROWSER_UI_EVIDENCE,{recursive:true});await f.page.locator('#transfer-view').screenshot({path:path.join(process.env.QFM_BROWSER_UI_EVIDENCE,'transfer-mobile.png')});}
+});
+
+test('Save result distinguishes verified streaming close from buffered browser handoff',async t=>{
+  const f=await fixture(t);await f.pull();await f.page.locator('#transfer-save').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  assert.match(await f.page.locator('#transfer-state').textContent(),/Streaming save verified.*close acknowledged/);
+  await f.page.evaluate(({artifactId,sha})=>{window.saveResultOverride={state:'downloadStarted',mode:'buffered',artifact:{id:artifactId,fileName:'report.txt',sizeBytes:3,sha256:sha}};},{artifactId,sha});
+  await f.page.locator('#transfer-save').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  const message=await f.page.locator('#transfer-state').textContent();assert.match(message,/Browser download started/);assert.match(message,/Final disk save is not confirmed/);
+  assert.doesNotMatch(message,/close acknowledged/);assert.equal(f.calls.length,1);
+});
+
+for(const kind of ['undefined','mismatched receipt','wrong state/mode'])test(`Save result ${kind} cannot claim a successful save`,async t=>{
+  const f=await fixture(t);await f.pull();
+  await f.page.evaluate(({kind,artifactId,sha})=>{window.saveResultOverride=kind==='undefined'?undefined:{state:'saved',mode:kind==='wrong state/mode'?'buffered':'streaming',
+    artifact:{id:kind==='mismatched receipt'?'c'.repeat(32):artifactId,fileName:'report.txt',sizeBytes:3,sha256:sha}};},{kind,artifactId,sha});
+  await f.page.locator('#transfer-save').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  const message=await f.page.locator('#transfer-state').textContent();assert.match(message,/outcome unknown/i);assert.match(message,/Check the selected file.*before another Save/);
+  assert.doesNotMatch(message,/Save finished|close acknowledged|Browser download started/);assert.equal(f.calls.length,1);
+});
+
+test('Save failure surfaces the supported alternative without automatic recapture',async t=>{
+  const f=await fixture(t);await f.pull();await f.page.evaluate(()=>{window.saveErrorOverride={message:'Streaming Save is required.',alternative:'Use a supporting browser or the qualified CLI.'};});
+  await f.page.locator('#transfer-save').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  assert.match(await f.page.locator('#transfer-state').textContent(),/Use a supporting browser or the qualified CLI/);assert.equal(f.calls.length,1);
+});
+
+for(const unknown of [false,true])test(`Save cleanup pending${unknown?' with uncertain close':''} requires inspection before another save`,async t=>{
+  const f=await fixture(t);await f.pull();await f.page.evaluate(unknown=>{window.saveErrorOverride={message:'The native save did not settle.',saveOutcomeUnknown:unknown,cleanupPending:true};},unknown);
+  await f.page.locator('#transfer-save').click();await f.page.waitForFunction(()=>!window.ctx.busy);
+  const message=await f.page.locator('#transfer-state').textContent();assert.match(message,/cleanup is still pending/);assert.match(message,/selected file before another Save/);
+  if(unknown)assert.match(message,/Save outcome unknown/);
+  assert.doesNotMatch(message,/retry/i);assert.equal(f.calls.length,1);assert.equal(await f.page.evaluate(()=>window.saved.length),1);
 });

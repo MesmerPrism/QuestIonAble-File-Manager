@@ -106,8 +106,21 @@ export function createTransferView({api, getContext, setBusy, showResult, saveAr
     let operation;
     try { operation = saveArtifact({...captured.artifact}); } // Direct click call preserves the browser picker gesture.
     catch (error) { operation = Promise.reject(error); }
-    Promise.resolve(operation).then(() => { message = 'Save finished. Captured bytes remain staged until explicitly removed.'; })
-      .catch(error => { message = `Save not completed: ${error.message}. Captured bytes remain staged; retry only explicitly.`; })
+    Promise.resolve(operation).then(value => {
+      const matches = value?.artifact && ['id', 'fileName', 'sizeBytes', 'sha256'].every(name => value.artifact[name] === captured.artifact[name]);
+      if (!matches || !((value.state === 'saved' && value.mode === 'streaming') || (value.state === 'downloadStarted' && value.mode === 'buffered')))
+        throw Object.assign(new Error('The save helper did not return a matching verified outcome.'), {saveOutcomeUnknown:true});
+      message = value.state === 'saved'
+        ? 'Streaming save verified and destination close acknowledged. Captured bytes remain staged until explicitly removed.'
+        : 'Browser download started after byte verification. Final disk save is not confirmed; check browser downloads. Captured bytes remain staged.';
+    })
+      .catch(error => {
+        const detail = String(error?.message || 'No verified save result was returned').replace(/[.!?]$/, '');
+        message = `${error?.saveOutcomeUnknown === true ? 'Save outcome unknown' : 'Save not completed'}: ${detail}. Captured bytes remain staged.`;
+        if (error?.cleanupPending === true) message += ' Browser cleanup is still pending; wait for cleanup and check the selected file before another Save.';
+        else if (error?.saveOutcomeUnknown === true) message += ' Check the selected file and browser downloads before another Save.';
+        if (typeof error?.alternative === 'string' && error.alternative.length <= 2048) message += ` ${error.alternative}`;
+      })
       .finally(() => { saving = false; setBusy(false); update(); });
   }
   async function remove() {
