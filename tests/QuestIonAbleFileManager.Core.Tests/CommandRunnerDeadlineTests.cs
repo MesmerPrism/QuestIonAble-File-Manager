@@ -18,6 +18,7 @@ public sealed class CommandRunnerDeadlineTests
     [InlineData("ordinary")]
     [InlineData("stream-in")]
     [InlineData("stream-out")]
+    [InlineData("truncating")]
     public async Task Deadline_CoversFinalPipeDrainAfterParentExit(string mode)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -39,6 +40,7 @@ public sealed class CommandRunnerDeadlineTests
     [InlineData("ordinary")]
     [InlineData("stream-in")]
     [InlineData("stream-out")]
+    [InlineData("truncating")]
     public async Task Deadline_PreservesExplicitCallerCancellationDuringDrain(string mode)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -58,6 +60,7 @@ public sealed class CommandRunnerDeadlineTests
     [InlineData("ordinary")]
     [InlineData("stream-in")]
     [InlineData("stream-out")]
+    [InlineData("truncating")]
     public async Task Deadline_NormalCompletionRetainsOutputAndTransferHash(string mode)
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -66,9 +69,11 @@ public sealed class CommandRunnerDeadlineTests
         // can close stdin while the runner is still flushing the test input.
         var input = mode == "stream-in" ? "[Console]::In.ReadToEnd() | Out-Null; " : string.Empty;
         var arguments = Arguments(input + "[Console]::Out.Write('ok'); [Console]::Error.Write('note')");
-        if (mode == "ordinary")
+        if (mode is "ordinary" or "truncating")
         {
-            var result = await runner.RunAsync(PowerShell, arguments, TimeSpan.FromSeconds(10));
+            var result = mode == "ordinary"
+                ? await runner.RunAsync(PowerShell, arguments, TimeSpan.FromSeconds(10))
+                : (await ((ITruncatingCommandRunner)runner).RunTruncatingAsync(PowerShell, arguments, 32, 32, TimeSpan.FromSeconds(10))).CommandResult;
             Assert.Equal(0, result.ExitCode);
             Assert.Equal("ok", result.StandardOutput);
             Assert.Equal("note", result.StandardError);
@@ -96,6 +101,7 @@ public sealed class CommandRunnerDeadlineTests
         var runner = new CommandRunner();
         using var bytes = new MemoryStream();
         if (mode == "ordinary") await runner.RunAsync(fixture.Executable, fixture.Arguments, timeout, token);
+        else if (mode == "truncating") await ((ITruncatingCommandRunner)runner).RunTruncatingAsync(fixture.Executable, fixture.Arguments, 32, 32, timeout, token);
         else if (mode == "stream-in") await runner.RunFromStreamAsync(fixture.Executable, fixture.Arguments, bytes, 32, timeout, token);
         else await runner.RunToStreamAsync(fixture.Executable, fixture.Arguments, bytes, 32, timeout, token);
     }

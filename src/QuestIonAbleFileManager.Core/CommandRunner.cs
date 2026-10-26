@@ -4,10 +4,82 @@ using System.Text;
 
 namespace QuestIonAbleFileManager.Core;
 
-public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveCommandRunner
+public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveCommandRunner, ITruncatingCommandRunner
 {
     private const int StreamBufferBytes = 64 * 1024;
     private const int MaximumStandardErrorCharacters = 64 * 1024;
+
+    async Task<TruncatingCommandResult> ITruncatingCommandRunner.RunTruncatingAsync(
+        string fileName, IReadOnlyList<string> arguments,
+        int maximumStandardOutputBytes, int maximumStandardErrorBytes,
+        TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStandardOutputBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumStandardOutputBytes, TruncatingCommandResult.MaximumStreamBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumStandardErrorBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumStandardErrorBytes, TruncatingCommandResult.MaximumStreamBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var process = new Process { StartInfo = CreateStartInfo(fileName, arguments) };
+        var stopwatch = Stopwatch.StartNew();
+        StartProcess(process, fileName);
+        using var deadline = new CancellationTokenSource(timeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var output = DrainTruncatingAsync(process.StandardOutput.BaseStream, maximumStandardOutputBytes, linked.Token);
+        var error = DrainTruncatingAsync(process.StandardError.BaseStream, maximumStandardErrorBytes, linked.Token);
+        try
+        {
+            await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
+            var standardOutput = await output.ConfigureAwait(false);
+            var standardError = await error.ConfigureAwait(false);
+            stopwatch.Stop();
+            return new(new CommandResult(fileName, arguments.ToArray(), process.ExitCode,
+                    standardOutput.Text, standardError.Text, stopwatch.Elapsed),
+                standardOutput.Truncated, standardError.Truncated);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(output).ConfigureAwait(false);
+            await IgnoreFailureAsync(error).ConfigureAwait(false);
+            throw new TimeoutException($"{Path.GetFileName(fileName)} timed out after {timeout}.");
+        }
+        catch
+        {
+            linked.Cancel();
+            TryKill(process);
+            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            await IgnoreFailureAsync(output).ConfigureAwait(false);
+            await IgnoreFailureAsync(error).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<(string Text, bool Truncated)> DrainTruncatingAsync(
+        Stream stream, int maximumBytes, CancellationToken cancellationToken)
+    {
+        var prefix = new byte[maximumBytes];
+        var buffer = new byte[StreamBufferBytes];
+        var used = 0;
+        var truncated = false;
+        try
+        {
+            while (true)
+            {
+                var count = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (count == 0) break;
+                var retained = Math.Min(count, maximumBytes - used);
+                buffer.AsSpan(0, retained).CopyTo(prefix.AsSpan(used));
+                used += retained;
+                truncated |= retained < count;
+            }
+            return TruncatingCommandResult.DecodePrefix(prefix.AsSpan(0, used), truncated, maximumBytes);
+        }
+        finally { Array.Clear(prefix); Array.Clear(buffer); }
+    }
 
     public async Task<CommandResult> RunAsync(
         string fileName,
