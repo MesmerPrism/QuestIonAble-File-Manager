@@ -11,6 +11,7 @@ node --test tools/browser-ui/transfers.test.cjs
 node --test tools/browser-ui/file-push.test.cjs
 node --test tools/browser-ui/kiosk.test.cjs
 node --test tools/browser-ui/direct-connection.test.cjs
+node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs

@@ -567,6 +567,55 @@ outcome. The existing [typed Direct CLI](kiosk-direct-authorized-usb.md) remains
 the alternative for the other Direct workflows and its own explicitly scoped
 live-session operations.
 
+## Direct commands for Kiosk's current selection
+
+The separate **Kiosk Direct commands** card uses the acknowledged opaque
+connection above. Its eight commands are `status`, `show-controls`, `show-apps`,
+`check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
+`launch-normal` and `launch-kiosk`. Only `set-launch-requirement` accepts a
+value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
+because even a status command creates a remote logical request.
+
+Launch addresses Kiosk's current selection at execution time. A previous
+catalog selection is a separate operation; this card cannot bind an atomic
+select-and-launch to a named app. The typed acknowledgement observes the guard
+mode and requires `pendingRequirementLaunch:false`. A pending wearer requirement
+or missing field remains unresolved. Foreground, successful app launch and
+application readiness remain unknown. Changing a launch requirement sets the
+selection's preference; it does not change Wi-Fi or approve a wearer prompt.
+
+The existing execute route adds these closed actions:
+
+| Action | Fields beyond `requestId` and `action` |
+| --- | --- |
+| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (literal null except the requirement), `confirmed:true` |
+| `kiosk.direct.request-status` | `connectionId`, `originalRequestId` |
+| `kiosk.direct.request-result` | `connectionId`, `originalRequestId` |
+| `kiosk.direct.request-cancel` | `connectionId`, `originalRequestId`, `confirmed:true` |
+
+The logical ID is `kiosk_` followed by the Invoke browser UUID without hyphens.
+It is saved before the sole POST and derived independently by the host. Recovery
+resolves that original in the same request ledger and connection, retaining its
+command and value. Callers cannot supply a replacement logical ID or use a new
+connection to recover it. The additive Core `RequestResult` factory uses only
+the existing signed result GET and shared operation-specific readback; it never
+admits or invokes a request.
+
+The optional `kioskDirectCommand` projection contains bounded typed facts and
+actual Core receipt identity, with `result:null` and `mutation:null`. A lifecycle
+state alone never clears the original, including `confirmed`, `cancelled` or
+legacy Core `Failed` for remote `unknown`. Only the original's exact typed result
+and matching readback can acknowledge its effect. Explicit cancellation has a
+separate saved reference and acknowledgement; it does not prove rollback.
+`cancel-pending-launch` is a new Invoke and cannot clear an older logical request.
+
+No command is sent on loading, authentication, form changes or expiry. Small
+nonsecret Invoke/cancellation references preserve UNKNOWN across reload; they
+contain no credential or full result. Connection close remains available for
+cleanup of this same connection while its command is unresolved. Closing erases
+the key and may end result recovery; listener cleanup never acknowledges a
+command. Expiry and host restart cannot reconstruct the old credential.
+
 ## Local Windows connectivity profiles
 
 The optional **Fleet connectivity profiles** card manages only File Manager's
