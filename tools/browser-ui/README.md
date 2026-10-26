@@ -8,6 +8,7 @@ node --test tools/browser-ui/retained.test.cjs
 node --test tools/browser-ui/retained-deploy.test.cjs
 node --test tools/browser-ui/apk-read.test.cjs
 node --test tools/browser-ui/transfers.test.cjs
+node --test tools/browser-ui/file-push.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
