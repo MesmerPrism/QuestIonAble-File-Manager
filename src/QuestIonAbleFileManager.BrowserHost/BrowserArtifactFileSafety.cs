@@ -10,6 +10,9 @@ namespace QuestIonAbleFileManager.BrowserHost;
 // the deny-write/deny-delete path lease used by the existing Core APK boundary.
 internal static class BrowserArtifactFileSafety
 {
+    internal const string RootMarkerName = ".qfm-owner";
+    private static readonly object CreationDebtGate = new();
+    private static readonly Dictionary<string, FileStream> CreationDebts = new(StringComparer.Ordinal);
     internal readonly record struct Identity(uint Volume, ulong Index, long Length, uint Links,
         bool Directory, bool Reparse, bool DeletePending);
 
@@ -51,9 +54,15 @@ internal static class BrowserArtifactFileSafety
                 Fail("artifact_acl_untrusted_principal");
     }
 
-    internal static SafeFileHandle OpenDirectory(string path)
+    internal static SafeFileHandle OpenDirectory(string path, bool allowWriteSharing = true)
     {
-        var handle = Open(path, 0x80, 3, 3, 0x02000000 | 0x00200000);
+        // Ancestors can serve unrelated writers. The private root blocks data-
+        // writable handles; its retained marker also prevents metadata-only
+        // reparse transitions by keeping that directory nonempty.
+        // FILE_READ_ATTRIBUTES alone does not enroll the handle in data-access
+        // sharing. FILE_LIST_DIRECTORY makes deny-write/delete effective.
+        var handle = Open(path, allowWriteSharing ? 0x80u : 0x81u,
+            allowWriteSharing ? 3u : 1u, 3, 0x02000000 | 0x00200000);
         try { Validate(handle, path, directory: true); return handle; }
         catch { handle.Dispose(); throw; }
     }
@@ -63,6 +72,57 @@ internal static class BrowserArtifactFileSafety
 
     internal static FileStream OpenRead(string path) =>
         new(Open(path, 0x80000000, 1, 3, 0x00200000), FileAccess.Read, 64 * 1024, false);
+
+    internal static FileStream CreateRootMarker(string root)
+    {
+        var path = Path.Combine(root, RootMarkerName);
+        var marker = new FileStream(Open(path, 0x80000000 | 0x40000000 | 0x10000, 1, 1, 0x00200000),
+            FileAccess.ReadWrite, 4096, false);
+        try
+        {
+            Validate(marker.SafeFileHandle, path);
+            marker.WriteByte(0);
+            marker.Flush(true);
+            Validate(marker.SafeFileHandle, path);
+            return marker;
+        }
+        catch
+        {
+            // If the ancestor became a junction before the root was admitted,
+            // discard only this exact create-new handle, even outside the root.
+            DiscardCreatedOrRetainDebt(marker);
+            throw;
+        }
+    }
+
+    internal static void DeleteCreatedFile(FileStream file)
+    {
+        MarkDelete(file.SafeFileHandle);
+        file.Dispose();
+    }
+
+    internal static void DiscardCreatedOrRetainDebt(FileStream file)
+    {
+        try { DeleteCreatedFile(file); }
+        catch (BrowserArtifactException)
+        {
+            var id = Guid.NewGuid().ToString("N");
+            lock (CreationDebtGate) CreationDebts.Add(id, file);
+            throw new BrowserArtifactException("artifact_create_cleanup_pending", id);
+        }
+    }
+
+    internal static bool TryCleanupCreationDebt(string id)
+    {
+        lock (CreationDebtGate)
+        {
+            if (!CreationDebts.TryGetValue(id, out var file)) return false;
+            try { DeleteCreatedFile(file); }
+            catch (BrowserArtifactException) { return false; }
+            CreationDebts.Remove(id);
+            return true;
+        }
+    }
 
     private static SafeFileHandle Open(string path, uint access, uint share, uint disposition, uint flags)
     {
@@ -105,6 +165,11 @@ internal static class BrowserArtifactFileSafety
         using var handle = Open(path, 0x80000000 | 0x10000, 0, 3, 0x00200000 | (expected.Directory ? 0x02000000u : 0));
         var current = Validate(handle, path, expected.Directory);
         if (!SameObject(current, expected)) Fail("artifact_identity_changed");
+        MarkDelete(handle);
+    }
+
+    private static void MarkDelete(SafeFileHandle handle)
+    {
         var disposition = new DispositionInformation { Delete = true };
         if (!SetFileInformationByHandle(handle, 4, ref disposition, (uint)Marshal.SizeOf<DispositionInformation>()))
             Fail("artifact_cleanup_incomplete");

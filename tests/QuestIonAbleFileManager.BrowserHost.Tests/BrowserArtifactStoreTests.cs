@@ -24,6 +24,19 @@ public sealed class BrowserArtifactStoreTests
     }
 
     [Theory]
+    [InlineData(DriveType.Fixed, "NTFS", true)]
+    [InlineData(DriveType.Fixed, "ReFS", false)]
+    [InlineData(DriveType.Fixed, "FAT32", false)]
+    [InlineData(DriveType.Network, "NTFS", false)]
+    public void VolumeAdmissionRequiresNtfsIdentitySemantics(DriveType type, string format, bool supported)
+    {
+        if (supported) BrowserArtifactStore.ValidateVolume(type, format);
+        else Assert.Equal("artifact_volume_unsupported", Assert.Throws<BrowserArtifactException>(() =>
+            BrowserArtifactStore.ValidateVolume(type, format)).Code);
+        Assert.DoesNotContain("NTFS/ReFS", BrowserArtifactStore.Capability.Reason);
+    }
+
+    [Theory]
     [InlineData("../app.apk")]
     [InlineData("folder/app.apk")]
     [InlineData("folder\\app.apk")]
@@ -161,10 +174,85 @@ public sealed class BrowserArtifactStoreTests
         File.WriteAllText(foreign, "preserve");
         Assert.Equal(1, await store.CleanupAsync());
         Assert.Throws<BrowserArtifactException>(() => store.Dispose());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => store.StageAsync("closed.bin", Bytes("abc")));
         Assert.Equal("preserve", File.ReadAllText(foreign));
         File.Delete(foreign);
         store.Dispose();
         Assert.False(Directory.Exists(root));
+    }
+
+    [Theory]
+    [InlineData(0x40000000u)]
+    [InlineData(0x00000002u)]
+    [InlineData(0x00000100u)]
+    [InlineData(0x00000080u)]
+    [InlineData(0x00000000u)]
+    public async Task EmptyPrivateRootCannotBecomeJunctionWhileStoreOwnsIt(uint attemptedAccess)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var store = new BrowserArtifactStore();
+        var receipt = await store.StageAsync("locate.bin", Bytes("abc"));
+        string root;
+        await using (var lease = await store.AcquireAsync(receipt.Id, receipt.Sha256, receipt.SizeBytes)) root = Path.GetDirectoryName(lease.Path)!;
+        await store.RemoveAsync(receipt.Id);
+        var target = Path.Combine(Path.GetTempPath(), "QfmArtifactJunctionTarget-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(target);
+        bool changed = false;
+        try
+        {
+            changed = TrySetJunction(root, target, attemptedAccess);
+            Assert.False(changed, "An empty owned artifact root accepted a writable reparse transition.");
+            await store.StageAsync("after.bin", Bytes("abc"));
+            Assert.Empty(Directory.GetFileSystemEntries(target));
+        }
+        finally
+        {
+            if (changed) ClearJunction(root);
+            Directory.Delete(target);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CaptureProducerCanReadAndReleaseEarlierLeaseWithoutAdmissionDeadlock(bool cancelProducer)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var store = new BrowserArtifactStore();
+        var input = await store.StageAsync("input.bin", Bytes("abc"));
+        var lease = await store.AcquireAsync(input.Id, input.Sha256, input.SizeBytes);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        Task? release = null;
+        try
+        {
+            var capture = store.CaptureAsync("output.bin", async (stream, token) =>
+            {
+                await lease.Stream.CopyToAsync(stream, token);
+                release = Task.Run(lease.Dispose);
+                // Keep the regression recoverable on the broken implementation:
+                // cancellation releases capture admission, then the blocked release.
+                await release.WaitAsync(token);
+                if (cancelProducer) cancellation.Cancel();
+                token.ThrowIfCancellationRequested();
+            }, cancellation.Token);
+            if (cancelProducer)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => capture);
+                Assert.Equal(1, await store.CleanupAsync());
+            }
+            else
+            {
+                var output = await capture;
+                Assert.Equal(input.Sha256, output.Sha256);
+                Assert.Equal(2, await store.CleanupAsync());
+            }
+        }
+        finally
+        {
+            cancellation.Cancel();
+            if (release is not null) await release.WaitAsync(TimeSpan.FromSeconds(5));
+            lease.Dispose();
+        }
     }
 
     [Fact]
@@ -204,6 +292,51 @@ public sealed class BrowserArtifactStoreTests
                 BrowserArtifactFileSafety.Validate(file.SafeFileHandle, path)).Code);
         }
         finally { File.Delete(alias); File.Delete(path); }
+    }
+
+    [Fact]
+    public void RootMarkerRollsBackItsExactCreatedHandleAfterPreAdmissionJunctionRace()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var fixture = Path.Combine(Path.GetTempPath(), "QfmArtifactMarkerRace-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(fixture, "root");
+        var target = Path.Combine(fixture, "target");
+        Directory.CreateDirectory(target);
+        CreateJunction(root, target);
+        try
+        {
+            Assert.Equal("artifact_path_changed", Assert.Throws<BrowserArtifactException>(() =>
+                BrowserArtifactFileSafety.CreateRootMarker(root)).Code);
+            Assert.Empty(Directory.GetFileSystemEntries(target));
+        }
+        finally { Directory.Delete(root); Directory.Delete(target); Directory.Delete(fixture); }
+    }
+
+    [Fact]
+    public void FailedExactCreatedHandleDeletionRetainsExplicitCleanupDebt()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = Path.Combine(Path.GetTempPath(), "QfmArtifactMarkerDebt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var marker = BrowserArtifactFileSafety.CreateRootMarker(root);
+        var path = Path.Combine(root, BrowserArtifactFileSafety.RootMarkerName);
+        try
+        {
+            File.SetAttributes(path, FileAttributes.ReadOnly);
+            var error = Assert.Throws<BrowserArtifactException>(() => BrowserArtifactFileSafety.DiscardCreatedOrRetainDebt(marker));
+            Assert.Equal("artifact_create_cleanup_pending", error.Code);
+            Assert.Matches("^[0-9a-f]{32}$", error.CleanupDebtId!);
+            Assert.False(BrowserArtifactStore.TryCleanupCreationDebt(error.CleanupDebtId!));
+            File.SetAttributes(path, FileAttributes.Normal);
+            Assert.True(BrowserArtifactStore.TryCleanupCreationDebt(error.CleanupDebtId!));
+            Assert.False(File.Exists(path));
+        }
+        finally
+        {
+            marker.Dispose();
+            if (File.Exists(path)) { File.SetAttributes(path, FileAttributes.Normal); File.Delete(path); }
+            Directory.Delete(root);
+        }
     }
 
     [Fact]
@@ -273,6 +406,11 @@ public sealed class BrowserArtifactStoreTests
     private static void CreateJunction(string link, string target)
     {
         Directory.CreateDirectory(link);
+        Assert.True(TrySetJunction(link, target), "Could not create the test-owned mount-point fixture: " + Marshal.GetLastWin32Error());
+    }
+
+    private static bool TrySetJunction(string link, string target, uint access = 0x40000000)
+    {
         var substitute = @"\??\" + target;
         var names = Encoding.Unicode.GetBytes(substitute + '\0' + target + '\0');
         using var bytes = new MemoryStream();
@@ -287,11 +425,22 @@ public sealed class BrowserArtifactStoreTests
             writer.Write(checked((ushort)(target.Length * 2)));
             writer.Write(names);
         }
-        using var handle = CreateFile(link, 0x40000000, 3, IntPtr.Zero, 3, 0x02000000 | 0x00200000, IntPtr.Zero);
-        Assert.False(handle.IsInvalid);
+        using var handle = CreateFile(link, access, 3, IntPtr.Zero, 3, 0x02000000 | 0x00200000, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            Assert.Contains(Marshal.GetLastWin32Error(), new[] { 32, 33 });
+            return false;
+        }
         var buffer = bytes.ToArray();
-        Assert.True(DeviceIoControl(handle, 0x000900A4, buffer, buffer.Length, IntPtr.Zero, 0, out _, IntPtr.Zero),
-            "Could not create the test-owned mount-point fixture: " + Marshal.GetLastWin32Error());
+        return DeviceIoControl(handle, 0x000900A4, buffer, buffer.Length, IntPtr.Zero, 0, out _, IntPtr.Zero);
+    }
+
+    private static void ClearJunction(string path)
+    {
+        using var handle = CreateFile(path, 0x40000000, 3, IntPtr.Zero, 3, 0x02000000 | 0x00200000, IntPtr.Zero);
+        Assert.False(handle.IsInvalid);
+        byte[] header = [3, 0, 0, 0xA0, 0, 0, 0, 0];
+        Assert.True(DeviceIoControl(handle, 0x000900AC, header, header.Length, IntPtr.Zero, 0, out _, IntPtr.Zero));
     }
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]

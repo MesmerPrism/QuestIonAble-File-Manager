@@ -11,9 +11,10 @@ public sealed record BrowserArtifactCapability(bool Supported, string Code, stri
 public sealed record BrowserArtifactReceipt(string Id, string FileName, long SizeBytes, string Sha256);
 internal sealed record BrowserArtifactLimits(long MaximumFileBytes = 256L * 1024 * 1024, int MaximumFiles = 8,
     long MaximumTotalBytes = 512L * 1024 * 1024);
-public sealed class BrowserArtifactException(string code) : Exception(code)
+public sealed class BrowserArtifactException(string code, string? cleanupDebtId = null) : Exception(code)
 {
     public string Code { get; } = code;
+    public string? CleanupDebtId { get; } = cleanupDebtId;
 }
 
 public sealed class BrowserArtifactLease : IDisposable, IAsyncDisposable
@@ -50,12 +51,24 @@ public sealed class BrowserArtifactStore : IDisposable
     private readonly BrowserArtifactLimits _limits;
     private long _bytes;
     private bool _disposed;
+    private bool _closing;
+    private FileStream? _ownerMarker;
 
     public static BrowserArtifactCapability Capability => OperatingSystem.IsWindows()
-        ? new(true, "available", "Protected transient path staging requires a local NTFS/ReFS volume and validated private ACLs.", "Windows companion with a local NTFS/ReFS transient directory.")
+        ? new(true, "platform_supported", "This platform supports protected transient staging; a private root must still pass admission on a local NTFS volume. ReFS is unsupported because this boundary uses NTFS 64-bit file identities.", "Windows companion with a local NTFS transient directory.")
         : new(false, "native_staging_unavailable", "Protected path staging is unavailable on this platform; Unix mode bits and advisory locks do not provide the required deny-write/deny-delete path lease.", "Use the Windows companion for staged uploads/downloads; portable read/control actions remain available.");
 
     public BrowserArtifactStore() : this(Path.GetTempPath(), new()) { }
+
+    // A failed constructor never returns a usable store. If exact-handle
+    // rollback itself failed, this opaque token permits explicit owner retry.
+    public static bool TryCleanupCreationDebt(string id) => BrowserArtifactFileSafety.TryCleanupCreationDebt(id);
+
+    internal static void ValidateVolume(DriveType type, string format)
+    {
+        if (type != DriveType.Fixed || format != "NTFS")
+            throw new BrowserArtifactException("artifact_volume_unsupported");
+    }
 
     internal BrowserArtifactStore(string parentDirectory, BrowserArtifactLimits limits)
     {
@@ -68,8 +81,7 @@ public sealed class BrowserArtifactStore : IDisposable
         if (parent.StartsWith(@"\\", StringComparison.Ordinal) || !Path.IsPathFullyQualified(parent))
             throw new BrowserArtifactException("artifact_root_invalid");
         var volume = new DriveInfo(Path.GetPathRoot(parent)!);
-        if (volume.DriveType != DriveType.Fixed || volume.DriveFormat is not ("NTFS" or "ReFS"))
-            throw new BrowserArtifactException("artifact_volume_unsupported");
+        ValidateVolume(volume.DriveType, volume.DriveFormat);
         _root = Path.Combine(parent, "QfmBrowserArtifacts-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -83,8 +95,9 @@ public sealed class BrowserArtifactStore : IDisposable
                 _directories.Add(BrowserArtifactFileSafety.OpenDirectory(current));
             }
             BrowserArtifactFileSafety.CreatePrivateDirectory(_root);
-            _directories.Add(BrowserArtifactFileSafety.OpenDirectory(_root));
+            _directories.Add(BrowserArtifactFileSafety.OpenDirectory(_root, allowWriteSharing: false));
             _rootIdentity = BrowserArtifactFileSafety.ReadIdentity(_directories[^1]);
+            _ownerMarker = BrowserArtifactFileSafety.CreateRootMarker(_root);
         }
         catch { foreach (var handle in _directories) handle.Dispose(); throw; }
     }
@@ -207,7 +220,7 @@ public sealed class BrowserArtifactStore : IDisposable
                     stream.Length != expectedSizeBytes || await HashAsync(stream, cancellation).ConfigureAwait(false) != expectedSha256 ||
                     BrowserArtifactFileSafety.Validate(stream.SafeFileHandle, entry.Path) != entry.Identity)
                     throw new BrowserArtifactException("artifact_integrity_mismatch");
-                entry.Leases++;
+                Interlocked.Increment(ref entry.Leases);
                 return new(entry.Receipt, entry.Path, stream, () => Release(entry));
             }
             catch { stream.Dispose(); throw; }
@@ -232,14 +245,14 @@ public sealed class BrowserArtifactStore : IDisposable
     private int Cleanup()
     {
         var removed = 0;
-        foreach (var entry in _entries.Values.Where(static entry => entry.Leases == 0).ToArray())
+        foreach (var entry in _entries.Values.Where(static entry => Volatile.Read(ref entry.Leases) == 0).ToArray())
         { Remove(entry); removed++; }
         return removed;
     }
 
     private void Remove(Entry entry)
     {
-        if (entry.Leases != 0) throw new BrowserArtifactException("artifact_in_use");
+        if (Volatile.Read(ref entry.Leases) != 0) throw new BrowserArtifactException("artifact_in_use");
         entry.Retained?.Dispose(); entry.Retained = null;
         BrowserArtifactFileSafety.DeleteExpected(entry.Path, entry.Identity);
         _entries.Remove(entry.Receipt.Id);
@@ -248,12 +261,10 @@ public sealed class BrowserArtifactStore : IDisposable
 
     private Entry Find(string id) => _entries.TryGetValue(id, out var entry) ? entry :
         throw new BrowserArtifactException("artifact_not_found");
-    private void Release(Entry entry)
-    {
-        _gate.Wait();
-        try { entry.Leases--; } finally { _gate.Release(); }
-    }
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+    // Acquire/removal remain serialized by _gate. Release can only lower the
+    // count after its read handle closes, and must not reenter producer admission.
+    private static void Release(Entry entry) => Interlocked.Decrement(ref entry.Leases);
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed || _closing, this);
     private static void ValidateHash(string hash)
     {
         if (hash is null || hash.Length != 64 || hash.Any(static c => !char.IsAsciiDigit(c) && c is not (>= 'a' and <= 'f')))
@@ -273,14 +284,22 @@ public sealed class BrowserArtifactStore : IDisposable
         try
         {
             if (_disposed) return;
-            if (_entries.Values.Any(static entry => entry.Leases != 0)) throw new BrowserArtifactException("artifact_in_use");
+            if (_entries.Values.Any(static entry => Volatile.Read(ref entry.Leases) != 0)) throw new BrowserArtifactException("artifact_in_use");
+            // Once closing is admitted, no new bytes or leases can use a root
+            // whose marker may have been retired, even if cleanup later fails.
+            _closing = true;
             Cleanup();
+            if (_ownerMarker is not null)
+            {
+                BrowserArtifactFileSafety.DeleteCreatedFile(_ownerMarker);
+                _ownerMarker = null;
+            }
             _directories[^1].Dispose();
             try { BrowserArtifactFileSafety.DeleteExpected(_root, _rootIdentity); }
             catch
             {
                 // Keep ancestor custody and leave unexpected contents untouched.
-                _directories[^1] = BrowserArtifactFileSafety.OpenDirectory(_root);
+                _directories[^1] = BrowserArtifactFileSafety.OpenDirectory(_root, allowWriteSharing: false);
                 throw;
             }
             foreach (var handle in _directories) handle.Dispose();
@@ -295,7 +314,7 @@ public sealed class BrowserArtifactStore : IDisposable
         internal string Path { get; } = path;
         internal BrowserArtifactFileSafety.Identity Identity { get; } = identity;
         internal FileStream? Retained { get; set; } = retained;
-        internal int Leases { get; set; }
+        internal int Leases;
     }
 
     // Producer receives only a non-seekable bounded sink. A swallowed write
