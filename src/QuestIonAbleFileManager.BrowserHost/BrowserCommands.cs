@@ -10,7 +10,8 @@ public sealed record BrowserCommandOutcome(
     OperatorMutationReceipt? Mutation = null,
     BrowserArtifactInspectionOutcome? ArtifactInspection = null,
     BrowserArtifactTransferOutcome? ArtifactTransfer = null,
-    BrowserArtifactReadOutcome? ArtifactRead = null);
+    BrowserArtifactReadOutcome? ArtifactRead = null,
+    BrowserArtifactPushOutcome? ArtifactPush = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
@@ -32,7 +33,7 @@ public sealed class BrowserCommands
     private readonly BrowserOperationGate _operationGate;
     private readonly Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? _capture;
     public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
-        ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.pull", "apk.export"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe"] : Actions;
+        ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push", "files.pull", "apk.export"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
     private bool _running;
@@ -92,7 +93,7 @@ public sealed class BrowserCommands
         }
         await using var artifactLease = await AcquireArtifactAsync(artifact, timeout.Token).ConfigureAwait(false);
         var request = artifact is null ? Parse(body) : new BrowserCommandRequest(
-            artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), false);
+            artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), artifact.Action == "files.push");
         IDisposable operationLease;
         lock (_admission)
         {
@@ -107,6 +108,7 @@ public sealed class BrowserCommands
         }
         try
         {
+            var push = artifact?.Action == "files.push" ? new BrowserArtifactPushProjection(artifact, artifactLease!) : null;
             BrowserCommandOutcome outcome;
             try
             {
@@ -120,7 +122,8 @@ public sealed class BrowserCommands
                 var state = request.Mutation
                     ? result.MutationReceipt?.Stage == OperatorMutationStage.Confirmed || connected ? "completed" : "pending"
                     : "completed";
-                if (artifactLease is not null)
+                if (push is not null) outcome = push.Project(result);
+                else if (artifactLease is not null)
                 {
                     var projection = new BrowserArtifactReadProjection(artifactLease);
                     if (artifact!.Action != "apk.inspect")
@@ -145,14 +148,14 @@ public sealed class BrowserCommands
             }
             catch (OperatorMutationExecutionException exception)
             {
-                outcome = new(request.RequestId, request.Action, "outcomeUnknown",
-                    Error: "mutation_readback_unknown", Mutation: exception.MutationReceipt);
+                outcome = push is not null ? push.Unknown("mutation_readback_unknown", exception.MutationReceipt) :
+                    new(request.RequestId, request.Action, "outcomeUnknown", Error: "mutation_readback_unknown", Mutation: exception.MutationReceipt);
             }
             catch (Exception)
             {
                 // Never expose exception text, paths or arbitrary process output as an error.
                 // Once a mutation is admitted any failure is conservatively uncertain.
-                outcome = new(request.RequestId, request.Action,
+                outcome = push is not null ? push.Unknown("operation_failed") : new(request.RequestId, request.Action,
                     request.Mutation ? "outcomeUnknown" : "failed", Error: "operation_failed");
             }
             _requests[request.RequestId] = outcome;
