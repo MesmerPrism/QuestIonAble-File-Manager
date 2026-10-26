@@ -20,6 +20,12 @@ app; direct USB access can conflict with a running host ADB connection. This
 development surface is separate from the inspected-deployment API and signed
 release packaging.
 
+On a Windows NTFS host, the browser also stages a selected local APK, inspects
+it through shared Core, and downloads/removes its verified temporary bytes.
+Other hosts show an explicit protected-staging limitation. These local actions
+do not install an app; the current CLI/WPF remains available for device APK
+operations while browser parity continues.
+
 > This is an independent open-source project. It is not affiliated with or
 > endorsed by Meta. Meta Quest is a trademark of Meta Platforms, Inc.
 
