@@ -33,6 +33,10 @@ An explicit USB Direct card adopts one short-lived Kiosk operator connection,
 reads signed status and closes its opaque handle with separate listener cleanup.
 Its credential stays on the host; expiry or status never reconciles a lost effect
 reply, and a restarted host cannot restore the old connection.
+The local Windows connectivity profile card uses the existing current-user
+Credential Manager owner for explicit list/status, private input, replacement and
+revocation. It tests stored validity, not connectivity, and keeps private documents
+out of staging, saved references and the offline cache.
 It can also stage generic files for an explicitly approved push to a full headset
 file path, capture bounded file pulls and single-APK exports, then verify streamed
 saves where the browser supports a file picker. Push confirms remote size only.

@@ -41,12 +41,20 @@ var operationGate = new BrowserOperationGate();
 var retained = new BrowserRetainedOperations(() => artifacts.Value, operationGate.TryAcquire);
 var transfers = new BrowserTransfers(() => artifacts.Value);
 var directConnections = new BrowserDirectConnections();
+// Local profile operations never create an ADB client or activate Fleet.
+var profileExecutor = new Lazy<OperatorCommandExecutor>(() => new(
+    client: null,
+    fleetInstallerFactory: () => throw new InvalidOperationException("profile_fleet_activation_forbidden"),
+    connectivityProfilesFactory: QuestConnectivityProfileManager.CreateWindows));
+var profiles = new BrowserProfiles(
+    (command, input, cancellation) => profileExecutor.Value.ExecuteAsync(command, cancellation, privateInput: input),
+    new WindowsPrivateProfileInputReader(), OperatorPlatformCapabilities.Current.ConnectivityProfilesSupported);
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
 }, () => artifacts.Value, operationGate, BrowserArtifactStore.Capability.Supported ? transfers.ExecuteAsync : null,
-    directConnections);
+    directConnections, profiles);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
@@ -118,10 +126,12 @@ app.MapGet("/browser/v1/session", () => new
     actions = commands.AvailableActions, maxRequests = BrowserCommands.MaximumRequests,
     platformCapabilities = OperatorPlatformCapabilities.Current,
     artifactStaging = BrowserArtifactStore.Capability,
-    retainedOperations = retained.Capability
+    retainedOperations = retained.Capability,
+    connectivityProfiles = profiles.Capability
 });
 BrowserArtifactRoutes.Map(app, () => artifacts.Value);
 BrowserRetainedRoutes.Map(app, retained);
+BrowserProfileRoutes.Map(app, commands, profiles);
 app.MapGet("/browser/v1/requests/{requestId}", (string requestId) =>
 {
     try { return Results.Json(commands.Get(requestId)); }
@@ -160,6 +170,9 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    // An admitted private write retains its bytes/gate through real verification
+    // and rollback; cooperative cancellation is not an acknowledgement.
+    await commands.DrainProfilesAsync();
     try
     {
         if (!await directConnections.ShutdownAsync())

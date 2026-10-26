@@ -32,6 +32,20 @@ public static class QuestConnectivityProfileManagementContract
 
 public static class QuestConnectivityProfileEnrollmentDocument
 {
+    /// <summary>Validates the owner document and returns only its canonical ID. Caller retains and clears the borrowed bytes.</summary>
+    public static string GetValidatedDeviceId(byte[] privateDocument)
+    {
+        if (privateDocument is null || privateDocument.Length is <= 0 or >
+            QuestConnectivityProfileManagementContract.MaximumPrivateInputBytes)
+        {
+            throw QuestConnectivityProfileManager.Rejected(
+                "profileInputSizeInvalid",
+                "Private connectivity profile input size is invalid.");
+        }
+        using var enrollment = QuestConnectivityEnrollment.Parse(privateDocument);
+        return enrollment.DeviceId;
+    }
+
     public static byte[] Create(
         string deviceId,
         string usbSerial,

@@ -11,6 +11,7 @@ node --test tools/browser-ui/transfers.test.cjs
 node --test tools/browser-ui/file-push.test.cjs
 node --test tools/browser-ui/kiosk.test.cjs
 node --test tools/browser-ui/direct-connection.test.cjs
+node --test tools/browser-ui/profiles.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -74,3 +75,10 @@ synthetic acknowledgements only. They check pre-dispatch USB ownership IDs,
 opaque scope, expiry/explicit close, pre-existing listener preservation, original
 UNKNOWN custody, no replay, private-field exclusion and cross-view blocking.
 They do not mint a real credential or enable a listener on a headset.
+
+Profile fixtures use synthetic intercepted responses and injected backend stores.
+They cover manual/private-file byte input, fixed headers and reviewed ID,
+private-field/buffer clearing, explicit replacement/revoke, exact rollback
+semantics, lost originals, auth generations and cross-view blocking. They never
+open Credential Manager or a real profile, ADB/Fleet provider, host or device.
+Local record validity is distinct from connectivity and lost-write identity.
