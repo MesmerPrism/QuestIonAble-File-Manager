@@ -129,8 +129,8 @@ fields reject, and each action requires exactly its listed fields:
 
 Port is an integer 1–65535. Hold duration is an integer 60000–28800000
 milliseconds. CPU/GPU values are integers 0–5 or null to preserve that override;
-at least one level must be supplied. Clear removes both overrides. No
-caller-selected shell, ADB executable, host file path, property, Fleet identity,
+at least one level must be supplied. Clear removes both overrides. These ordinary
+ADB/file actions accept no caller-selected shell, ADB executable, host file path, property, Fleet identity,
 watchdog or command argument is accepted. Package, process ID and headset path
 inputs reach only their closed read-only Core handlers.
 Serial-scoped operations first use the same Core discovery command to require
@@ -178,9 +178,11 @@ new host session after outstanding uncertainty has been handled.
 record may still be running or may have changed the target. A duplicate of a
 running ID is classified as consumed before the busy check.
 
-Body reads have a five-second deadline. Ordinary admitted commands have a
+Body reads have a five-second deadline. Ordinary admitted ADB commands have a
 90-second cancellation deadline; staged APK inspection/lease acquisition and
 read captures instead share a five-minute lifetime with their bounded runners.
+Local profile writes below retain their synchronous owner's real completion
+and rollback rather than imposing a false hard timeout on native storage.
 Closing the page does not
 cancel an admitted effect. In-memory records do not survive process restart;
 the new process generates a different session nonce and rejects old session
@@ -564,6 +566,88 @@ cleanup or credential-restoration route. Do not reconnect to infer the old
 outcome. The existing [typed Direct CLI](kiosk-direct-authorized-usb.md) remains
 the alternative for the other Direct workflows and its own explicitly scoped
 live-session operations.
+
+## Local Windows connectivity profiles
+
+The optional **Fleet connectivity profiles** card manages only File Manager's
+current-Windows-user records under `QuestIonAbleFileManager/QuestConnectivity/`.
+It lists IDs, checks stored record validity, imports/creates, explicitly replaces,
+and revokes one reviewed ID. It does not connect to a headset, test a listener,
+activate a Fleet provider, choose a default profile or enroll a transient USB
+Direct session. No ready headset, ADB executable, protected artifact staging,
+Native retained configuration or Fleet installer setup is required.
+
+`GET /browser/v1/session` reports `connectivityProfiles` with supported/code/
+reason/alternative and limits of 4096 private input bytes and 128 returned list
+entries. Supported means Windows composition is available, not that a store or
+connection probe passed. Other platforms report
+`windows_credential_manager_required` and the Windows companion/CLI alternative;
+there is no plaintext credential-store fallback.
+
+Ordinary `profile.list`, `profile.status` and `profile.revoke` use the existing
+execute endpoint. List has only `requestId` and `action`; status adds canonical
+`deviceId`; revoke adds that ID and `confirmed:true`. List returns an explicitly
+capped snapshot with full `totalProfiles` and `truncated`; this does not bound
+native enumeration work or imply an empty store on failure. `enrolled` means a
+parsable local record, not connected, authenticated or ready. Revoke removes only
+that current-user record; it does not stop a listener or revoke remote credentials.
+
+Private import uses **only** `POST /browser/v1/profiles/import`, never generic
+execute, artifact staging or a host file path. Its body is the existing strict
+[owner enrollment document](quest-connectivity-provider.md#private-profile) as
+1–4096 UTF-8 bytes. It requires these single-valued application headers in
+addition to the usual bearer/session/origin admission:
+
+| Header | Value |
+| --- | --- |
+| `X-Qfm-Request-Id` | One nonzero UUID-D |
+| `X-Qfm-Profile-Device-Id` | The exact reviewed canonical lowercase ID |
+| `X-Qfm-Confirm-Profile-Write` | `true` |
+| `X-Qfm-Replace-Existing` | Explicit `false` for create or `true` for replacement |
+
+Unknown profile options, ambiguous headers, encoded bodies, invalid owner
+documents and a document/header ID mismatch reject before store activation.
+The Core helper validates the existing envelope and returns only its device ID;
+it does not open the store. The server then feeds the same owned bytes to the
+existing typed stdin import. Manual fields construct the same fixed namespace
+document; a browser-selected private JSON file is a bounded byte input, not a
+claim that the host's native `--file` ACL/handle checks were performed.
+
+Writes require explicit scope-bound approval. Create uses `replaceExisting:false`;
+an existing-record rejection never grants replacement automatically. Deliberate
+replacement has its own exact-ID approval. Successful import requires Core's
+exact stored-byte readback and parsing. Only its bound original confirmation,
+specific pre-write replacement rejection, or confirmed exact rollback can
+acknowledge that original. Uncertain rollback, revoke readback failure, crossed
+receipts and generic admitted errors remain UNKNOWN. A successful new status,
+including `enrolled` or `absent`, cannot establish the identity of a lost private
+write or clear it.
+
+The same one-use request ledger and shared operation gate apply. Private receive
+has a five-second bound; after admission, Core's actual verification/rollback
+owns completion. Synchronous Credential Manager calls are not interrupted by a
+browser timeout. Page loss does not release custody early. Owned input buffers
+are cleared before gate/drain completion, and orderly shutdown drains admitted
+profile changes before other cleanup. Cached outcomes contain only sanitized
+profile receipts, fixed reason/rollback codes and nonsecret routing metadata;
+top-level `result` and headset `mutation` remain null.
+
+Only `{requestId,sessionId,action,deviceId,replaceExisting?}` enters tab reference
+storage before a change. The card clears private USB/endpoint/code/file inputs
+and owned document arrays after attempts, cancellation, authentication changes
+and visibility/page departure. It never saves a credential, endpoint, USB serial,
+private filename/body/hash, list, full result or secret-derived digest. JavaScript
+and runtime/network internals can contain immutable temporary copies; the UI
+does not claim deterministic erasure of those copies or same-user process
+isolation. See the owner guide for the Windows identity boundary.
+
+Reload, authentication, selection and capability changes send no profile call.
+Manual original GET uses only the saved request/session and refuses replies from
+a crossed authentication generation. A host restart loses that transient ledger;
+preserve UNKNOWN and the small reference for owner investigation. The existing
+`connectivity-profile` CLI remains the typed alternative. Tests use injected fake
+stores and input readers; no live Credential Manager CRUD is implied by DOM,
+route or capability checks.
 
 ## Power and existing supervisors
 

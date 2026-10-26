@@ -78,7 +78,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','profile-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -345,4 +345,19 @@ for (const kind of ['original','changed-host-connection','same-host-connection']
     await f.page.locator('#apply-hold').dispatchEvent('click');assert.equal(f.mutations().length,0);
   }else{await f.page.locator('#apply-hold').click();await f.settled();assert.equal(f.mutations().length,1);}
   assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-connection-v1'))),reference);
+});
+
+for (const kind of ['import','revoke','changed-host-import']) test(`real app preserves unresolved local profile scope: ${kind}`,async t=>{
+  const f=await fixture(t),reference={requestId:'33333333-3333-4333-8333-333333333333',
+    sessionId:kind==='changed-host-import'?'old-host-session':'fixture-session',
+    action:kind==='revoke'?'profile.revoke':'profile.import',deviceId:'fixture-profile',
+    ...(kind==='revoke'?{}:{replaceExisting:false})};
+  await f.page.evaluate(value=>sessionStorage.setItem('qfm-browser-profile-v1',JSON.stringify(value)),reference);
+  await f.page.reload();assert.equal(f.calls.length,0,'No automatic profile/owner request after reload');
+  await f.connect();await f.selectA();await f.page.locator('#power-confirm').check();
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  await f.page.locator('#apply-hold').evaluate(button=>{button.disabled=false;});
+  await f.page.locator('#apply-hold').dispatchEvent('click');assert.equal(f.mutations().length,0,'Execute-time guard preserves local profile uncertainty');
+  assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-profile-v1'))),reference);
+  assert.equal(f.calls.some(call=>call.path.includes('/profiles/')||call.body?.action?.startsWith('profile.')),false);
 });
