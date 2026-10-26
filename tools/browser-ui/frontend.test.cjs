@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const {createHash}=require('node:crypto');
 const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
@@ -33,11 +34,17 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
     if (url.origin !== origin) return route.abort('blockedbyclient');
     if (blockApp && url.pathname === '/app.js') { blocked.push(url.pathname); return route.abort('blockedbyclient'); }
     if (url.pathname.startsWith('/browser/')) {
-      const request = route.request(), body = request.method() === 'POST' ? request.postDataJSON() : null;
+      const request = route.request(), body = request.method() === 'POST' && request.headers()['content-type']?.startsWith('application/json') ? request.postDataJSON() : null;
       calls.push({ method: request.method(), path: url.pathname, body });
-      if (url.pathname === '/browser/v1/session') return session ? session(route) : route.fulfill({ json: { sessionId: 'fixture-session', actions:['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal','files.list','apk.list','apk.permissions','device.performance','device.performance-clear','wifi.disconnect','device.actor-observe','device.actor-identity','adb.forwards'] } });
+      if (url.pathname === '/browser/v1/session') return session ? session(route) : route.fulfill({ json: { sessionId: 'fixture-session', artifactStaging:{supported:true}, actions:['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal','files.list','apk.list','apk.permissions','device.performance','device.performance-clear','wifi.disconnect','device.actor-observe','device.actor-identity','adb.forwards','apk.inspect'] } });
+      const artifact={id:'00000000000040008000000000000003',fileName:'fixture.apk',sizeBytes:3,sha256:createHash('sha256').update(Buffer.from([1,2,3])).digest('hex')};
+      if(url.pathname==='/browser/v1/artifacts'&&request.method()==='POST')return route.fulfill({status:201,json:{state:'staged',scope:'localOnly',deviceDispatched:false,artifact}});
+      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='DELETE')return route.fulfill({json:{state:'removed',scope:'localOnly',deviceDispatched:false}});
+      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='GET')return route.fulfill({contentType:'application/octet-stream',body:Buffer.from([1,2,3])});
+      if(url.pathname==='/browser/v1/artifacts/cleanup')return route.fulfill({json:{state:'cleaned',count:1,scope:'localOnly',deviceDispatched:false}});
       if (url.pathname.startsWith('/browser/v1/requests/')) return route.fulfill({ json: reconcile(url.pathname.split('/').at(-1)) || { error: 'request_not_found' } });
       if (url.pathname === '/browser/v1/execute') {
+        if(body.action==='apk.inspect')return route.fulfill({json:{requestId:body.requestId,action:body.action,state:'completed',artifactInspection:{artifact,inspection:{path:artifact.fileName,sizeBytes:artifact.sizeBytes,sha256:artifact.sha256,identity:{packageName:'example.fixture.app',versionCode:1,versionName:'1.0',signerSha256:'a'.repeat(64),splitName:null}}}}});
         if(body.action==='files.list'){const result={requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},remoteEntries:[{name:'Download',fullPath:'/sdcard/Download',isDirectory:true},{name:'<script>fixture</script>.txt',fullPath:'/sdcard/fixture.txt',isDirectory:false}]}};return files ? files(route,result) : route.fulfill({json:result});}
         if(body.action==='apk.list')return route.fulfill({json:{requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},packages:['example.fixture.app']}}});
         if(body.action==='apk.permissions')return route.fulfill({json:{requestId:body.requestId,state:'completed',result:{command:{serial:body.serial},apkPermissionObservation:{packageName:body.package}}}});
@@ -75,7 +82,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
   async function hold() { await page.locator('#power-confirm').check(); await page.locator('#apply-hold').click(); }
   async function settled() { await page.waitForFunction(() => !document.querySelector('#refresh').disabled); }
   const outstanding = () => page.evaluate(key => JSON.parse(sessionStorage.getItem(key) || 'null'), originalKey);
-  const mutations = () => calls.filter(call => call.body && !['devices', 'device.status','files.list','apk.list','apk.permissions','device.actor-observe','device.actor-identity','adb.forwards'].includes(call.body.action));
+  const mutations = () => calls.filter(call => call.body && !['devices', 'device.status','files.list','apk.list','apk.permissions','device.actor-observe','device.actor-identity','adb.forwards','apk.inspect'].includes(call.body.action));
   t.after(() => assert.deepEqual(errors, [], 'No uncaught frontend runtime errors'));
   t.after(() => assert.deepEqual(consoleProblems.filter(message =>
     !message.includes('Service Worker registration blocked by Playwright') &&
@@ -190,6 +197,39 @@ test('disconnect and host-session replacement clear approvals and old target vie
   assert.equal(await f.page.locator('#wifi-confirm').isChecked(),false);assert.equal(await f.page.locator('#power-confirm').isChecked(),false);
   assert.equal(await f.page.locator('#file-entries').textContent(),'');
   await f.connect();assert.equal(await f.page.locator('#refresh').isDisabled(),false);assert.equal(await f.page.locator('#file-entries').textContent(),'');
+});
+
+test('local APK upload and inspection use an opaque binding without selecting or mutating a headset', async t => {
+  const f=await fixture(t);await f.connect();
+  assert.equal(await f.page.locator('#apk-upload').count(),1);
+  await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/vnd.android.package-archive',buffer:Buffer.from([1,2,3])});
+  await f.page.locator('#stage-apk').click();await f.settled();
+  assert.match(await f.page.locator('#artifact-state').textContent(),/staged/i);
+  await f.page.locator('#inspect-apk').click();await f.settled();
+  assert.equal(await f.page.locator('#apk-package').textContent(),'example.fixture.app');
+  const inspection=f.calls.find(call=>call.body?.action==='apk.inspect').body;
+  assert.deepEqual(Object.keys(inspection).sort(),['requestId','action','artifactId','sha256','sizeBytes'].sort());
+  assert.equal(inspection.artifactId,'00000000000040008000000000000003');assert.equal(f.mutations().length,0);
+  assert.equal(f.calls.some(call=>call.body?.action==='devices'),false);
+  await f.page.setViewportSize({width:390,height:844});
+  assert.equal(await f.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Staged identities fit mobile width');
+  if(process.env.QFM_BROWSER_UI_EVIDENCE)await f.page.screenshot({path:path.join(process.env.QFM_BROWSER_UI_EVIDENCE,'artifact-inspection-mobile.png'),fullPage:true});
+  await f.page.locator('#remove-artifact').click();await f.settled();
+  assert.equal(await f.page.locator('#inspect-apk').isDisabled(),true);
+  assert.equal(await f.page.locator('#apk-package').textContent(),'Unknown');
+});
+
+test('staged download checks bytes and unsupported hosts give an explicit alternative', async t => {
+  const f=await fixture(t);await f.connect();
+  await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});
+  await f.page.locator('#stage-apk').click();await f.settled();
+  const downloadEvent=f.page.waitForEvent('download');await f.page.locator('#download-artifact').click();
+  const download=await downloadEvent;assert.equal(download.suggestedFilename(),'fixture.apk');
+  assert.deepEqual(await fs.readFile(await download.path()),Buffer.from([1,2,3]));await f.settled();
+  const limited=await fixture(t,{session:route=>route.fulfill({json:{sessionId:'fixture-session',artifactStaging:{supported:false,reason:'Protected path staging unavailable.',alternative:'Use the Windows companion.'}}})});
+  await limited.connect();assert.equal(await limited.page.locator('#apk-upload').isDisabled(),true);
+  assert.match(await limited.page.locator('#artifact-capability').textContent(),/Windows companion/);
+  await limited.page.locator('#artifact-form').dispatchEvent('submit');assert.equal(limited.calls.length,1);
 });
 
 test('lost response retains original across reload, blocks replay and reconciles by GET only', async t => {

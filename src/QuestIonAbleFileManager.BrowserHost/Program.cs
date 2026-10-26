@@ -36,11 +36,12 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
 });
 // Resolve the selected host ADB only for an explicit operation, never page load/startup.
+var artifacts = new Lazy<BrowserArtifactStore>(() => new BrowserArtifactStore());
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
-});
+}, () => artifacts.Value);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
@@ -109,9 +110,11 @@ app.UseStaticFiles(new StaticFileOptions { ServeUnknownFileTypes = true, Default
 app.MapGet("/browser/v1/session", () => new
 {
     contractVersion = BrowserCommands.ContractVersion, sessionId = commands.SessionId,
-    actions = BrowserCommands.Actions, maxRequests = BrowserCommands.MaximumRequests,
-    platformCapabilities = OperatorPlatformCapabilities.Current
+    actions = commands.AvailableActions, maxRequests = BrowserCommands.MaximumRequests,
+    platformCapabilities = OperatorPlatformCapabilities.Current,
+    artifactStaging = BrowserArtifactStore.Capability
 });
+BrowserArtifactRoutes.Map(app, () => artifacts.Value);
 app.MapGet("/browser/v1/requests/{requestId}", (string requestId) =>
 {
     try { return Results.Json(commands.Get(requestId)); }
@@ -146,5 +149,15 @@ app.MapPost("/browser/v1/execute", async (HttpContext context) =>
     catch (OperationCanceledException)
     { return Results.Json(new { error = "request_body_timeout", dispatched = false }, statusCode: 408); }
 });
-await app.RunAsync();
-return 0;
+var shutdownCode = 0;
+try { await app.RunAsync(); }
+finally
+{
+    if (artifacts.IsValueCreated)
+    {
+        try { artifacts.Value.Dispose(); }
+        catch (Exception exception) when (exception is BrowserArtifactException or IOException or UnauthorizedAccessException)
+        { Console.Error.WriteLine("artifact_cleanup_incomplete"); shutdownCode = 3; }
+    }
+}
+return shutdownCode;

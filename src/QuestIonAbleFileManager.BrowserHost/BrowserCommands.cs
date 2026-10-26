@@ -7,7 +7,10 @@ namespace QuestIonAbleFileManager.BrowserHost;
 public sealed record BrowserCommandOutcome(
     string RequestId, string Action, string State,
     OperatorExecutionResult? Result = null, string? Error = null,
-    OperatorMutationReceipt? Mutation = null);
+    OperatorMutationReceipt? Mutation = null,
+    BrowserArtifactInspectionOutcome? ArtifactInspection = null);
+
+public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 
 public sealed record BrowserCommandRequest(string RequestId, string Action, OperatorCommand Command, bool Mutation);
 
@@ -21,6 +24,9 @@ public sealed class BrowserCommands
          "files.list", "apk.list", "apk.permissions", "device.performance", "device.performance-clear",
          "device.actor-observe", "device.actor-identity", "adb.forwards"];
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
+    private readonly Func<BrowserArtifactStore>? _artifactStore;
+    public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
+        ? [.. Actions, "apk.inspect"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
     private bool _running;
@@ -41,8 +47,12 @@ public sealed class BrowserCommands
         return await executor.ExecuteAsync(command, cancellation).ConfigureAwait(false);
     }
 
-    public BrowserCommands(Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> execute) =>
+    public BrowserCommands(Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> execute,
+        Func<BrowserArtifactStore>? artifactStore = null)
+    {
         _execute = execute;
+        _artifactStore = artifactStore;
+    }
 
     public void RequireSession(string session)
     {
@@ -56,7 +66,20 @@ public sealed class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
-        var request = Parse(body);
+        var artifact = BrowserArtifactCommands.IsArtifactAction(body) ? BrowserArtifactCommands.Parse(body) : null;
+        if (artifact is not null)
+        {
+            // A consumed ID remains consumed even after its artifact was removed.
+            lock (_admission)
+            {
+                if (_requests.ContainsKey(artifact.RequestId)) throw new BrowserRequestException("request_already_consumed", 409);
+                if (_running) throw new BrowserRequestException("busy", 409);
+                if (_requests.Count >= MaximumRequests) throw new BrowserRequestException("session_capacity_reached", 409);
+            }
+        }
+        await using var artifactLease = await AcquireArtifactAsync(artifact, stopping).ConfigureAwait(false);
+        var request = artifact is null ? Parse(body) : new BrowserCommandRequest(
+            artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), false);
         lock (_admission)
         {
             if (_requests.ContainsKey(request.RequestId))
@@ -84,7 +107,18 @@ public sealed class BrowserCommands
                 var state = request.Mutation
                     ? result.MutationReceipt?.Stage == OperatorMutationStage.Confirmed || connected ? "completed" : "pending"
                     : "completed";
-                outcome = new(request.RequestId, request.Action, state, result);
+                if (artifactLease is not null)
+                {
+                    var inspection = result.ApkArtifactInspection;
+                    if (inspection is null || inspection.Sha256 != artifactLease.Receipt.Sha256 ||
+                        inspection.SizeBytes != artifactLease.Receipt.SizeBytes)
+                        outcome = new(request.RequestId, request.Action, "failed", Error: "artifact_inspection_binding_mismatch");
+                    else
+                        // Core commands and inspector source paths stay inside the connector.
+                        outcome = new(request.RequestId, request.Action, state, ArtifactInspection: new(
+                            artifactLease.Receipt, inspection with { Path = artifactLease.Receipt.FileName }));
+                }
+                else outcome = new(request.RequestId, request.Action, state, result);
             }
             catch (OperatorMutationExecutionException exception)
             {
@@ -102,6 +136,25 @@ public sealed class BrowserCommands
             return outcome;
         }
         finally { lock (_admission) { _running = false; } }
+    }
+
+    private async Task<BrowserArtifactLease?> AcquireArtifactAsync(BrowserArtifactCommandRequest? artifact,
+        CancellationToken cancellation)
+    {
+        if (artifact is null) return null;
+        if (_artifactStore is null || !BrowserArtifactStore.Capability.Supported)
+            throw new BrowserRequestException("artifact_staging_unavailable", 503);
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+            timeout.CancelAfter(TimeSpan.FromSeconds(90));
+            return await _artifactStore().AcquireAsync(artifact.ArtifactId, artifact.Sha256,
+                artifact.SizeBytes, timeout.Token).ConfigureAwait(false);
+        }
+        catch (BrowserArtifactException exception) { throw new BrowserRequestException(exception.Code, 409); }
+        catch (PlatformNotSupportedException) { throw new BrowserRequestException("artifact_staging_unavailable", 503); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        { throw new BrowserRequestException("artifact_access_failed", 409); }
     }
 
     public static BrowserCommandRequest Parse(ReadOnlyMemory<byte> body)

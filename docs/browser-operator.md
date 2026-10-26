@@ -85,6 +85,13 @@ All API routes require `Authorization: Bearer <private-credential>`.
 | `POST /browser/v1/execute` | One strict JSON command. Additionally requires `X-Qfm-Session` from the current session response. |
 | `GET /browser/v1/requests/{requestId}` | Original retained running/result state; also requires the session header. Never reruns an action. |
 
+Windows hosts additionally report `artifactStaging` platform support and
+advertise `apk.inspect`. Support is not root admission: the first explicit
+staging request must still create a private, local NTFS directory and retain
+its native file/ancestor handles. Other platforms return a fixed unavailable
+reason and the Windows companion alternative. They retain portable device
+read/control routes.
+
 Execute Content-Type is exactly `application/json`. Bodies are capped at
 4 KiB, JSON depth is capped, fields are case-sensitive, duplicate/unknown
 fields reject, and each action requires exactly its listed fields:
@@ -106,6 +113,7 @@ fields reject, and each action requires exactly its listed fields:
 | `device.actor-observe` | `serial`, `pid` (positive process ID) |
 | `device.actor-identity` | `serial`, `pid` (positive process ID) |
 | `adb.forwards` | `serial` |
+| `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
 
 Port is an integer 1–65535. Hold duration is an integer 60000–28800000
 milliseconds. CPU/GPU values are integers 0–5 or null to preserve that override;
@@ -165,6 +173,45 @@ the new process generates a different session nonce and rejects old session
 headers, even if the private bearer was reused. This is session-scoped replay
 protection, not durable crash recovery. Preserve unresolved original operation
 identity and inspect current state before any explicit recovery.
+
+## Protected transient artifact transport
+
+All artifact routes require the same exact origin, bearer and current session
+header. They never accept a host filesystem path. Staging is currently Windows
+NTFS only, with a private ACL, a retained owner marker, ancestor/file identity
+checks, immutable leases and nonrecursive owned-file cleanup. This does not
+replace the separate Local API's durable operation authority.
+
+| Route | Input and result |
+| --- | --- |
+| `POST /browser/v1/artifacts` | Raw `application/octet-stream`; `X-Qfm-File-Name`; optional `X-Qfm-Artifact-Sha256`. Returns HTTP 201 and `{state:"staged",scope:"localOnly",artifact:{id,fileName,sizeBytes,sha256},deviceDispatched:false}`. |
+| `GET /browser/v1/artifacts/{id}` | `X-Qfm-Artifact-Sha256` and `X-Qfm-Artifact-Size-Bytes` must match the original receipt. Returns only those verified bytes as an attachment. |
+| `DELETE /browser/v1/artifacts/{id}` | Removes one owned unleased staged file. It never removes the original user file. |
+| `POST /browser/v1/artifacts/cleanup` | Empty body; explicitly clears owned unleased staged files. Active custody and foreign files remain retained. |
+
+The upload endpoint alone widens the command body's 4 KiB limit. Upload and
+download have a 90-second deadline and enforce 256 MiB per file, 8 retained files
+and 512 MiB total per process. A file name is one bounded simple basename; no
+slashes, traversal, device names or alternate streams. The UI offers an editable
+staged name for source names outside that contract.
+
+`apk.inspect` uses the same immutable Core factory and inspector as the CLI,
+bound to that artifact's exact ID, size and lowercase SHA-256. It consumes a
+normal one-use request ID. Its response uses `artifactInspection` with the
+artifact receipt and Core inspection facts; Core commands and private staging
+paths stay inside the connector. The inspection's `path` is only the staged
+display filename. A mismatch fails without publishing inspection success.
+
+The shell never caches these routes. Download additionally verifies the final
+size and SHA-256 in the browser. A lost upload response never retries; explicitly
+clear staged files after reconnecting if local capacity needs recovery. The UI
+keeps staged references in tab memory and rejects them when the host session
+changes. Process restart invalidates IDs; it does not establish durable crash
+recovery or authorize scavenging unrelated files.
+
+The current artifact slice performs local staging and inspection only. Browser
+device push, install/deploy and related uncertain-effect custody remain separate
+migration work. Use the existing typed CLI/WPF for those current operations.
 
 ## Power and existing supervisors
 

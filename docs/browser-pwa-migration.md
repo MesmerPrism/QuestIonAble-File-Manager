@@ -23,6 +23,7 @@ requirements stay with shared Core.
 | Browser USB | Existing explicit, read-only WebUSB serial/boot/battery proof, browser/driver dependent. | Keep shared ADB running and use the local connector when USB is busy/unavailable. |
 | Phone / tablet | Responsive shell/help; browser installation varies. Localhost cannot reach another computer's connector. | Use the PWA on the attached computer; no remote connector mode is claimed. |
 | Offline | Installed static shell/help, honest disconnected state; no API/private cache or queued effects. | Start the local connector and explicitly connect/read current state. USB can work while the wider network is offline. |
+| Protected staging | Windows NTFS upload/download/cleanup and shared Core APK inspection. Native handles, ACLs and exact byte identity verified. | Linux/macOS report unavailable; use Windows companion for these staged-path features pending a portable equivalent. |
 
 ## Complete operator migration map
 
@@ -33,7 +34,7 @@ requirements stay with shared Core.
 | Directory list/open/up | `files list`; browser implemented. | Serial-scoped shell-readable absolute paths and literal file-name rendering. |
 | Pull/download and push/upload | `files pull/push`; browser pending. | Browser-selected bytes and bounded host-owned staging/download handles; no caller-selected local path. Preserve partial/uncertain transfer and clean only owned data. CLI explicit file paths remain supported. |
 | Package list / single APK export + SHA256 | `apk list/export`; browser list implemented, export pending. | Export is only installed APK, no app data/OBBs/assets/entitlements. Split exports stay explicit rejection with supported complete-set alternative. |
-| APK inspect/preflight | `apk inspect/preflight`; browser pending. | Host Build Tools plus immutable selected artifact, signer/version/SDK/launcher evidence. Stage uploads with digest/length identity. |
+| APK inspect/preflight | `apk inspect` implemented over opaque staged upload; browser preflight pending. | Windows NTFS protected staging and host Build Tools. Inspection binds digest/length and reports signer/version; preflight SDK/launcher/device joins remain with current CLI. |
 | Install single / complete split set / parallel targets | `apk install/install-bundle/install-parallel/install-bundle-parallel`; browser pending. | Existing explicit options, complete atomic split set, bounded per-target results and readback. No queued offline install. |
 | Deploy / launch / observe / diagnose / launch-diagnose | Shared inspected-deployment Core and typed CLI; browser pending. | Exact installed identity or explicit development-metadata policy, original request identity, bounded diagnostics. Transport/process/focus evidence is not app readiness. |
 | Stop / exact uninstall / permissions / exact-property snapshot-clear-restore | Existing closed APK factories; browser permission observation implemented, other projections pending. | Preserve package/byte ownership, explicit destructive cleanup/property confirmation, immutable snapshots and no replay after unknown effects. No generic property/shell UI. |
@@ -58,7 +59,9 @@ worker/offline test. Platform smoke tests use invented targets and fake runners,
 and establish no device effects. See `tools/browser-ui/README.md` and
 `browser-operator.md` for callable checks.
 
-Continue with bounded artifact staging/file transfer and full APK workflows. Kiosk,
+Continue with device file transfer and full APK workflows, retaining unknown-effect
+artifact custody. Protected local staging/inspection is implemented; portable
+native-path staging is still outstanding. Kiosk,
 profiles, Fleet and portable distribution follow the same action inventory.
 Update each row at tested checkpoints, with device evidence separate from
 source, browser and packaging proof. Do not block the existing product developer
