@@ -152,9 +152,161 @@ public sealed class KioskDirectOperatorTests
         }
     }
 
+    private const string LogicalRequestId = "kiosk_original_0001";
+
+    [Fact]
+    public void LegacyInvokeRetainsItsThreeArgumentClrSignatureAndValueBehavior()
+    {
+        var legacy = typeof(KioskDirectOperatorCommand).GetMethod(nameof(KioskDirectOperatorCommand.Invoke),
+            [typeof(RustyKioskCommand), typeof(string), typeof(bool)]);
+        Assert.NotNull(legacy);
+        var command = Assert.IsType<KioskDirectOperatorCommand>(legacy.Invoke(null, [RustyKioskCommand.Select, "  fixture-app  ", true]));
+        Assert.Equal("fixture-app", command.Value); Assert.Null(command.RequestId);
+        Assert.True(command.OperatorConfirmed); Assert.StartsWith("action_", command.ActionId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreallocatedInvokeRetainsExactLogicalIdAndExistingValueNormalization()
+    {
+        var command = Preallocated(RustyKioskCommand.Select, "  fixture-app  ", true, LogicalRequestId);
+        Assert.Equal(LogicalRequestId, command.RequestId); Assert.Equal("fixture-app", command.Value);
+        Assert.NotEqual(command.RequestId, command.ActionId); Assert.Equal(RustyKioskCommand.Select, command.KioskCommand);
+        Assert.True(command.OperatorConfirmed);
+    }
+
+    [Fact]
+    public async Task ExecutorForwardsTheRetainedLogicalIdWithoutSubstitutingActionOrTransportIdentity()
+    {
+        var handler = new DirectOperatorHandler();
+        using var client = Client(handler);
+        // The retained field exists independently of the new factory overload.
+        var command = KioskDirectOperatorCommand.Invoke(RustyKioskCommand.Status, null, true) with { RequestId = LogicalRequestId };
+        var result = await new KioskDirectOperatorExecutor(client).ExecuteAsync(command);
+        Assert.Equal(LogicalRequestId, Assert.Single(handler.LogicalRequestIds));
+        Assert.Equal(LogicalRequestId, Assert.Single(handler.KioskResultIds));
+        Assert.Equal(LogicalRequestId, result.Mutation.RequestId); Assert.Equal(LogicalRequestId, result.KioskResult!.RequestId);
+        Assert.Equal(command.ActionId, result.Mutation.ActionId); Assert.NotEqual(command.ActionId, result.Mutation.RequestId);
+        Assert.Equal(OperatorMutationStage.Confirmed, result.Mutation.Stage);
+        Assert.Equal(1, handler.KioskInvokeCount);
+        Assert.Equal(2, handler.TransportRequestIds.Count);
+        Assert.Equal(2, handler.TransportRequestIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(handler.TransportRequestIds, id => { Assert.StartsWith("http_", id, StringComparison.Ordinal); Assert.NotEqual(LogicalRequestId, id); Assert.NotEqual(command.ActionId, id); });
+        using var payload = JsonDocument.Parse(handler.LastKioskInvokeJson!);
+        Assert.Equal(["request_id", "command", "value"], payload.RootElement.EnumerateObject().Select(property => property.Name));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("short")]
+    [InlineData("kiosk has spaces")]
+    [InlineData("kiosk.with.dots")]
+    [InlineData("kiosk\nrequest_0001")]
+    [InlineData("kiosk/original_0001")]
+    [InlineData("kiosk_original_0001\n")]
+    public void InvalidPreallocatedIdsRejectAtTheFactory(string requestId) =>
+        Assert.Throws<ArgumentException>(() => Preallocated(RustyKioskCommand.Status, null, true, requestId));
+
+    [Fact]
+    public void OverlongPreallocatedIdRejectsAtTheFactory() =>
+        Assert.Throws<ArgumentException>(() => Preallocated(RustyKioskCommand.Status, null, true, new string('x', 65)));
+
+    [Theory]
+    [InlineData("AbCd_123")]
+    [InlineData("UPPER_Request-001")]
+    public void ValidLogicalRequestIdsKeepTheirExactCaseAndSpelling(string requestId) =>
+        Assert.Equal(requestId, Preallocated(RustyKioskCommand.Status, null, true, requestId).RequestId);
+
+    [Fact]
+    public void MaximumLengthLogicalIdRemainsSupported() =>
+        Assert.Equal(new string('a', 64), Preallocated(RustyKioskCommand.Status, null, true, new string('a', 64)).RequestId);
+
+    [Theory]
+    [InlineData("status")]
+    [InlineData("cancel")]
+    [InlineData("install")]
+    public void ExistingTypedRecoveryAndInstallAlsoRejectAnInvalidTrailingNewline(string action)
+    {
+        const string invalid = LogicalRequestId + "\n";
+        Assert.Throws<ArgumentException>(() => action switch
+        {
+            "status" => KioskDirectOperatorCommand.RequestStatus(invalid),
+            "cancel" => KioskDirectOperatorCommand.Cancel(invalid, true),
+            _ => KioskDirectOperatorCommand.Install([Path.GetFullPath("fixture.apk")], true, invalid)
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LegacyAndExplicitNullInvokeStillGenerateExactlyOneLogicalId(bool explicitNull)
+    {
+        var handler = new DirectOperatorHandler();
+        using var client = Client(handler);
+        var command = explicitNull ? Preallocated(RustyKioskCommand.Status, null, true, null) :
+            KioskDirectOperatorCommand.Invoke(RustyKioskCommand.Status, null, true);
+        Assert.Null(command.RequestId);
+        var result = await new KioskDirectOperatorExecutor(client).ExecuteAsync(command);
+        var generated = Assert.Single(handler.LogicalRequestIds);
+        Assert.Matches("^kiosk_[a-f0-9]{32}$", generated);
+        Assert.Equal(generated, Assert.Single(handler.KioskResultIds)); Assert.Equal(generated, result.Mutation.RequestId);
+        Assert.Null(command.RequestId); Assert.Equal(1, handler.KioskInvokeCount);
+    }
+
+    [Fact]
+    public async Task LostAdmissionReplyKeepsOriginalIdUsableForStatusAndCancelWithoutRepeatingInvoke()
+    {
+        var handler = new DirectOperatorHandler(loseKioskAdmissionReply: true);
+        using var client = Client(handler);
+        var executor = new KioskDirectOperatorExecutor(client);
+        var original = Preallocated(RustyKioskCommand.Select, "fixture-app", true, LogicalRequestId);
+        await Assert.ThrowsAsync<HttpRequestException>(() => executor.ExecuteAsync(original));
+        Assert.Equal(LogicalRequestId, original.RequestId); Assert.Equal(LogicalRequestId, Assert.Single(handler.LogicalRequestIds));
+        Assert.Equal(0, handler.KioskResultCount);
+        var status = await executor.ExecuteAsync(KioskDirectOperatorCommand.RequestStatus(original.RequestId!));
+        Assert.Equal(LogicalRequestId, status.RequestReceipt!.RequestId); Assert.Equal(OperatorMutationStage.Pending, status.Mutation.Stage);
+        var cancelled = await executor.ExecuteAsync(KioskDirectOperatorCommand.Cancel(original.RequestId!, true));
+        Assert.Equal(LogicalRequestId, cancelled.RequestReceipt!.RequestId); Assert.Equal(OperatorMutationStage.Cancelled, cancelled.Mutation.Stage);
+        Assert.Equal(LogicalRequestId, Assert.Single(handler.RequestStatusIds));
+        Assert.Equal(LogicalRequestId, Assert.Single(handler.CancelledRequestIds));
+        Assert.Equal(1, handler.KioskInvokeCount); Assert.Equal(3, handler.TransportRequestIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Theory]
+    [InlineData("admission-id")]
+    [InlineData("result-id")]
+    [InlineData("result-command")]
+    public async Task PreallocatedInvokeStillRejectsCrossedAdmissionAndResultIdentities(string crossed)
+    {
+        var handler = new DirectOperatorHandler(crossedKioskResponse: crossed);
+        using var client = Client(handler);
+        var command = Preallocated(RustyKioskCommand.Status, null, true, LogicalRequestId);
+        await Assert.ThrowsAsync<InvalidDataException>(() => new KioskDirectOperatorExecutor(client).ExecuteAsync(command));
+        Assert.Equal(LogicalRequestId, command.RequestId); Assert.Equal(LogicalRequestId, Assert.Single(handler.LogicalRequestIds));
+        Assert.Equal(1, handler.KioskInvokeCount);
+        Assert.Equal(crossed == "admission-id" ? 0 : 1, handler.KioskResultCount);
+    }
+
+    [Fact]
+    public async Task PreallocatedInvokeDoesNotBypassExistingOperatorConfirmation()
+    {
+        var handler = new DirectOperatorHandler();
+        using var client = Client(handler);
+        var command = Preallocated(RustyKioskCommand.Status, null, false, LogicalRequestId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new KioskDirectOperatorExecutor(client).ExecuteAsync(command));
+        Assert.Empty(handler.TransportRequestIds);
+    }
+
+    private static RustyKioskDirectClient Client(DirectOperatorHandler handler) => new(
+        RustyKioskDirectEndpoint.Parse("http://192.0.2.1:39873", PairingCode), new HttpClient(handler));
+
+    private static KioskDirectOperatorCommand Preallocated(RustyKioskCommand command, string? value, bool confirmed, string? requestId) =>
+        KioskDirectOperatorCommand.Invoke(command, value, confirmed, requestId);
+
     private sealed class DirectOperatorHandler(
         bool mismatchedStagingReadback = false,
-        bool cleanupRequiredFirst = false) : HttpMessageHandler
+        bool cleanupRequiredFirst = false,
+        bool loseKioskAdmissionReply = false,
+        string? crossedKioskResponse = null) : HttpMessageHandler
     {
         private string? _kioskRequestId;
         private string? _kioskCommand;
@@ -169,11 +321,18 @@ public sealed class KioskDirectOperatorTests
         public int KioskResultCount { get; private set; }
         public List<string> InstallBodies { get; } = [];
         public List<string> InstallTransportRequestIds { get; } = [];
+        public List<string> LogicalRequestIds { get; } = [];
+        public List<string> KioskResultIds { get; } = [];
+        public List<string> RequestStatusIds { get; } = [];
+        public List<string> CancelledRequestIds { get; } = [];
+        public List<string> TransportRequestIds { get; } = [];
+        public string? LastKioskInvokeJson { get; private set; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            TransportRequestIds.Add(request.Headers.GetValues("X-Rusty-Request-Id").Single());
             object body;
             if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/status")
             {
@@ -194,16 +353,20 @@ public sealed class KioskDirectOperatorTests
                     request.Content!.ReadAsByteArrayAsync(cancellationToken).GetAwaiter().GetResult());
                 _kioskRequestId = document.RootElement.GetProperty("request_id").GetString();
                 _kioskCommand = document.RootElement.GetProperty("command").GetString();
-                body = new { accepted = true, message = "accepted" };
+                LastKioskInvokeJson = document.RootElement.GetRawText();
+                LogicalRequestIds.Add(_kioskRequestId!);
+                if (loseKioskAdmissionReply) throw new HttpRequestException("Synthetic lost admission reply.");
+                body = new { accepted = true, message = "accepted", request_id = crossedKioskResponse == "admission-id" ? "kiosk_crossed_0001" : _kioskRequestId };
             }
             else if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/kiosk/result")
             {
                 KioskResultCount++;
+                KioskResultIds.Add(QueryRequestId(request));
                 body = new
                 {
                     schema = RustyKioskContract.ResultSchema,
-                    request_id = _kioskRequestId,
-                    command = _kioskCommand,
+                    request_id = crossedKioskResponse == "result-id" ? "kiosk_crossed_0001" : _kioskRequestId,
+                    command = crossedKioskResponse == "result-command" ? "select" : _kioskCommand,
                     accepted = true,
                     completed = true,
                     message = "complete",
@@ -232,6 +395,19 @@ public sealed class KioskDirectOperatorTests
                         tag_file_path = RustyKioskContract.TagFilePath
                     }
                 };
+            }
+            else if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/v1/kiosk/request-status")
+            {
+                var id = QueryRequestId(request); RequireOriginal(id); RequestStatusIds.Add(id);
+                body = new { request_id = id, operation_state = "pending", accepted = true, completed = false,
+                    message = "Original request is pending.", enqueued_at_ms = 1000L, expires_at_ms = 2000L };
+            }
+            else if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath == "/v1/kiosk/cancel")
+            {
+                using var json = JsonDocument.Parse(request.Content!.ReadAsByteArrayAsync(cancellationToken).GetAwaiter().GetResult());
+                var id = json.RootElement.GetProperty("request_id").GetString()!; RequireOriginal(id); CancelledRequestIds.Add(id);
+                body = new { request_id = id, operation_state = "cancelled", accepted = true, completed = true,
+                    message = "Original pending request was cancelled.", enqueued_at_ms = 1000L, expires_at_ms = 2000L };
             }
             else if (request.Method == HttpMethod.Put && request.RequestUri?.AbsolutePath.StartsWith(
                     "/v1/staging/files/",
@@ -297,6 +473,13 @@ public sealed class KioskDirectOperatorTests
                 throw new InvalidOperationException($"Unexpected Direct Link test route: {request.Method} {request.RequestUri}");
             }
             return Task.FromResult(Sign(request, JsonSerializer.SerializeToUtf8Bytes(body)));
+        }
+
+        private static string QueryRequestId(HttpRequestMessage request) =>
+            Uri.UnescapeDataString(request.RequestUri!.Query["?request_id=".Length..]);
+        private void RequireOriginal(string id)
+        {
+            if (id != _kioskRequestId) throw new InvalidDataException("The synthetic remote owner has no such original request.");
         }
 
         private static HttpResponseMessage Sign(HttpRequestMessage request, byte[] body)

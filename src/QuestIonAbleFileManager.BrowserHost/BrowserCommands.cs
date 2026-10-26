@@ -12,7 +12,8 @@ public sealed record BrowserCommandOutcome(
     BrowserArtifactTransferOutcome? ArtifactTransfer = null,
     BrowserArtifactReadOutcome? ArtifactRead = null,
     BrowserArtifactPushOutcome? ArtifactPush = null,
-    BrowserKioskOutcome? Kiosk = null);
+    BrowserKioskOutcome? Kiosk = null,
+    BrowserDirectConnectionOutcome? KioskDirectConnection = null);
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
@@ -34,7 +35,9 @@ public sealed partial class BrowserCommands
     private readonly Func<BrowserArtifactStore>? _artifactStore;
     private readonly BrowserOperationGate _operationGate;
     private readonly Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? _capture;
-    public IReadOnlyList<string> AvailableActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
+    private readonly BrowserDirectConnections? _directConnections;
+    public IReadOnlyList<string> AvailableActions => [.. ArtifactActions, .. _directConnections is null ? [] : BrowserDirectCommands.Actions];
+    private IReadOnlyList<string> ArtifactActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
         ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push", "files.pull", "apk.export"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
@@ -58,12 +61,15 @@ public sealed partial class BrowserCommands
 
     public BrowserCommands(Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> execute,
         Func<BrowserArtifactStore>? artifactStore = null, BrowserOperationGate? operationGate = null,
-        Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? capture = null)
+        Func<BrowserTransferRequest, CancellationToken, Task<BrowserArtifactTransferOutcome>>? capture = null,
+        BrowserDirectConnections? directConnections = null)
     {
         _execute = execute;
         _artifactStore = artifactStore;
         _operationGate = operationGate ?? new BrowserOperationGate();
         _capture = capture;
+        _directConnections = directConnections;
+        _directConnections?.BindGate(_operationGate);
     }
 
     public void RequireSession(string session)
@@ -78,6 +84,8 @@ public sealed partial class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
+        if (BrowserDirectCommands.IsDirectAction(body))
+            return await ExecuteDirectAsync(BrowserDirectCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserKioskCommands.IsKioskAction(body))
             return await ExecuteKioskAsync(BrowserKioskCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserTransferCommands.IsTransferAction(body))

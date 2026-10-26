@@ -19,7 +19,9 @@ advanced APK, Kiosk, profile and distribution work. Its bundled read-only WebUSB
 app; direct USB access can conflict with a running host ADB connection. This
 frontdoor retains its own origin/session boundary; configured retained APK
 operations reuse the existing inspected-deployment owner in-process. Signed
-release packaging remains separate.
+release packaging remains separate. The optional
+[development connector archive](docs/browser-connector-package.md) packages the
+complete shell and shared host for matching .NET/ASP.NET Core runtimes.
 
 On a Windows NTFS host, the browser also stages a selected local APK, inspects
 it through shared Core, and downloads/removes its verified temporary bytes.
@@ -27,6 +29,10 @@ Artifact-bound readiness preflight and exact or explicitly weaker development
 runtime reads work without configuring the retained owner. An optional Kiosk
 card reads installation facts, explicitly opens its catalog, and selects a reviewed
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
+An explicit USB Direct card adopts one short-lived Kiosk operator connection,
+reads signed status and closes its opaque handle with separate listener cleanup.
+Its credential stays on the host; expiry or status never reconciles a lost effect
+reply, and a restarted host cannot restore the old connection.
 It can also stage generic files for an explicitly approved push to a full headset
 file path, capture bounded file pulls and single-APK exports, then verify streamed
 saves where the browser supports a file picker. Push confirms remote size only.

@@ -11,6 +11,97 @@ public sealed class RustyKioskUsbDirectLinkTests
         DateTimeOffset.FromUnixTimeMilliseconds(1_785_660_000_000L);
 
     [Theory]
+    [InlineData(RustyKioskProductChannel.Stable)]
+    [InlineData(RustyKioskProductChannel.Labs)]
+    public async Task PreallocatedOperation_BindsEnableReceiptAndOwnedCleanupToOriginalId(
+        RustyKioskProductChannel channel)
+    {
+        const string operationId = "usb_0123456789abcdef0123456789abcdef";
+        var runner = new BootstrapRunner(channel, enabledByRequest: true, Now);
+        var bootstrapper = new RustyKioskUsbDirectLinkBootstrapper(new AdbClient("adb", runner), () => Now);
+        var session = await bootstrapper.ConnectWithOperationIdAsync(
+            "USB_TARGET", channel, operatorConfirmed: true, operationId,
+            new HttpClient(new SessionStatusHandler(runner.Secret, runner.SessionId, runner.Generation)));
+
+        Assert.Equal(operationId, session.Receipt.OperationId);
+        var cleanup = await session.CloseAsync();
+        Assert.Equal(operationId, cleanup.OperationId);
+        Assert.Equal(OperatorMutationStage.Confirmed, cleanup.Stage);
+        foreach (var command in new[] { "direct-enable", "direct-disable" })
+        {
+            var arguments = Assert.Single(runner.AllArgumentSets, arguments => arguments.Contains(command));
+            Assert.Equal(operationId, arguments[arguments.ToList().IndexOf("--arg") + 1]);
+        }
+        Assert.DoesNotContain(runner.SecretBase64, session.Receipt.ToString());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("usb_00000000000000000000000000000000")]
+    [InlineData("usb_0123456789ABCDEF0123456789ABCDEF")]
+    [InlineData("usb_0123456789abcdef0123456789abcde")]
+    [InlineData("usb_0123456789abcdef0123456789abcdef0")]
+    [InlineData("usb_0123456789abcdef0123456789abcdef\n")]
+    [InlineData("pc-0123456789abcdef0123456789abcdef")]
+    public async Task PreallocatedOperation_RejectsInvalidIdBeforeAnyAdb(string? operationId)
+    {
+        var runner = new BootstrapRunner(RustyKioskProductChannel.Stable, enabledByRequest: true, Now);
+        var bootstrapper = new RustyKioskUsbDirectLinkBootstrapper(new AdbClient("adb", runner), () => Now);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => bootstrapper.ConnectWithOperationIdAsync(
+            "USB_TARGET", RustyKioskProductChannel.Stable, true, operationId!));
+
+        Assert.Empty(runner.AllArgumentSets);
+    }
+
+    [Fact]
+    public async Task PreallocatedOperation_LostEnableResponseRecoversOnlyOriginalIdWithoutEnableReplay()
+    {
+        const string operationId = "usb_0123456789abcdef0123456789abcdef";
+        var runner = new BootstrapRunner(RustyKioskProductChannel.Labs, enabledByRequest: true, Now,
+            loseEnableResponse: true, loseFirstRecoveryResponse: true);
+        var bootstrapper = new RustyKioskUsbDirectLinkBootstrapper(new AdbClient("adb", runner), () => Now);
+
+        var error = await Assert.ThrowsAsync<RustyKioskUsbDirectBootstrapException>(() =>
+            bootstrapper.ConnectWithOperationIdAsync(
+                "USB_TARGET", RustyKioskProductChannel.Labs, true, operationId));
+
+        Assert.Equal(operationId, error.CleanupReceipt.OperationId);
+        Assert.Equal(OperatorMutationStage.Confirmed, error.CleanupReceipt.Stage);
+        Assert.Single(runner.AllArgumentSets, arguments => arguments.Contains("direct-enable"));
+        var recovery = Assert.Single(runner.AllArgumentSets,
+            arguments => arguments.Contains("direct-recover-disable"));
+        Assert.Equal(operationId, recovery[recovery.ToList().IndexOf("--arg") + 1]);
+        Assert.DoesNotContain(runner.SecretBase64, error.ToString());
+    }
+
+    [Fact]
+    public async Task PreallocatedOperation_StillRequiresExplicitConfirmationBeforeAdb()
+    {
+        var runner = new BootstrapRunner(RustyKioskProductChannel.Stable, enabledByRequest: true, Now);
+        var bootstrapper = new RustyKioskUsbDirectLinkBootstrapper(new AdbClient("adb", runner), () => Now);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => bootstrapper.ConnectWithOperationIdAsync(
+            "USB_TARGET", RustyKioskProductChannel.Stable, false,
+            "usb_0123456789abcdef0123456789abcdef"));
+
+        Assert.Empty(runner.AllArgumentSets);
+    }
+
+    [Fact]
+    public void ExistingConnectClrSignatureAndNullHttpClientCallRemainAvailable()
+    {
+        Assert.NotNull(typeof(RustyKioskUsbDirectLinkBootstrapper).GetMethod("ConnectAsync",
+            [typeof(string), typeof(RustyKioskProductChannel), typeof(bool), typeof(HttpClient),
+             typeof(CancellationToken)]));
+        // Compile the legacy explicit-null call without invoking it or creating a transport.
+        static Task<RustyKioskUsbDirectLinkSession> LegacyCall(RustyKioskUsbDirectLinkBootstrapper bootstrapper) =>
+            bootstrapper.ConnectAsync("USB_TARGET", RustyKioskProductChannel.Stable, true, null);
+        Assert.NotNull((Func<RustyKioskUsbDirectLinkBootstrapper, Task<RustyKioskUsbDirectLinkSession>>)LegacyCall);
+    }
+
+    [Theory]
     [InlineData(RustyKioskProductChannel.Stable, "io.github.mesmerprism.rustykiosk", "io.github.mesmerprism.rustykiosk.operator")]
     [InlineData(RustyKioskProductChannel.Labs, "io.github.mesmerprism.rustykiosk.labs", "io.github.mesmerprism.rustykiosk.labs.operator")]
     public async Task Connect_BindsExactUsbSerialAndFixedProductIdentity(
