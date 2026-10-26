@@ -40,6 +40,10 @@ The local Windows connectivity profile card uses the existing current-user
 Credential Manager owner for explicit list/status, private input, replacement and
 revocation. It tests stored validity, not connectivity, and keeps private documents
 out of staging, saved references and the offline cache.
+A separate Windows Fleet status card explicitly reads trusted release/replay
+facts through the existing owner, without ADB or profile setup. It reports the
+host configuration rather than installed-service health; guided installation
+remains in the typed Windows CLI/WPF.
 It can also stage generic files for an explicitly approved push to a full headset
 file path, capture bounded file pulls and single-APK exports, then verify streamed
 saves where the browser supports a file picker. Push confirms remote size only.

@@ -115,6 +115,26 @@
       <p class="hint">Unknown pushes block new mutations. Reconnect and reload send nothing. Read original result only uses the original request and host session; a missing result after restart does not prove no effect. Preserve the reference and use the typed QFM CLI/owner route for recovery.</p>
     </section>
     <section class="panel" aria-labelledby="apps-title"><div class="section-heading"><h2 id="apps-title">Installed apps</h2><button id="list-packages" disabled>List third-party apps</button></div><ul id="packages" class="package-list" aria-label="Installed packages"></ul><form id="permissions-form"><label for="package-name">Package name</label><div class="input-action"><input id="package-name" placeholder="Select a listed app or enter its exact package" maxlength="256" autocomplete="off" spellcheck="false"><button id="read-permissions" disabled>Read permissions</button></div></form><p id="permissions-state" class="hint">Permission facts are read-only; they do not grant access or decide app readiness.</p></section>
+    <section id="fleet-status-view" class="panel" aria-labelledby="fleet-status-title">
+      <h2 id="fleet-status-title">Get Fleet</h2>
+      <p id="fleet-status-capability" class="hint">A Windows QFM companion is required. Release configuration is unknown until an explicit status read.</p>
+      <button id="fleet-status-read" type="button" disabled>Read trusted release status</button>
+      <p id="fleet-status-state" role="status">No trusted release status read.</p>
+      <dl id="fleet-status-facts" class="apk-facts" hidden>
+        <div><dt>Configured</dt><dd id="fleet-status-configured">Unknown</dd></div>
+        <div><dt>Release status</dt><dd id="fleet-status-status">Unknown</dd></div>
+        <div><dt>Source kind</dt><dd id="fleet-status-source">Unknown</dd></div>
+        <div><dt>Product</dt><dd id="fleet-status-product">Unknown</dd></div>
+        <div><dt>Version</dt><dd id="fleet-status-version">Unknown</dd></div>
+        <div><dt>Product channel</dt><dd id="fleet-status-channel">Unknown</dd></div>
+        <div><dt>Descriptor ID</dt><dd id="fleet-status-descriptor">Unknown</dd></div>
+        <div><dt>Descriptor SHA-256</dt><dd id="fleet-status-sha">Unknown</dd></div>
+        <div><dt>Highest handoff version</dt><dd id="fleet-status-highest">Unknown</dd></div>
+        <div><dt>Last handoff outcome</dt><dd id="fleet-status-outcome">Unknown</dd></div>
+        <div><dt>Observed at (Unix ms)</dt><dd id="fleet-status-observed">Unknown</dd></div>
+      </dl>
+      <p class="hint">Release metadata and replay observations are not installed-service health, enrollment or acknowledgement of any prior operation. No headset selection is needed. This read does not start an installer.</p>
+    </section>
     <section id="profile-view" class="panel" aria-labelledby="profile-title">
       <h2 id="profile-title">Windows Fleet connectivity profiles</h2>
       <p id="profile-capability" class="hint">Connect to a Windows QFM companion to manage current-user profiles.</p>
