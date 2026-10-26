@@ -115,6 +115,8 @@ fields reject, and each action requires exactly its listed fields:
 | `device.actor-identity` | `serial`, `pid` (positive process ID) |
 | `adb.forwards` | `serial` |
 | `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
+| `files.pull` | `serial`, `remotePath` (one absolute headset file), `fileName` (simple download label) |
+| `apk.export` | `serial`, `package`, `fileName` (simple label ending in `.apk`) |
 
 Port is an integer 1–65535. Hold duration is an integer 60000–28800000
 milliseconds. CPU/GPU values are integers 0–5 or null to preserve that override;
@@ -167,8 +169,10 @@ new host session after outstanding uncertainty has been handled.
 record may still be running or may have changed the target. A duplicate of a
 running ID is classified as consumed before the busy check.
 
-Body reads have a five-second deadline and admitted commands have a 90-second
-cancellation deadline through Core's bounded runner. Closing the page does not
+Body reads have a five-second deadline. Ordinary admitted commands have a
+90-second cancellation deadline; staged APK inspection/lease acquisition and
+read captures instead share a five-minute lifetime with their bounded runners.
+Closing the page does not
 cancel an admitted effect. In-memory records do not survive process restart;
 the new process generates a different session nonce and rejects old session
 headers, even if the private bearer was reused. This is session-scoped replay
@@ -191,8 +195,11 @@ replace the separate Local API's durable operation authority.
 | `POST /browser/v1/artifacts/cleanup` | Empty body; explicitly clears owned unleased staged files. Active custody and foreign files remain retained. |
 
 The upload endpoint alone widens the command body's 4 KiB limit. Upload and
-download have a 90-second deadline and enforce 256 MiB per file, 8 retained files
-and 512 MiB total per process. A file name is one bounded simple basename; no
+download have a five-minute deadline and enforce 1 GiB per file, 8 retained files
+and 2 GiB total per process. The authenticated `artifactStaging` capability
+reports `maximumFileBytes`, `maximumTotalBytes`, `maximumFiles` and
+`transferTimeoutSeconds`; these are separate from the retained owner's budgets.
+A file name is one bounded simple basename; no
 slashes, traversal, device names or alternate streams. The UI offers an editable
 staged name for source names outside that contract.
 
@@ -203,8 +210,20 @@ artifact receipt and Core inspection facts; Core commands and private staging
 paths stay inside the connector. The inspection's `path` is only the staged
 display filename. A mismatch fails without publishing inspection success.
 
-The shell never caches these routes. Download additionally verifies the final
-size and SHA-256 in the browser. A lost upload response never retries; explicitly
+The shell never caches these routes. Save uses the browser's file picker and a
+streaming incremental SHA-256 check where File System Access is supported.
+The picker opens directly from the Save click before any fetch. The helper
+checks response headers, exact length and final SHA-256 before closing the
+selected writable file. An error aborts the writable; a lost close acknowledgement
+retains save uncertainty. A five-minute receive/write/verify deadline starts
+after the picker. The selected destination and bytes never enter browser storage
+or the service-worker cache. The bundled verifier and its MIT notice are fixed
+public assets.
+
+Other browsers use a buffered, size/hash-verified download only up to 256 MiB.
+That path reports a browser download handoff, not confirmed disk-save completion.
+Larger artifacts need a supporting streaming browser or the existing CLI;
+unsupported Save sends no download request. A lost upload response never retries; explicitly
 clear staged files after reconnecting if local capacity needs recovery. The UI
 keeps staged references in tab memory and rejects them when the host session
 changes. Process restart invalidates IDs; it does not establish durable crash
@@ -214,6 +233,38 @@ Transient staging performs local transport and inspection. The separate retained
 workflow below owns inspected single-APK install, launch and runtime observation.
 Device file push and the remaining advanced deployment options still use the
 existing typed CLI/WPF during migration.
+
+## Bounded file pull and single-APK export
+
+Choose an exact ready target and one full headset file path, then **Stage
+download**. Package export instead chooses an exact package and an `.apk` label.
+These read-only actions use the normal `/execute` one-use request ledger and
+shared operation gate. Core rediscovers the selected target, reads one opened
+regular remote file through the binary `exec-out` transport. An internal fresh
+nonce, bounded size header, exact payload length and completion trailer preserve
+binary data while proving the fixed script finished its source checks. The byte
+ceiling applies before and during copying; Core independently validates both
+wire and payload counts/hashes. Text shell output is not a binary file channel.
+The protected store independently hashes the finished bytes before publishing
+an opaque receipt. Its five-minute capture deadline includes output verification.
+Failure, overflow, cancellation or source/package-path drift cannot publish a
+successful partial download. Missing, malformed, extra or mismatched framing
+fails closed; remote exit-zero alone is not capture completion.
+
+Results use `artifactTransfer` with `{artifact,serial,sourcePath,packageName,
+checksumText}`. Native output paths and process arguments stay on the host.
+The checksum describes the captured bytes, not an atomic app-data snapshot.
+Export rejects split packages before streaming, rechecks the package path set
+afterwards and returns `<sha256>  <filename>\n` checksum text instead of creating
+an unmanaged sidecar. It copies neither app data, assets nor entitlement.
+
+Review the capture scope, size and digest, then Save or explicitly Remove that
+one captured artifact. These references stay in tab memory and are invalidated
+by a new host session. They do not replace the staged local APK or retained
+operation references. Lost capture replies can leave bounded local files; use
+the existing explicit Clear action for owned unleased bytes. Reconnection never
+repeats a capture. File push remains separate: its existing Core readback proves
+remote size, not remote SHA-256, and uncertain writes need their own custody.
 
 ## Retained inspected APK operations
 

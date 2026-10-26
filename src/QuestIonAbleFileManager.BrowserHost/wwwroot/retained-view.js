@@ -23,7 +23,7 @@ function reference(value) {
   return {operationId:value.operationId, commandDigest:value.commandDigest,
     command:commands.has(value.command) ? value.command : '', target:textValue(value.target),
     artifactSha256:hash(value.artifactSha256) ? value.artifactSha256 : '',
-    artifactSizeBytes:Number.isSafeInteger(value.artifactSizeBytes) && value.artifactSizeBytes >= 0 && value.artifactSizeBytes <= 256 * 1024 * 1024 ? value.artifactSizeBytes : null,
+    artifactSizeBytes:Number.isSafeInteger(value.artifactSizeBytes) && value.artifactSizeBytes >= 0 && value.artifactSizeBytes <= 1024 * 1024 * 1024 ? value.artifactSizeBytes : null,
     expiresAt:textValue(value.expiresAt, 64), review,
     installOptions:value.command === 'apk.install-inspected' ? {
       replaceExisting:value.installOptions?.replaceExisting === true,

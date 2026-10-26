@@ -48,7 +48,8 @@ producer artifact, then pass that copy to QFM. Retain it for the composed run
 and remove only that task-owned copy when its custody ends. A link-count
 rejection is an input custody restriction, not an APK validity result. Browser
 upload instead creates its own single-link file from selected bytes, subject to
-the browser's separate 256 MiB limit; the CLI admission limit remains 1 GiB.
+the browser's separate 1 GiB per-file and 2 GiB aggregate capacity. Both browser
+and CLI admission retain a 1 GiB per-artifact ceiling.
 
 `apk install` repeats inspection immediately before its serial-scoped install.
 It then reads package paths from that exact serial and computes the complete

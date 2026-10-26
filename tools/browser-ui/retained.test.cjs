@@ -169,6 +169,20 @@ test('restored metadata is allowlisted and never stores API captures, paths or c
   assert.equal(f.calls.length,1);assert.equal(await f.page.locator('#native-execute').isDisabled(),true);
 });
 
+test('retained references restore exact1GiB metadata and discard larger sizes without replay',async t=>{
+  const f=await fixture(t);await f.prepare();
+  await f.page.evaluate(key=>{const value=JSON.parse(sessionStorage.getItem(key));value.artifactSizeBytes=1024*1024*1024;sessionStorage.setItem(key,JSON.stringify(value));},storageKey);
+  const calls=f.calls.length;
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);
+  assert.equal((await f.stored()).artifactSizeBytes,1073741824);
+  assert.equal(f.calls.length,calls);assert.equal(await f.page.locator('#native-execute').isDisabled(),true);
+  await f.page.evaluate(key=>{const value=JSON.parse(sessionStorage.getItem(key));value.artifactSizeBytes=1024*1024*1024+1;sessionStorage.setItem(key,JSON.stringify(value));},storageKey);
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);
+  assert.equal((await f.stored()).artifactSizeBytes,null);
+  assert.equal((await f.stored()).operationId,id);
+  assert.equal(f.calls.length,calls);assert.equal(await f.page.locator('#native-execute').isDisabled(),true);
+});
+
 test('expired approval cannot dispatch execution and nothing refreshes automatically',async t=>{
   const f=await fixture(t,{preflight:(route,body,value)=>route.fulfill({json:{...value,expiresAt:'2000-01-01T00:00:00Z'}})});
   await f.prepare();assert.equal(await f.page.locator('#native-confirm').isDisabled(),true);

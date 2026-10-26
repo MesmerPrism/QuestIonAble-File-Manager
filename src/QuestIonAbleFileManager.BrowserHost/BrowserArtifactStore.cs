@@ -2,15 +2,20 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using Microsoft.Win32.SafeHandles;
+using QuestIonAbleFileManager.Core;
 
 [assembly: InternalsVisibleTo("QuestIonAbleFileManager.BrowserHost.Tests")]
 
 namespace QuestIonAbleFileManager.BrowserHost;
 
-public sealed record BrowserArtifactCapability(bool Supported, string Code, string Reason, string Alternative);
+public sealed record BrowserArtifactCapability(bool Supported, string Code, string Reason, string Alternative,
+    long MaximumFileBytes = BrowserArtifactStore.MaximumFileBytes,
+    long MaximumTotalBytes = BrowserArtifactStore.MaximumTotalBytes,
+    int MaximumFiles = BrowserArtifactStore.MaximumFiles,
+    int TransferTimeoutSeconds = BrowserArtifactStore.TransferTimeoutSeconds);
 public sealed record BrowserArtifactReceipt(string Id, string FileName, long SizeBytes, string Sha256);
-internal sealed record BrowserArtifactLimits(long MaximumFileBytes = 256L * 1024 * 1024, int MaximumFiles = 8,
-    long MaximumTotalBytes = 512L * 1024 * 1024);
+internal sealed record BrowserArtifactLimits(long MaximumFileBytes = BrowserArtifactStore.MaximumFileBytes,
+    int MaximumFiles = BrowserArtifactStore.MaximumFiles, long MaximumTotalBytes = BrowserArtifactStore.MaximumTotalBytes);
 public sealed class BrowserArtifactException(string code, string? cleanupDebtId = null) : Exception(code)
 {
     public string Code { get; } = code;
@@ -43,6 +48,10 @@ public sealed class BrowserArtifactLease : IDisposable, IAsyncDisposable
 /// </summary>
 public sealed class BrowserArtifactStore : IDisposable
 {
+    public const long MaximumFileBytes = LocalApiStateLimits.DefaultMaximumSingleArtifactBytes;
+    public const long MaximumTotalBytes = LocalApiStateLimits.DefaultMaximumStagedBytes;
+    public const int MaximumFiles = 8;
+    public const int TransferTimeoutSeconds = 5 * 60;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly List<SafeFileHandle> _directories = [];
@@ -73,8 +82,8 @@ public sealed class BrowserArtifactStore : IDisposable
     internal BrowserArtifactStore(string parentDirectory, BrowserArtifactLimits limits)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException(Capability.Reason);
-        if (limits.MaximumFileBytes is < 1 or > 256L * 1024 * 1024 || limits.MaximumFiles is < 1 or > 8 ||
-            limits.MaximumTotalBytes is < 1 or > 512L * 1024 * 1024)
+        if (limits.MaximumFileBytes is < 1 or > MaximumFileBytes || limits.MaximumFiles is < 1 or > MaximumFiles ||
+            limits.MaximumTotalBytes is < 1 or > MaximumTotalBytes)
             throw new ArgumentOutOfRangeException(nameof(limits));
         _limits = limits;
         var parent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parentDirectory));

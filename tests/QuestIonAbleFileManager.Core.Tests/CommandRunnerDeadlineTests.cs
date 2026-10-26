@@ -94,6 +94,10 @@ public sealed class CommandRunnerDeadlineTests
     }
     private sealed class HeldPipeFixture : IDisposable
     {
+        // Cold compiler/antivirus startup on CI is setup, outside the runtime
+        // deadline measured above. Keep that setup finite without weakening
+        // the three-second pipe-drain assertions.
+        private static readonly TimeSpan CompilationTimeout = TimeSpan.FromMinutes(1);
         private readonly string directory = Path.Combine(Path.GetTempPath(), "qfm-drain-" + Guid.NewGuid().ToString("N"));
         public string Marker { get; }
         public string ChildReady { get; }
@@ -120,11 +124,11 @@ public sealed class CommandRunnerDeadlineTests
                 RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var argument in new[] { "/nologo", "/target:exe", "/out:" + Executable, source }) info.ArgumentList.Add(argument);
             using var build = Process.Start(info)!;
-            if (!build.WaitForExit(10000))
+            if (!build.WaitForExit((int)CompilationTimeout.TotalMilliseconds))
             {
                 build.Kill();
                 build.WaitForExit();
-                throw new TimeoutException("The owned drain fixture did not compile.");
+                throw new TimeoutException("The owned drain fixture did not compile within its one-minute setup budget.");
             }
             Assert.True(build.ExitCode == 0, build.StandardOutput.ReadToEnd() + build.StandardError.ReadToEnd());
         }

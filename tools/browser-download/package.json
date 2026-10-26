@@ -1,0 +1,15 @@
+{
+  "name": "qfm-browser-download-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

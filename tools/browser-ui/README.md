@@ -5,6 +5,8 @@ Run with Node and Playwright 1.62.1 plus its matching Chromium installed:
 ```powershell
 node --test tools/browser-ui/frontend.test.cjs
 node --test tools/browser-ui/retained.test.cjs
+node --test tools/browser-ui/transfers.test.cjs
+node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
 
@@ -25,6 +27,12 @@ The retained fixtures exercise exact review/approval, one-use execution, lost
 replies, saved original references, explicit status/cancel, and a separate
 read-only observation while an original remains unknown. They never contact
 the native retained owner or a device.
+Transfer fixtures keep read captures separate from local APK/retained references,
+check exact source/target/receipt bindings and reject stale replies. Download
+fixtures use explicit mock picker/writable handles with real Chromium streams,
+including a synthetic file above the buffered ceiling, to verify incremental
+hashing, abort, timeout and close acknowledgement. They do not claim a real OS
+picker or final save destination was exercised.
 
 Set `QFM_BROWSER_UI_EVIDENCE` to an external/private output directory to save
 desktop host and mobile public-origin screenshots. Product/live-device QA is

@@ -1,0 +1,4 @@
+# Generated Noble outputs are compared byte-for-byte on every platform.
+noble-sha256.js text eol=lf
+NOBLE_HASHES_NOTICES.txt text eol=lf
+noble-hashes-packages.json text eol=lf

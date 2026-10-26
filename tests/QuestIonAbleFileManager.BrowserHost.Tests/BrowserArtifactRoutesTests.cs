@@ -33,7 +33,7 @@ public sealed class BrowserArtifactRoutesTests
     [Theory]
     [InlineData("application/json", 3, 415)]
     [InlineData("application/octet-stream; charset=utf-8", 3, 415)]
-    [InlineData("application/octet-stream", 268435457, 413)]
+    [InlineData("application/octet-stream", 1073741825, 413)]
     public async Task RejectedUploadMetadataNeverInitializesStoreOrReadsBody(string contentType, long length, int expected)
     {
         var context = Context(contentType, length); var accesses = 0;
@@ -71,9 +71,25 @@ public sealed class BrowserArtifactRoutesTests
         await BrowserArtifactRoutes.DownloadAsync(context, new string('a', 32), () => throw new IOException(Secret));
         Assert.Equal(400, context.Response.StatusCode); Assert.DoesNotContain(Secret, Output(context));
         context = Context(); context.Request.Headers["X-Qfm-Artifact-Sha256"] = Hash;
-        context.Request.Headers["X-Qfm-Artifact-Size-Bytes"] = "268435457";
+        context.Request.Headers["X-Qfm-Artifact-Size-Bytes"] = "1073741825";
         await BrowserArtifactRoutes.DownloadAsync(context, new string('a', 32), () => throw new IOException(Secret));
         Assert.Equal(400, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExactOneGiBTransportMetadataReachesStoreWithoutAllocatingOrReadingBody()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        const long maximum = 1024L * 1024 * 1024;
+        var context = Context(length: maximum); var accesses = 0;
+        var limit = new BodyLimit { MaxRequestBodySize = 4096 }; context.Features.Set<IHttpMaxRequestBodySizeFeature>(limit);
+        await BrowserArtifactRoutes.UploadAsync(context, () => { accesses++; throw new IOException(Secret); });
+        Assert.Equal(1, accesses); Assert.Equal(500, context.Response.StatusCode); Assert.Equal(maximum, limit.MaxRequestBodySize);
+        Assert.Equal(0, context.Request.Body.Position); Assert.DoesNotContain(Secret, Output(context));
+        context = Context(); context.Request.Headers["X-Qfm-Artifact-Sha256"] = Hash;
+        context.Request.Headers["X-Qfm-Artifact-Size-Bytes"] = maximum.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await BrowserArtifactRoutes.DownloadAsync(context, new string('a', 32), () => { accesses++; throw new IOException(Secret); });
+        Assert.Equal(2, accesses); Assert.Equal(500, context.Response.StatusCode); Assert.DoesNotContain(Secret, Output(context));
     }
 
     [Fact]
@@ -84,7 +100,7 @@ public sealed class BrowserArtifactRoutesTests
         var context = Context(); var limit = new BodyLimit { MaxRequestBodySize = 4096 }; context.Features.Set<IHttpMaxRequestBodySizeFeature>(limit);
         context.Request.Headers["X-Qfm-Artifact-Sha256"] = Hash;
         await BrowserArtifactRoutes.UploadAsync(context, () => store);
-        Assert.Equal(201, context.Response.StatusCode); Assert.Equal(268435456, limit.MaxRequestBodySize);
+        Assert.Equal(201, context.Response.StatusCode); Assert.Equal(1073741824, limit.MaxRequestBodySize);
         using var json = System.Text.Json.JsonDocument.Parse(Output(context));
         Assert.Equal("localOnly", json.RootElement.GetProperty("scope").GetString()); Assert.False(json.RootElement.GetProperty("deviceDispatched").GetBoolean());
         var id = json.RootElement.GetProperty("artifact").GetProperty("id").GetString()!;

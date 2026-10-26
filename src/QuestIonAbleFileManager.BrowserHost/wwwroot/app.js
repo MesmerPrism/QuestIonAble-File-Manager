@@ -1,19 +1,31 @@
 import * as usb from './usb-proof.js';
 import {createRetainedView} from './retained-view.js';
+import {createTransferView} from './transfer-view.js';
+import {saveArtifact} from './verified-download.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
   artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false} };
-let retainedView;
+let retainedView, transferView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
 let connectionGeneration = 0;
+const downloads = new Set();
+const abortDownloads = () => { for(const download of downloads) download.abort(); };
 try { host.original = JSON.parse(sessionStorage.getItem(originalKey) || 'null'); } catch { /* storage unavailable */ }
 const text = (id, value) => { byId(id).textContent = value; };
 const recordOriginal = value => { host.original = value; try { if (value) sessionStorage.setItem(originalKey, JSON.stringify(value)); else sessionStorage.removeItem(originalKey); } catch { /* tab memory remains authoritative */ } };
 const showResult = (value, summary) => { text('result-summary', summary); text('result-json', JSON.stringify(value, null, 2)); };
 const readySelected = () => host.devices.find(d => d.serial === host.selected && d.isReady);
+const artifactMaximum = () => Number.isSafeInteger(host.artifactStaging.maximumFileBytes) && host.artifactStaging.maximumFileBytes > 0 &&
+  host.artifactStaging.maximumFileBytes <= 1024*1024*1024 ? host.artifactStaging.maximumFileBytes : 256*1024*1024;
+const saveOwnedArtifact = receipt => {
+  const download = new AbortController(); downloads.add(download);
+  return saveArtifact(receipt,{headers:{Authorization:`Bearer ${host.token}`,'X-Qfm-Session':host.session},signal:download.signal})
+    .finally(()=>downloads.delete(download));
+};
+const artifactBytes = value => value >= 1024*1024*1024 ? `${value/(1024*1024*1024)} GiB` : `${value/(1024*1024)} MiB`;
 function controls() {
   const connected = localHostMode && Boolean(host.token && host.session), ready = Boolean(readySelected());
   const mutatable = connected && !host.busy && !host.original && !retainedView?.hasUnresolved();
@@ -42,6 +54,7 @@ function controls() {
   for(const id of ['download-artifact','remove-artifact'])byId(id).disabled=!ownedArtifact;
   byId('clear-artifacts').disabled=!staging;
   retainedView?.update();
+  transferView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -82,8 +95,8 @@ function consume(value, action, projectLive = true) {
   const projectTarget = projectLive && Boolean(host.selected) && value.result?.command?.serial === host.selected;
   if (projectLive && action === 'devices' && value.result?.devices) renderDevices(value.result.devices);
   if (projectLive && value.result?.command?.serial === host.selected) applyStatus(value);
-  if(projectTarget && action==='files.list' && value.result?.remoteEntries){const list=byId('file-entries');list.replaceChildren();for(const entry of value.result.remoteEntries){const item=document.createElement('li'),label=document.createElement(entry.isDirectory?'button':'span');label.textContent=entry.name;if(entry.isDirectory){label.type='button';label.setAttribute('aria-label',`Open ${entry.name}`);label.addEventListener('click',()=>{byId('remote-path').value=entry.fullPath;execute('files.list',{serial:host.selected,path:entry.fullPath});});}item.append(label);list.append(item);}text('files-state',`${value.result.remoteEntries.length} entries observed for ${value.result.command?.serial || host.selected}. Refresh for current state.`);}
-  if(projectTarget && action==='apk.list' && value.result?.packages){const list=byId('packages');list.replaceChildren();for(const name of value.result.packages){const item=document.createElement('li'),button=document.createElement('button');button.type='button';button.textContent=name;button.addEventListener('click',()=>{byId('package-name').value=name;});item.append(button);list.append(item);}}
+  if(projectTarget && action==='files.list' && value.result?.remoteEntries){const list=byId('file-entries');list.replaceChildren();for(const entry of value.result.remoteEntries){const item=document.createElement('li'),label=document.createElement('button');label.type='button';label.textContent=entry.name;if(entry.isDirectory){label.setAttribute('aria-label',`Open ${entry.name}`);label.addEventListener('click',()=>{byId('remote-path').value=entry.fullPath;execute('files.list',{serial:host.selected,path:entry.fullPath});});}else{label.setAttribute('aria-label',`Select file ${entry.name}`);label.addEventListener('click',()=>transferView?.selectRemoteFile?.(entry.fullPath,entry.name));}item.append(label);list.append(item);}text('files-state',`${value.result.remoteEntries.length} entries observed for ${value.result.command?.serial || host.selected}. Refresh for current state.`);}
+  if(projectTarget && action==='apk.list' && value.result?.packages){const list=byId('packages');list.replaceChildren();for(const name of value.result.packages){const item=document.createElement('li'),button=document.createElement('button');button.type='button';button.textContent=name;button.addEventListener('click',()=>{byId('package-name').value=name;controls();});item.append(button);list.append(item);}}
   if(projectTarget && action==='apk.permissions' && value.result?.apkPermissionObservation)text('permissions-state','Permission facts observed. Open Latest result for the reported grants, modes and unavailable/unknown fields; this does not prove app readiness.');
   if(projectLive && action==='apk.inspect' && value.artifactInspection?.artifact.id===host.artifact?.id){const facts=value.artifactInspection.inspection,identity=facts.identity;text('apk-package',identity.packageName);text('apk-version',`${identity.versionName || ''} (${identity.versionCode})`);text('apk-signer',identity.signerSha256);text('apk-digest',facts.sha256);text('artifact-state','Local APK inspection completed against the staged size and SHA-256.');}
   if(projectLive && action==='apk.inspect' && value.state==='failed')text('artifact-state',`Local APK inspection failed (${value.error || 'inspection_failed'}). Verify the selected APK and Android Build Tools configuration on this host.`);
@@ -107,9 +120,10 @@ async function execute(action, fields = {}) {
   } finally { host.busy = false; controls(); }
 }
 byId('connect-form').addEventListener('submit', async event => {
-  event.preventDefault(); if (!localHostMode || host.busy) {byId('token').value='';return;} host.token = byId('token').value; byId('token').value=''; host.busy=true; const generation=++connectionGeneration; host.session='';host.selected='';host.devices=[];host.actions=new Set();clearStatus();byId('devices').replaceChildren();byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;controls();
+  event.preventDefault(); if (!localHostMode || host.busy) {byId('token').value='';return;} host.token = byId('token').value; byId('token').value=''; host.busy=true; const generation=++connectionGeneration;abortDownloads(); host.session='';host.selected='';host.devices=[];host.actions=new Set();clearStatus();byId('devices').replaceChildren();byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;controls();
   try { const session=await api('/browser/v1/session'); if(generation!==connectionGeneration)return; host.session=session.sessionId;host.actions=new Set(session.actions || ['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal']); text('host-status','Connected');
     host.artifactStaging=session.artifactStaging || {supported:false};
+    if(byId('artifact-limits'))text('artifact-limits',host.artifactStaging.supported ? `Protected staging: up to ${artifactBytes(artifactMaximum())} per file, ${host.artifactStaging.maximumFiles || 8} files and ${artifactBytes(host.artifactStaging.maximumTotalBytes || 512*1024*1024)} total in this host process. Captures and retained owner copies have separate custody. Streaming save is offered where the browser supports it; buffered fallback is limited to 256 MiB.` : 'Protected staging is unavailable on this host. Use the configured Windows companion or current QFM CLI.');
     host.retainedCapability=session.retainedOperations || {supported:false,reason:'This host has no configured retained operation owner.',alternative:'Use the current typed CLI or configure the Windows companion using the guide.'};
     if(host.artifactSession && host.artifactSession!==host.session){host.artifact=null;clearApkInspection();text('artifact-state','Host session changed. Select and stage bytes again; old handles cannot be reused.');}
     text('artifact-capability',host.artifactStaging.supported ? 'Protected transient staging is supported on this Windows host when its temporary volume and permissions are valid.' : (host.artifactStaging.reason || 'This host does not offer protected browser staging.')+' '+(host.artifactStaging.alternative || 'Use the Windows companion or current QFM desktop/CLI.'));
@@ -118,7 +132,7 @@ byId('connect-form').addEventListener('submit', async event => {
     if (host.original) showResult(host.original, host.original.sessionId === host.session ? 'An original change needs readback. Use Read original result.' : 'Host session changed after an unresolved change. Inspect current state using the owner route; changes stay blocked in this tab.');
   } catch(error) { host.token='';host.session='';text('host-status',error.message); } finally {host.busy=false;controls();}
 });
-byId('disconnect-host').addEventListener('click',()=>{connectionGeneration++;byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;host.token='';host.session='';host.selected='';host.devices=[];clearStatus();byId('devices').replaceChildren();byId('device-empty').hidden=false;text('device-empty','Connect to list authorized USB and WiFi devices.');text('host-status','Not connected');text('host-capabilities',"Connect to check this host's available capabilities.");text('selection','Choose a headset to read its current state.');text('inventory-age','');controls();});
+byId('disconnect-host').addEventListener('click',()=>{connectionGeneration++;abortDownloads();byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;host.token='';host.session='';host.selected='';host.devices=[];clearStatus();byId('devices').replaceChildren();byId('device-empty').hidden=false;text('device-empty','Connect to list authorized USB and WiFi devices.');text('host-status','Not connected');text('host-capabilities',"Connect to check this host's available capabilities.");text('selection','Choose a headset to read its current state.');text('inventory-age','');controls();});
 byId('refresh').addEventListener('click',()=>execute('devices'));
 byId('read-status').addEventListener('click',()=>execute('device.status',{serial:host.selected}));
 byId('power-confirm').addEventListener('change',controls);byId('wifi-confirm').addEventListener('change',controls);
@@ -135,17 +149,29 @@ byId('clear-performance').addEventListener('click',()=>{if(!byId('clear-performa
 byId('file-form').addEventListener('submit',event=>{event.preventDefault();if(!byId('browse-files').disabled)execute('files.list',{serial:host.selected,path:byId('remote-path').value});});
 byId('parent-folder').addEventListener('click',()=>{if(byId('parent-folder').disabled)return;const path=byId('remote-path').value.replace(/\/+$/,'');byId('remote-path').value=path.slice(0,path.lastIndexOf('/')) || '/';execute('files.list',{serial:host.selected,path:byId('remote-path').value});});
 byId('list-packages').addEventListener('click',()=>{if(!byId('list-packages').disabled)execute('apk.list',{serial:host.selected});});
+byId('package-name').addEventListener('input',controls);
 byId('permissions-form').addEventListener('submit',event=>{event.preventDefault();if(!byId('read-permissions').disabled)execute('apk.permissions',{serial:host.selected,package:byId('package-name').value});});
 for(const [id,action] of [['read-actor','device.actor-observe'],['read-actor-identity','device.actor-identity'],['read-forwards','adb.forwards']])byId(id).addEventListener('click',()=>{if(!byId(id).disabled)execute(action,{serial:host.selected,...(action==='adb.forwards'?{}:{pid:Number(byId('actor-pid').value)})});});
 function clearApkInspection(){for(const id of ['apk-package','apk-version','apk-signer','apk-digest'])text(id,'Unknown');}
 byId('apk-upload').addEventListener('change',()=>{const file=byId('apk-upload').files[0];byId('artifact-name').value=file?.name || '';host.artifact=null;clearApkInspection();text('artifact-state','Selected bytes have not been staged. Previously staged local files remain until explicitly cleared.');controls();});
 byId('artifact-name').addEventListener('input',controls);
-async function localArtifactOperation(operation){if(host.busy || !host.session || !host.artifactStaging.supported)return;host.busy=true;const generation=connectionGeneration;controls();try{await operation(generation);}catch(error){text('artifact-state',`Local artifact operation failed: ${error.message}. No automatic retry. Reconnect and use Clear staged files if an upload response was lost.`);}finally{host.busy=false;controls();}}
-byId('artifact-form').addEventListener('submit',event=>{event.preventDefault();if(byId('stage-apk').disabled)return;const file=byId('apk-upload').files[0],name=byId('artifact-name').value;if(!file || file.size>256*1024*1024){text('artifact-state','Choose one APK no larger than 256 MiB.');return;}localArtifactOperation(async generation=>{const session=host.session;const value=await api('/browser/v1/artifacts',{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream','X-Qfm-File-Name':name}});host.artifact=value.artifact;host.artifactSession=session;if(generation===connectionGeneration)text('artifact-state',`${value.artifact.fileName} staged locally: ${value.artifact.sizeBytes} bytes, SHA-256 ${value.artifact.sha256}.`);});});
+async function localArtifactOperation(operation){
+  if(host.busy || !host.session || !host.artifactStaging.supported)return;
+  host.busy=true;const generation=connectionGeneration;controls();
+  try{await operation(generation);}
+  catch(error){
+    const uncertainty=error.saveOutcomeUnknown ? ' The selected file close outcome is unknown. Check the selected file before another Save.' : '';
+    const cleanup=error.cleanupPending ? ' Cleanup is pending; wait and inspect the selected file before another Save.' : '';
+    const recovery=uncertainty || cleanup ? ' Captured bytes remain staged. No automatic retry.' :
+      ' No automatic retry. Reconnect and use Clear staged files if an upload response was lost.';
+    text('artifact-state',`Local artifact operation failed: ${error.message} ${error.alternative || ''}${uncertainty}${cleanup}${recovery}`);
+  }finally{host.busy=false;controls();}
+}
+byId('artifact-form').addEventListener('submit',event=>{event.preventDefault();if(byId('stage-apk').disabled)return;const file=byId('apk-upload').files[0],name=byId('artifact-name').value;if(!file || file.size>artifactMaximum()){text('artifact-state',`Choose one APK no larger than ${artifactMaximum()} bytes.`);return;}localArtifactOperation(async generation=>{const session=host.session;const value=await api('/browser/v1/artifacts',{method:'POST',body:file,headers:{'Content-Type':'application/octet-stream','X-Qfm-File-Name':name}});host.artifact=value.artifact;host.artifactSession=session;if(generation===connectionGeneration)text('artifact-state',`${value.artifact.fileName} staged locally: ${value.artifact.sizeBytes} bytes, SHA-256 ${value.artifact.sha256}.`);});});
 byId('inspect-apk').addEventListener('click',()=>{if(byId('inspect-apk').disabled)return;const artifact=host.artifact;clearApkInspection();text('artifact-state','Reading the staged APK through shared Core inspection…');execute('apk.inspect',{artifactId:artifact.id,sha256:artifact.sha256,sizeBytes:artifact.sizeBytes});});
 byId('remove-artifact').addEventListener('click',()=>{if(byId('remove-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async generation=>{await api(`/browser/v1/artifacts/${artifact.id}`,{method:'DELETE'});if(host.artifact?.id===artifact.id)host.artifact=null;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Staged file removed. Original file unchanged.');}});});
 byId('clear-artifacts').addEventListener('click',()=>{if(byId('clear-artifacts').disabled)return;localArtifactOperation(async generation=>{await api('/browser/v1/artifacts/cleanup',{method:'POST'});host.artifact=null;if(generation===connectionGeneration){clearApkInspection();text('artifact-state','Unleased staged files cleared. Original files unchanged.');}});});
-byId('download-artifact').addEventListener('click',()=>{if(byId('download-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async()=>{const response=await fetch(`/browser/v1/artifacts/${artifact.id}`,{credentials:'omit',cache:'no-store',redirect:'error',headers:{Authorization:`Bearer ${host.token}`,'X-Qfm-Session':host.session,'X-Qfm-Artifact-Sha256':artifact.sha256,'X-Qfm-Artifact-Size-Bytes':String(artifact.sizeBytes)}});if(!response.ok)throw new Error((await response.json()).error || 'download_rejected');const blob=await response.blob();if(blob.size!==artifact.sizeBytes)throw new Error('download_size_mismatch');const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),byte=>byte.toString(16).padStart(2,'0')).join('');if(digest!==artifact.sha256)throw new Error('download_digest_mismatch');const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=artifact.fileName;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);text('artifact-state','Staged bytes downloaded with matching size and SHA-256.');});});
+byId('download-artifact').addEventListener('click',()=>{if(byId('download-artifact').disabled)return;const artifact=host.artifact;localArtifactOperation(async generation=>{const result=await saveOwnedArtifact(artifact);if(generation===connectionGeneration)text('artifact-state',result.state==='saved'?'Staged bytes saved after exact size and SHA-256 verification.':'Staged bytes verified; download handed to the browser.');});});
 byId('reconcile').addEventListener('click',async()=>{if(!host.original||host.busy)return;const original=host.original,generation=connectionGeneration;host.busy=true;controls();try{consume(await api(`/browser/v1/requests/${original.requestId}`),original.action,generation===connectionGeneration && Boolean(host.token && host.session));}catch(error){showResult(original,`Original result unavailable: ${error.message}. Do not replay.`);}finally{host.busy=false;controls();}});
 for(const mode of ['host','usb'])byId(`${mode}-tab`).addEventListener('click',()=>{for(const name of ['host','usb']){byId(`${name}-view`).hidden=name!==mode;if(name===mode)byId(`${name}-tab`).setAttribute('aria-current','page');else byId(`${name}-tab`).removeAttribute('aria-current');}});
 const cap=usb.capability();text('usb-capability',cap.message);byId('usb-choose').disabled=!cap.supported;byId('usb-permitted').disabled=!cap.supported;
@@ -160,10 +186,11 @@ byId('usb-read').addEventListener('click',()=>usbAction(()=>usb.read(byId('usb-s
 byId('usb-reconnect').addEventListener('click',()=>usbAction(()=>usb.reconnect(byId('usb-selection').value,{onState:usbResult})));
 byId('usb-disconnect').addEventListener('click',()=>usbAction(()=>usb.disconnect(byId('usb-selection').value)));
 retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original)}),setBusy:value=>{host.busy=value;controls();},showResult});
+transferView=createTransferView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,selectedPackage:byId('package-name').value,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult,saveArtifact:saveOwnedArtifact});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {
-  connectionGeneration++;host.token='';host.session='';host.selected='';host.devices=[];
+  connectionGeneration++;abortDownloads();host.token='';host.session='';host.selected='';host.devices=[];
   byId('token').value='';byId('power-confirm').checked=false;byId('wifi-confirm').checked=false;
   clearStatus();byId('devices').replaceChildren();byId('device-empty').hidden=false;
   text('device-empty','Offline. Connect explicitly and refresh devices when the host is available.');
