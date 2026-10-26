@@ -1,6 +1,6 @@
 # Optional browser operator host
 
-`questionable-file-manager-browser` is a separately started Windows host for a
+`questionable-file-manager-browser` is a separately started Windows, Linux or macOS host for a
 closed browser projection of existing QFM Core commands. Ordinary host ADB
 operations require no headset application. Developer mode, protected debugging
 authorization, a suitable USB/network transport and a selected host ADB remain
@@ -34,13 +34,46 @@ No CORS origins, wildcard listeners, cookies or credential-bearing query strings
 are accepted. Public distribution pages can link to a local interface; they
 cannot invoke this API cross-origin. Static assets are a fixed allowlist under
 the executable's `wwwroot`; there is no directory browsing or arbitrary file
-route. Responses disable caching and set a self-only CSP. Logs are disabled.
+route. API responses disable caching. The PWA worker stores only a fixed public shell/help asset set and bypasses all APIs, authenticated requests, non-GET requests and query strings. Responses set a self-only CSP. Logs are disabled.
 
 Starting the process or loading a page performs no ADB discovery or mutation.
 ADB is resolved only on an explicit operator action. This development output
 is framework-dependent: retain its sibling assemblies, runtime metadata and
 wwwroot; it is not one of the dedicated Fleet provider trust units. No signed
 release or installed Windows-service behavior is claimed.
+
+## Installable shell and offline help
+
+Open the exact local host address, then use **Install QFM** when the browser
+offers it, or its install/Add to Home Screen menu. Installation support varies
+by browser and OS. Keep that origin and port stable: changing the port creates
+another browser app and USB permission origin. The connector still needs a
+compatible .NET runtime and host tools; installing the PWA does not install ADB.
+
+After the first completed shell download, QFM's interface and agent guide can
+open with the connector stopped. Only fixed shipped public UI/help assets enter
+the service-worker cache. API results, tokens, logs, captures, APKs and device
+files never do. There is no background sync or mutation replay. A network change
+disconnects the host projection and clears its token; it retains an unresolved
+original request for reconciliation. Reconnecting never executes or reconciles
+anything automatically. An offline network indication is advisory: an explicit
+connection to a running local connector can still support USB ADB.
+
+The connector remains loopback-only. On a phone, localhost means the phone,
+not a PC attached to a Quest. Use the connector on the attached computer or a
+supported direct USB browser; remote-PC access is not currently supported.
+
+The authenticated session reports host implementation capabilities without
+discovering devices or verifying tool installation. Ordinary ADB-backed host
+routes are available on Windows, Linux and macOS; Linux has a fake-ADB execution
+smoke check, while macOS hardware/runtime validation remains outstanding.
+Windows Credential Manager profiles, the signed Fleet guided installer and
+the separate protected Local API state remain Windows facilities. Other hosts
+report those limits explicitly; they do not substitute a plaintext secret store.
+
+Browser parity is still in progress. See the complete
+[feature/platform migration inventory](browser-pwa-migration.md). The CLI and
+WPF frontend remain available while browser workflows and distribution mature.
 
 ## Typed API
 
@@ -64,15 +97,28 @@ fields reject, and each action requires exactly its listed fields:
 | `wifi.connect` | `serial` equal to `host:port`, `host`, `port`, `confirmed:true` |
 | `device.keep-awake` | `serial`, `durationMilliseconds`, `confirmed:true` |
 | `device.normal` | `serial`, `confirmed:true` |
+| `wifi.disconnect` | `serial` equal to `host:port`, `host`, `port`, `confirmed:true` |
+| `files.list` | `serial`, `path` (absolute headset folder) |
+| `apk.list` | `serial` |
+| `apk.permissions` | `serial`, `package` (exact package name) |
+| `device.performance` | `serial`, `cpu`, `gpu`, `confirmed:true` |
+| `device.performance-clear` | `serial`, `confirmed:true` |
+| `device.actor-observe` | `serial`, `pid` (positive process ID) |
+| `device.actor-identity` | `serial`, `pid` (positive process ID) |
+| `adb.forwards` | `serial` |
 
 Port is an integer 1–65535. Hold duration is an integer 60000–28800000
-milliseconds. No caller-selected shell, ADB executable, file path, package,
-property, process, Fleet identity, watchdog or command argument is accepted.
+milliseconds. CPU/GPU values are integers 0–5 or null to preserve that override;
+at least one level must be supplied. Clear removes both overrides. No
+caller-selected shell, ADB executable, host file path, property, Fleet identity,
+watchdog or command argument is accepted. Package, process ID and headset path
+inputs reach only their closed read-only Core handlers.
 Serial-scoped operations first use the same Core discovery command to require
 one exact ready serial. Wi-Fi enable additionally retains Core's USB-to-network
 stable-identity join. Connect intentionally does not require the disconnected
 endpoint to be ready before connection; Core verifies that exact endpoint
-afterwards. Its `serial` input is endpoint confirmation, never a claim that
+afterwards. Disconnect permits an already disconnected endpoint and uses Core's
+fresh absent-endpoint readback. Its `serial` input is endpoint confirmation, never a claim that
 the endpoint matches a canonical headset identity or boot.
 
 Example shape (placeholder values must be replaced by the actual approved
