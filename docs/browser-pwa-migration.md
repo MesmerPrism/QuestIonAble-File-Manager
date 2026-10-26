@@ -34,9 +34,9 @@ requirements stay with shared Core.
 | Directory list/open/up | `files list`; browser implemented. | Serial-scoped shell-readable absolute paths and literal file-name rendering. |
 | Pull/download and push/upload | Bounded ordinary Core pull to opaque browser download implemented; push pending. | One opened regular file, independently checked captured bytes; no caller-selected local path. Streaming verified save, bounded fallback and exact-owned cleanup. Uncertain remote writes require separate custody. |
 | Package list / single APK export + SHA256 | `apk list`; bounded single-APK export with opaque receipt/checksum implemented. | Export is only installed APK, no app data/OBBs/assets/entitlements. Splits reject before streaming; package paths rechecked afterwards. |
-| APK inspect/preflight | `apk inspect` over opaque staged upload; retained v1 preflight implemented. | Windows protected staging, configured stable Local API owner and host Build Tools. Exact digest/length, signer/version and target joins remain with Core. |
+| APK inspect/preflight | Staged inspect and actual SDK/installed-byte/launcher readiness preflight implemented; retained operation preparation is separate. | Windows protected staging and host Build Tools. Readiness reads need no Native API state/key; effect preparation retains its stable configured owner. |
 | Install single / complete split set / parallel targets | Retained inspected single-APK install implemented; bundle/parallel projections pending. | Existing retained v1 replace/grant options and exact installed-byte readback; no downgrade/test-only expansion or queued offline install. Complete atomic split/parallel workflows remain with CLI. |
-| Deploy / launch / observe / diagnose / launch-diagnose | Retained resolved launch and runtime.observe implemented; advanced deploy/diagnostic projections pending. | Existing durable owner, original unknown-result custody and separate later read-only observation. Exact installed identity is required; transport/process/focus evidence is not app readiness. |
+| Deploy / launch / observe / diagnose / launch-diagnose | Retained resolved launch and observation; transient exact and explicit development-metadata runtime reads implemented. Advanced deploy/diagnostic projections pending. | Durable mutation custody stays separate from read views. Metadata observation never proves installed bytes/signer/unique build. Transport/process/focus evidence is not app readiness. |
 | Stop / exact uninstall / permissions / exact-property snapshot-clear-restore | Existing closed APK factories; browser permission observation implemented, other projections pending. | Preserve package/byte ownership, explicit destructive cleanup/property confirmation, immutable snapshots and no replay after unknown effects. No generic property/shell UI. |
 | Status / power / bounded keep-awake / restore normal | `device status/keep-awake`; browser implemented. | Fresh readback; proximity duration does not restore stay-on. No supervisor/watchdog custody transfer. |
 | CPU/GPU performance set/clear | `device performance`; browser implemented. | Fixed reviewed levels and matching device-settings confirmation/readback. |
@@ -72,6 +72,6 @@ loop on completion of this UI migration.
 Current protected capacity is 1 GiB per artifact, eight files and 2 GiB total.
 Streaming Save verifies incrementally before file close where supported;
 buffered fallback remains bounded to 256 MiB and cannot assert final disk-save
-completion. Retained-operation preparation is not complete CLI `apk preflight`
-parity: SDK compatibility, installed-byte classification and launcher-readiness
-views still need their separate projection.
+completion. Actual SDK compatibility, installed-byte classification and launcher
+readiness are now a separate read projection, distinct from retained-operation
+preparation and application readiness.

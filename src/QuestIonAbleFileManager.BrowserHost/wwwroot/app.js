@@ -2,11 +2,12 @@ import * as usb from './usb-proof.js';
 import {createRetainedView} from './retained-view.js';
 import {createTransferView} from './transfer-view.js';
 import {saveArtifact} from './verified-download.js';
+import {createApkReadView} from './apk-read-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
   artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false} };
-let retainedView, transferView;
+let retainedView, transferView, apkReadView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -55,6 +56,7 @@ function controls() {
   byId('clear-artifacts').disabled=!staging;
   retainedView?.update();
   transferView?.update();
+  apkReadView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -187,6 +189,7 @@ byId('usb-reconnect').addEventListener('click',()=>usbAction(()=>usb.reconnect(b
 byId('usb-disconnect').addEventListener('click',()=>usbAction(()=>usb.disconnect(byId('usb-selection').value)));
 retainedView=createRetainedView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,capability:host.retainedCapability,unresolvedTransient:Boolean(host.original)}),setBusy:value=>{host.busy=value;controls();},showResult});
 transferView=createTransferView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,selectedPackage:byId('package-name').value,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult,saveArtifact:saveOwnedArtifact});
+apkReadView=createApkReadView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,selected:readySelected() || null,artifact:host.artifactSession===host.session?host.artifact:null,actions:host.actions,artifactStaging:host.artifactStaging}),setBusy:value=>{host.busy=value;controls();},showResult});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();
 window.addEventListener('offline', () => {
