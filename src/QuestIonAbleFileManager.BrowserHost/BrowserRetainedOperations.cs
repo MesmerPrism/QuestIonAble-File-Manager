@@ -273,7 +273,7 @@ public sealed class BrowserRetainedOperations : IDisposable
         BrowserRetainedException retained => retained,
         BrowserRequestException request when request.Code is "artifact_id_invalid" or "artifact_hash_invalid" => new(request.Code),
         JsonException or InvalidOperationException when exception is not LocalApiException => new("request_invalid"),
-        LocalApiException api when api.Code is "operation_consumed" or "running_capacity" or "operation_expired" or "digest_mismatch" or "state_in_use" => new(api.Code, 409),
+        LocalApiException api when api.Code is "operation_consumed" or "running_capacity" or "operation_expired" or "operation_not_running" or "digest_mismatch" or "state_in_use" => new(api.Code, 409),
         LocalApiException api when api.Code is "operation_unknown" => new(api.Code, 404),
         LocalApiException api when api.Code is "target_not_ready" or "split_not_supported" or "expiry_invalid" or "command_not_allowed" => new(api.Code),
         BrowserArtifactException artifact when artifact.Code is "artifact_not_found" => new(artifact.Code, 404),

@@ -10,7 +10,7 @@ public static class BrowserShellAssets
     private const string Marker = "/*QFM_SHELL_MANIFEST*/ null";
     public static IReadOnlyList<string> Paths { get; } = Array.AsReadOnly(new[]
     {
-        "/index.html", "/agent.html", "/app.js", "/pwa.js", "/styles.css",
+        "/index.html", "/agent.html", "/app.js", "/pwa.js", "/retained-view.js", "/styles.css",
         "/usb-proof.js", "/usb-proof-core.js", "/vendor/tango-adb.js",
         "/manifest.webmanifest", "/icons/qfm-192.png", "/icons/qfm-512.png"
     });

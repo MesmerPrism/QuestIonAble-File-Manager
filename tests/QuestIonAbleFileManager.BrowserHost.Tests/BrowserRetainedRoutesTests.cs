@@ -66,6 +66,21 @@ public sealed class BrowserRetainedRoutesTests
     }
 
     [Fact]
+    public async Task UnexecutedCancellationPreservesTheOwnersBoundedNoRunningReason()
+    {
+        var owner = Owner((_, _) => throw new InvalidOperationException()) with
+        {
+            Cancel = _ => throw new LocalApiException("operation_not_running", "private owner state detail")
+        };
+        using var operations = new BrowserRetainedOperations(() => throw new InvalidOperationException(), owner);
+        var context = Context(Bound); await BrowserRetainedRoutes.InvokeAsync(context, operations, "cancel");
+        Assert.Equal(409, context.Response.StatusCode);
+        Assert.Contains("operation_not_running", Output(context));
+        Assert.DoesNotContain("private owner", Output(context));
+        Assert.DoesNotContain("dispatched", Output(context));
+    }
+
+    [Fact]
     public async Task UnknownOwnerStageIsProjectedAsUnknownAndNeverPromotedToCompleted()
     {
         using var operations = new BrowserRetainedOperations(() => throw new InvalidOperationException(),

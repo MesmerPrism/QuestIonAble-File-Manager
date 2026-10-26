@@ -7,7 +7,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const {renderShell}=require('./pwa-shell-fixture.cjs');
 const root = path.resolve(__dirname, '../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
-const allowed = new Set(['index.html','agent.html','app.js','pwa.js','sw.js','styles.css',
+const allowed = new Set(['index.html','agent.html','app.js','pwa.js','retained-view.js','sw.js','styles.css',
   'usb-proof.js','usb-proof-core.js','vendor/tango-adb.js','manifest.webmanifest','icons/qfm-192.png','icons/qfm-512.png']);
 
 test('installed worker opens offline UI/help; secrets and API data never enter caches; reconnect is inert',

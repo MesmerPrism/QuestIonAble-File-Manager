@@ -37,11 +37,13 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 // Resolve the selected host ADB only for an explicit operation, never page load/startup.
 var artifacts = new Lazy<BrowserArtifactStore>(() => new BrowserArtifactStore());
+var operationGate = new BrowserOperationGate();
+var retained = new BrowserRetainedOperations(() => artifacts.Value, operationGate.TryAcquire);
 var commands = new BrowserCommands(async (command, cancellation) =>
 {
     var executor = new OperatorCommandExecutor(AdbClient.CreateDefault());
     return await BrowserCommands.ExecuteOwnedAsync(executor, command, cancellation);
-}, () => artifacts.Value);
+}, () => artifacts.Value, operationGate);
 var app = builder.Build();
 app.Use(async (context, next) =>
 {
@@ -112,9 +114,11 @@ app.MapGet("/browser/v1/session", () => new
     contractVersion = BrowserCommands.ContractVersion, sessionId = commands.SessionId,
     actions = commands.AvailableActions, maxRequests = BrowserCommands.MaximumRequests,
     platformCapabilities = OperatorPlatformCapabilities.Current,
-    artifactStaging = BrowserArtifactStore.Capability
+    artifactStaging = BrowserArtifactStore.Capability,
+    retainedOperations = retained.Capability
 });
 BrowserArtifactRoutes.Map(app, () => artifacts.Value);
+BrowserRetainedRoutes.Map(app, retained);
 app.MapGet("/browser/v1/requests/{requestId}", (string requestId) =>
 {
     try { return Results.Json(commands.Get(requestId)); }
@@ -153,6 +157,9 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    try { retained.Dispose(); }
+    catch (BrowserRetainedException)
+    { Console.Error.WriteLine("retained_owner_cleanup_incomplete"); shutdownCode = 3; }
     if (artifacts.IsValueCreated)
     {
         try { artifacts.Value.Dispose(); }

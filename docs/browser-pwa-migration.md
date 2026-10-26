@@ -34,9 +34,9 @@ requirements stay with shared Core.
 | Directory list/open/up | `files list`; browser implemented. | Serial-scoped shell-readable absolute paths and literal file-name rendering. |
 | Pull/download and push/upload | `files pull/push`; browser pending. | Browser-selected bytes and bounded host-owned staging/download handles; no caller-selected local path. Preserve partial/uncertain transfer and clean only owned data. CLI explicit file paths remain supported. |
 | Package list / single APK export + SHA256 | `apk list/export`; browser list implemented, export pending. | Export is only installed APK, no app data/OBBs/assets/entitlements. Split exports stay explicit rejection with supported complete-set alternative. |
-| APK inspect/preflight | `apk inspect` implemented over opaque staged upload; browser preflight pending. | Windows NTFS protected staging and host Build Tools. Inspection binds digest/length and reports signer/version; preflight SDK/launcher/device joins remain with current CLI. |
-| Install single / complete split set / parallel targets | `apk install/install-bundle/install-parallel/install-bundle-parallel`; browser pending. | Existing explicit options, complete atomic split set, bounded per-target results and readback. No queued offline install. |
-| Deploy / launch / observe / diagnose / launch-diagnose | Shared inspected-deployment Core and typed CLI; browser pending. | Exact installed identity or explicit development-metadata policy, original request identity, bounded diagnostics. Transport/process/focus evidence is not app readiness. |
+| APK inspect/preflight | `apk inspect` over opaque staged upload; retained v1 preflight implemented. | Windows protected staging, configured stable Local API owner and host Build Tools. Exact digest/length, signer/version and target joins remain with Core. |
+| Install single / complete split set / parallel targets | Retained inspected single-APK install implemented; bundle/parallel projections pending. | Existing retained v1 replace/grant options and exact installed-byte readback; no downgrade/test-only expansion or queued offline install. Complete atomic split/parallel workflows remain with CLI. |
+| Deploy / launch / observe / diagnose / launch-diagnose | Retained resolved launch and runtime.observe implemented; advanced deploy/diagnostic projections pending. | Existing durable owner, original unknown-result custody and separate later read-only observation. Exact installed identity is required; transport/process/focus evidence is not app readiness. |
 | Stop / exact uninstall / permissions / exact-property snapshot-clear-restore | Existing closed APK factories; browser permission observation implemented, other projections pending. | Preserve package/byte ownership, explicit destructive cleanup/property confirmation, immutable snapshots and no replay after unknown effects. No generic property/shell UI. |
 | Status / power / bounded keep-awake / restore normal | `device status/keep-awake`; browser implemented. | Fresh readback; proximity duration does not restore stay-on. No supervisor/watchdog custody transfer. |
 | CPU/GPU performance set/clear | `device performance`; browser implemented. | Fixed reviewed levels and matching device-settings confirmation/readback. |
@@ -61,7 +61,9 @@ and establish no device effects. See `tools/browser-ui/README.md` and
 
 Continue with device file transfer and full APK workflows, retaining unknown-effect
 artifact custody. Protected local staging/inspection is implemented; portable
-native-path staging is still outstanding. Kiosk,
+native-path staging is still outstanding. Retained single-APK install, launch and
+observation reuse the Windows Local API owner; advanced deployment remains.
+Kiosk,
 profiles, Fleet and portable distribution follow the same action inventory.
 Update each row at tested checkpoints, with device evidence separate from
 source, browser and packaging proof. Do not block the existing product developer
