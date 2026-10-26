@@ -2673,7 +2673,80 @@ public sealed class InspectedDeploymentTests
             StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FakeRunner CreateDeploymentRunner(
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Diagnose_OwnedCaptureBorrowsExactInputAndSealsOnlyACandidateArchive(bool recoverAfterInputRemoval)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var apk = await CreateApkAsync();
+        var root = Path.Combine(Path.GetTempPath(), "qfm-owned-diagnostic-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var stager = new LocalApiArtifactStager(LocalApiStateSettings.CreateForTests(Path.Combine(root, "state")));
+            using var staged = await stager.StageAsync(apk, default);
+            using var input = staged.BorrowDiagnosticInput();
+            var snapshots = new List<LocalApiDiagnosticOutputSnapshot>();
+            using var output = await stager.ReserveDiagnosticOutputAsync(
+                LocalApiDiagnosticOutputIntent.Create("api-" + Guid.NewGuid().ToString("N")), staged,
+                (snapshot, _) => { snapshots.Add(snapshot); return Task.CompletedTask; });
+            var source = CreateDeploymentRunner(apk, pidofOutput: "");
+            var runner = new TruncatingDiagnosticRunner(source, "none");
+            var client = new AdbClient("adb", runner, new("aapt2", "apksigner"));
+            var result = await client.CaptureAdmittedApkDiagnosticsAsync("QUEST123", input, output.CreateSink());
+            Assert.Equal(output.ReportedInputPath, result.Artifact.Path);
+            Assert.Equal(output.ReportedOutputPath, result.OutputDirectory);
+            Assert.Empty(Directory.GetDirectories(Path.Combine(root, "state", "staged")));
+            Assert.All(source.Calls.Where(call => call.FileName == "aapt2"),
+                call => Assert.Equal(staged.Path, call.Arguments.Last()));
+            var candidate = await output.SealAsync(result, default);
+            Assert.Equal("sealed", snapshots.Last().Phase);
+            Assert.DoesNotContain(snapshots, snapshot => snapshot.Phase == "available");
+            await Assert.ThrowsAsync<LocalApiException>(() => output.OpenSealedCandidateAsync(candidate.SizeBytes + 1, candidate.Sha256));
+            await Assert.ThrowsAsync<LocalApiException>(() => output.OpenSealedCandidateAsync(candidate.SizeBytes, new string('0', 64)));
+            using (var read = await output.OpenSealedCandidateAsync(candidate.SizeBytes, candidate.Sha256))
+            {
+                Assert.False(await output.CleanupAsync());
+                Assert.Equal("diagnostic_reads_active", Assert.Throws<LocalApiException>(() => stager.Dispose()).Code);
+                using var zip = new System.IO.Compression.ZipArchive(read.Stream, System.IO.Compression.ZipArchiveMode.Read, true);
+                Assert.Equal(result.Files.Select(file => file.RelativePath).Order(), zip.Entries.Select(entry => entry.FullName).Order());
+            }
+            if (recoverAfterInputRemoval)
+            {
+                var recorded = output.LastAcknowledgedSnapshot!;
+                var archive = recorded.Resources.Single(resource => resource.Role == "archive");
+                input.Dispose();
+                Assert.True(await output.CleanupInputAsync(staged, (_, _) => Task.CompletedTask));
+                recorded = output.LastAcknowledgedSnapshot!;
+                Assert.Equal("removed", recorded.Resources.Single(resource => resource.Role == "input").State);
+                Assert.False(File.Exists(staged.Path));
+                output.Dispose();
+                stager.Dispose();
+                using var restarted = new LocalApiArtifactStager(LocalApiStateSettings.CreateForTests(Path.Combine(root, "state")));
+                var recovered = Assert.Single(await restarted.RegisterDiagnosticRecoveryAsync([recorded], (_, _) => Task.CompletedTask));
+                Assert.Equal("removed", recovered.Snapshot().Resources.Single(resource => resource.Role == "input").State);
+                Assert.Equal(new LocalApiStageInventory(15, 8 * 1024 * 1024), restarted.GetInventory());
+                using (var read = await restarted.ReopenDiagnosticArchiveAsync(recorded.Intent, archive))
+                {
+                    Assert.False(await recovered.CleanupAsync());
+                    Assert.Equal("diagnostic_reads_active", Assert.Throws<LocalApiException>(() => restarted.Dispose()).Code);
+                    Assert.Equal(candidate.Sha256, Convert.ToHexString(await SHA256.HashDataAsync(read.Stream)).ToLowerInvariant());
+                    Assert.False(File.Exists(staged.Path));
+                }
+                Assert.True(await recovered.CleanupAsync());
+                Assert.Equal(new LocalApiStageInventory(0, 0), restarted.GetInventory());
+                using var fresh = await restarted.StageDiagnosticInputAsync(apk, (_, _) => Task.CompletedTask);
+                Assert.Equal(1, restarted.GetInventory().FileCount);
+                return;
+            }
+            Assert.True(await output.CleanupAsync());
+            Assert.Single(Directory.GetFiles(Path.Combine(root, "state", "staged")));
+        }
+        finally { File.Delete(apk); Directory.Delete(root, true); }
+    }
+
+    internal static FakeRunner CreateDeploymentRunner(
         string sourceApk,
         string? splitName = null,
         string? launcherOutput = null,
@@ -2856,7 +2929,7 @@ public sealed class InspectedDeploymentTests
             call.Arguments.Contains("logcat"));
     }
 
-    private static async Task<string> CreateApkAsync(byte[]? bytes = null)
+    internal static async Task<string> CreateApkAsync(byte[]? bytes = null)
     {
         var path = Path.Combine(Path.GetTempPath(), $"qfm-public-test-{Guid.NewGuid():N}.apk");
         await File.WriteAllBytesAsync(path, bytes ?? [0x50, 0x4b, 0x03, 0x04]);
@@ -2883,13 +2956,30 @@ public sealed class InspectedDeploymentTests
     private static CommandResult SilentFailure() =>
         new("", [], 1, "", "", TimeSpan.Zero);
 
-    private sealed class TruncatingDiagnosticRunner(FakeRunner source, string truncatedCapture) : IStreamingCommandRunner, ITruncatingCommandRunner
+    internal sealed class TruncatingDiagnosticRunner(FakeRunner source, string truncatedCapture, string? frameScenario = null) : IStreamingCommandRunner, ITruncatingCommandRunner
     {
+        private int _bodyReads;
         public List<(IReadOnlyList<string> Arguments, int OutputBytes, int ErrorBytes)> Captures { get; } = [];
         public Task<CommandResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken token = default) =>
             source.RunAsync(fileName, arguments, timeout, token);
-        public Task<StreamingCommandResult> RunToStreamAsync(string fileName, IReadOnlyList<string> arguments, Stream destination, long maximumBytes, TimeSpan timeout, CancellationToken token = default) =>
-            source.RunToStreamAsync(fileName, arguments, destination, maximumBytes, timeout, token);
+        public async Task<StreamingCommandResult> RunToStreamAsync(string fileName, IReadOnlyList<string> arguments, Stream destination, long maximumBytes, TimeSpan timeout, CancellationToken token = default)
+        {
+            if (frameScenario is null || arguments.Count != 6 || !arguments[5].Contains("qfm-byte-transfer:v2:", StringComparison.Ordinal))
+                return await source.RunToStreamAsync(fileName, arguments, destination, maximumBytes, timeout, token);
+            using var wire = new MemoryStream();
+            var result = await source.RunToStreamAsync(fileName, arguments, wire, maximumBytes, timeout, token);
+            var bytes = wire.ToArray();
+            var payload = Array.IndexOf(bytes, (byte)'\n') + 1;
+            _bodyReads++;
+            if (frameScenario == "trailer") bytes = bytes[..^1];
+            if (frameScenario == "extra") bytes = [.. bytes, 88];
+            if (frameScenario == "short") bytes = [.. bytes[..payload], .. bytes[(payload + 1)..]];
+            if (frameScenario == "long") bytes = [.. bytes[..payload], 88, .. bytes[payload..]];
+            if (frameScenario == "payload" || frameScenario == "payload-after-optional" && _bodyReads > 1) bytes[payload] ^= 1;
+            if (frameScenario == "overflow") throw new FleetTransferLimitException(maximumBytes);
+            await destination.WriteAsync(bytes, token);
+            return result with { BytesWritten = bytes.Length, Sha256 = frameScenario == "runner-hash" ? new string('0', 64) : Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() };
+        }
         public async Task<TruncatingCommandResult> RunTruncatingAsync(string fileName, IReadOnlyList<string> arguments, int maximumStandardOutputBytes, int maximumStandardErrorBytes, TimeSpan timeout, CancellationToken token = default)
         {
             Captures.Add((arguments.ToArray(), maximumStandardOutputBytes, maximumStandardErrorBytes));
@@ -2899,11 +2989,12 @@ public sealed class InspectedDeploymentTests
             var bounded = TruncatingCommandResult.FromLegacy(result, maximumStandardOutputBytes, maximumStandardErrorBytes);
             if (truncatedCapture == "stderr" && arguments.Contains("logcat"))
                 return bounded with { StandardErrorTruncated = true };
-            return arguments.Contains(truncatedCapture) ? bounded with { StandardOutputTruncated = true } : bounded;
+            return arguments.Contains(truncatedCapture) || fileName == truncatedCapture || truncatedCapture == "uid" && arguments.Contains("-U")
+                ? bounded with { StandardOutputTruncated = true } : bounded;
         }
     }
 
-    private sealed class FakeRunner(
+    internal sealed class FakeRunner(
         Func<string, IReadOnlyList<string>, CommandResult> handler,
         byte[]? streamedBytes = null,
         Func<string, IReadOnlyList<string>, Exception?>? commandFailure = null,
@@ -2963,6 +3054,13 @@ public sealed class InspectedDeploymentTests
                     ["-s", "QUEST123", "shell", "dumpsys", "window", "windows"])
                 ? Encoding.UTF8.GetBytes(result.StandardOutput)
                 : streamedBytes ?? [0x50, 0x4b, 0x03, 0x04];
+            if (arguments.Count == 6 && arguments[2] == "exec-out" && arguments[5].Contains("qfm-byte-transfer:v2:", StringComparison.Ordinal))
+            {
+                var nonce = Regex.Match(arguments[5], "qfm-byte-transfer:v2:([0-9a-f]{32}):").Groups[1].Value;
+                bytes = Encoding.UTF8.GetBytes($"qfm-byte-transfer:v2:{nonce}:{bytes.Length}\n")
+                    .Concat(bytes).Concat(Encoding.UTF8.GetBytes($"\nqfm-byte-transfer:complete:v2:{nonce}:{bytes.Length}\n")).ToArray();
+                result = result with { StandardOutput = "", StandardError = "" };
+            }
             if (result.Succeeded)
             {
                 if (bytes.LongLength > maximumBytes)

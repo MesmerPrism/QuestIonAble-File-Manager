@@ -36,7 +36,48 @@ public sealed partial class AdbClient
 
         var fullOutputDirectory = ValidateDiagnosticOutputDirectory(outputDirectory);
         using var admission = await ImmutableApkAdmission.CreateAsync(reportedPath, cancellationToken).ConfigureAwait(false);
-        var artifact = await CreateApkInspector().InspectAsync(admission.Path, cancellationToken).ConfigureAwait(false);
+        return await CaptureAdmittedDiagnosticsCoreAsync(serial, reportedPath, admission.Path,
+            fullOutputDirectory, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Also used by the future v3 preflight/reverification path. Every inspector
+    // subprocess sees the required bounded adapter; legacy injection is rejected.
+    internal AdbClient CreateOwnedDiagnosticClient() => new(AdbPath,
+        new DiagnosticRequiredCommandRunner(_runner), _buildTools, _launchReadbackTimeProvider, _launchReadbackDelay);
+
+    // Consume the registry's already-retained immutable command. Output paths
+    // remain generated local stems, never caller-selected directory authority.
+    internal async Task<OperatorExecutionResult> ExecuteOwnedDiagnosticAsync(OperatorCommand command,
+        LocalApiDiagnosticInputLease input, LocalApiDiagnosticCaptureSink output, CancellationToken cancellationToken = default)
+    {
+        if (command.Kind != OperatorCommandKind.DiagnoseInspectedApp || command.Serial is null)
+            throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
+        var expected = OperatorCommands.DiagnoseInspectedApp(command.Serial, input.Path, output.Reservation.PlannedOutputPath);
+        if (!command.CliArguments.SequenceEqual(expected.CliArguments, StringComparer.Ordinal) ||
+            command.LocalPath != input.Path || command.OutputPath != expected.OutputPath)
+            throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
+        return new(command, ApkDiagnosticBundleResult: await CaptureAdmittedApkDiagnosticsAsync(command.Serial,
+            input, output, cancellationToken).ConfigureAwait(false));
+    }
+
+    internal async Task<ApkDiagnosticBundleResult> CaptureAdmittedApkDiagnosticsAsync(string serial,
+        LocalApiDiagnosticInputLease input, LocalApiDiagnosticCaptureSink output,
+        CancellationToken cancellationToken = default)
+    {
+        serial = AndroidInput.RequireSerial(serial);
+        input.Verify();
+        output.Reservation.VerifyInput(input);
+        var owned = CreateOwnedDiagnosticClient();
+        using var captureUse = await output.Reservation.BeginCaptureAsync(input, cancellationToken).ConfigureAwait(false);
+        return await owned.CaptureAdmittedDiagnosticsCoreAsync(serial, output.Reservation.ReportedInputPath,
+            input.Path, output.Reservation.ReportedOutputPath, output, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ApkDiagnosticBundleResult> CaptureAdmittedDiagnosticsCoreAsync(string serial,
+        string reportedPath, string admittedPath, string fullOutputDirectory, LocalApiDiagnosticCaptureSink? output,
+        CancellationToken cancellationToken)
+    {
+        var artifact = await CreateApkInspector().InspectAsync(admittedPath, cancellationToken).ConfigureAwait(false);
         RejectSplitArtifact(artifact);
         var installed = await ReadInstalledIdentityAsync(serial, artifact, cancellationToken).ConfigureAwait(false);
         EnsureSameArtifact(artifact, installed);
@@ -85,10 +126,10 @@ public sealed partial class AdbClient
             BoundDiagnosticValue(androidRelease.CommandResult.StandardOutput, out var releaseValueTruncated),
             BoundDiagnosticValue(apiLevel.CommandResult.StandardOutput, out var apiValueTruncated),
             BoundDiagnosticValue(buildFingerprint.CommandResult.StandardOutput, out var fingerprintValueTruncated));
-        var stagingDirectory = Path.Combine(
+        var stagingDirectory = output is not null ? fullOutputDirectory : Path.Combine(
             Path.GetDirectoryName(fullOutputDirectory)!,
             $".{Path.GetFileName(fullOutputDirectory)}.qfm-diagnostics-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(stagingDirectory);
+        if (output is null) Directory.CreateDirectory(stagingDirectory);
         try
         {
             var files = new List<ApkDiagnosticBundleFile>
@@ -96,7 +137,7 @@ public sealed partial class AdbClient
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "runtime", "runtime.json", runtime, cancellationToken,
                     observationSource: "fixed package/activity/global-focus/pid observation",
-                    commandSemantic: "fixed serial-scoped runtime and WindowManager focus observation; it has no application or OpenXR readiness authority").ConfigureAwait(false),
+                    commandSemantic: "fixed serial-scoped runtime and WindowManager focus observation; it has no application or OpenXR readiness authority", output: output).ConfigureAwait(false),
                 await WriteDiagnosticJsonAsync(
                     stagingDirectory, "device", "device.json",
                     new
@@ -115,22 +156,22 @@ public sealed partial class AdbClient
                     "fixed device properties",
                     "four fixed serial-scoped getprop readbacks",
                     truncated: model.Truncated || androidRelease.Truncated || apiLevel.Truncated || buildFingerprint.Truncated ||
-                        modelValueTruncated || releaseValueTruncated || apiValueTruncated || fingerprintValueTruncated).ConfigureAwait(false),
+                        modelValueTruncated || releaseValueTruncated || apiValueTruncated || fingerprintValueTruncated, output: output).ConfigureAwait(false),
                 await WriteDiagnosticCommandAsync(
                     stagingDirectory, "package", "package.txt", package,
                     "exact inspected package",
                     "fixed serial-scoped dumpsys package for the inspected package",
-                    cancellationToken).ConfigureAwait(false),
+                    cancellationToken, output).ConfigureAwait(false),
                 await WriteDiagnosticCommandAsync(
                     stagingDirectory, "memory", "meminfo.txt", memory,
                     "exact inspected package",
                     "fixed serial-scoped dumpsys meminfo for the inspected package",
-                    cancellationToken).ConfigureAwait(false),
+                    cancellationToken, output).ConfigureAwait(false),
                 await WriteDiagnosticCommandAsync(
                     stagingDirectory, "logcat_uid", $"logcat-uid-{currentUserUid}.txt", uidLogcat,
                     "current-user package UID",
                     "fixed serial-scoped recent UID-filtered logcat derived from current-user package readback",
-                    cancellationToken).ConfigureAwait(false)
+                    cancellationToken, output).ConfigureAwait(false)
             };
             foreach (var (pid, result) in pidLogcat)
             {
@@ -138,7 +179,7 @@ public sealed partial class AdbClient
                     stagingDirectory, "logcat_pid", $"logcat-pid-{pid}.txt", result,
                     "pidof corroboration",
                     "fixed serial-scoped recent PID-filtered logcat; optional corroboration only",
-                    cancellationToken).ConfigureAwait(false));
+                    cancellationToken, output).ConfigureAwait(false));
             }
             if (files.Count + 1 > MaximumDiagnosticFileCount)
                 throw new InvalidDataException("The fixed diagnostic capture set exceeded its file limit.");
@@ -204,14 +245,14 @@ public sealed partial class AdbClient
             files.Add(await WriteDiagnosticJsonAsync(
                 stagingDirectory, "manifest", "diagnostic-manifest.json", manifest, cancellationToken,
                 observationSource: "private diagnostic manifest",
-                commandSemantic: "fixed diagnostic capture inventory and hashes").ConfigureAwait(false));
-            Directory.Move(stagingDirectory, fullOutputDirectory);
+                commandSemantic: "fixed diagnostic capture inventory and hashes", output: output).ConfigureAwait(false));
+            if (output is null) Directory.Move(stagingDirectory, fullOutputDirectory);
             return new ApkDiagnosticBundleResult(
                 normalizedArtifact, installedAfterCapture, runtime, device, fullOutputDirectory, capturedAt, files);
         }
         catch
         {
-            if (Directory.Exists(stagingDirectory))
+            if (output is null && Directory.Exists(stagingDirectory))
                 Directory.Delete(stagingDirectory, recursive: true);
             throw;
         }
@@ -294,7 +335,8 @@ public sealed partial class AdbClient
         TruncatingCommandResult capture,
         string observationSource,
         string commandSemantic,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LocalApiDiagnosticCaptureSink? output = null)
     {
         var result = capture.CommandResult;
         var content =
@@ -305,7 +347,7 @@ public sealed partial class AdbClient
         var (bytes, truncated) = BoundDiagnosticText(content, capture.Truncated);
         return await WriteDiagnosticBytesAsync(
             directory, kind, relativePath, bytes, cancellationToken, result.ExitCode,
-            observationSource, commandSemantic, truncated).ConfigureAwait(false);
+            observationSource, commandSemantic, truncated, output).ConfigureAwait(false);
     }
 
     private static async Task<ApkDiagnosticBundleFile> WriteDiagnosticJsonAsync<T>(
@@ -317,14 +359,15 @@ public sealed partial class AdbClient
         int? commandExitCode = null,
         string? observationSource = null,
         string? commandSemantic = null,
-        bool truncated = false)
+        bool truncated = false,
+        LocalApiDiagnosticCaptureSink? output = null)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(value, DiagnosticJson);
         if (bytes.LongLength > MaximumDiagnosticTextFileBytes)
             throw new InvalidDataException("A fixed diagnostic JSON file exceeded its byte limit.");
         return await WriteDiagnosticBytesAsync(
             directory, kind, relativePath, bytes, cancellationToken, commandExitCode,
-            observationSource, commandSemantic, truncated).ConfigureAwait(false);
+            observationSource, commandSemantic, truncated, output).ConfigureAwait(false);
     }
 
     private static async Task<ApkDiagnosticBundleFile> WriteDiagnosticBytesAsync(
@@ -336,8 +379,12 @@ public sealed partial class AdbClient
         int? commandExitCode,
         string? observationSource,
         string? commandSemantic,
-        bool truncated)
+        bool truncated,
+        LocalApiDiagnosticCaptureSink? output = null)
     {
+        if (output is not null)
+            return await output.WriteAsync(kind, relativePath, bytes, commandExitCode,
+                observationSource, commandSemantic, truncated, cancellationToken).ConfigureAwait(false);
         await File.WriteAllBytesAsync(Path.Combine(directory, relativePath), bytes, cancellationToken).ConfigureAwait(false);
         return new ApkDiagnosticBundleFile(
             kind, relativePath, bytes.LongLength,
