@@ -5,6 +5,7 @@ Run with Node and Playwright 1.62.1 plus its matching Chromium installed:
 ```powershell
 node --test tools/browser-ui/frontend.test.cjs
 node --test tools/browser-ui/retained.test.cjs
+node --test tools/browser-ui/retained-deploy.test.cjs
 node --test tools/browser-ui/apk-read.test.cjs
 node --test tools/browser-ui/transfers.test.cjs
 node --test tools/browser-ui/download.test.cjs
@@ -28,6 +29,9 @@ The retained fixtures exercise exact review/approval, one-use execution, lost
 replies, saved original references, explicit status/cancel, and a separate
 read-only observation while an original remains unknown. They never contact
 the native retained owner or a device.
+Versioned deploy fixtures additionally check explicit capability/version routing,
+reviewed install options, legacy reference recovery, rejected crossed responses,
+and lost-reply/reload behavior without replay or fallback.
 APK read fixtures verify true readiness versus retained preparation, exact and
 development-policy separation, structured absence, no automatic fallback,
 scope-bound late replies and preservation of unknown mutation references.

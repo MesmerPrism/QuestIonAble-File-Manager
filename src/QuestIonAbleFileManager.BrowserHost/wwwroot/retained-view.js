@@ -1,6 +1,13 @@
 const key = 'qfm-browser-retained-v1';
 const observationKey = 'qfm-browser-observation-v1';
-const commands = new Set(['apk.install-inspected', 'app.launch-resolved', 'runtime.observe']);
+const v1 = 'questionable.file_manager.local_api.v1', v2 = 'questionable.file_manager.local_api.v2';
+const deployPolicy = 'exact-installed-install-launch.v1';
+const commands = new Set(['apk.install-inspected', 'app.launch-resolved', 'runtime.observe', 'apk.deploy']);
+const versionOf = value => value?.contractVersion === undefined ? v1 : value.contractVersion;
+const responseVersion = (value, version) => version === v1 ? value?.contractVersion === undefined || value.contractVersion === v1 : version === v2 && value?.contractVersion === v2;
+const versionedCommand = (command, version) => version === v2 ? command === 'apk.deploy' : version === v1 && commands.has(command) && command !== 'apk.deploy';
+const installs = command => command === 'apk.install-inspected' || command === 'apk.deploy';
+const sameBinding = (left, right) => left?.operationId === right?.operationId && left?.commandDigest === right?.commandDigest && versionOf(left) === versionOf(right);
 const terminal = new Set(['completed', 'failed', 'cancelled', 'expired']);
 const stages = new Set(['preflighted', 'running', 'cancellationRequested', ...terminal, 'outcomeUnknownRecoveryRequired', 'cleanupDebt', 'clientUncertain']);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -21,11 +28,12 @@ function reference(value) {
     versionCode:version, signerSha256:value.review.signerSha256
   } : null;
   return {operationId:value.operationId, commandDigest:value.commandDigest,
+    ...(versionOf(value) === v1 ? {} : {contractVersion:versionOf(value) === v2 ? v2 : 'unsupported'}),
     command:commands.has(value.command) ? value.command : '', target:textValue(value.target),
     artifactSha256:hash(value.artifactSha256) ? value.artifactSha256 : '',
     artifactSizeBytes:Number.isSafeInteger(value.artifactSizeBytes) && value.artifactSizeBytes >= 0 && value.artifactSizeBytes <= 1024 * 1024 * 1024 ? value.artifactSizeBytes : null,
     expiresAt:textValue(value.expiresAt, 64), review,
-    installOptions:value.command === 'apk.install-inspected' ? {
+    installOptions:installs(value.command) ? {
       replaceExisting:value.installOptions?.replaceExisting === true,
       grantRuntimePermissions:value.installOptions?.grantRuntimePermissions === true
     } : null,
@@ -63,43 +71,51 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
   if (observation) observationMessage = 'Saved separate observation reference restored. Explicitly read its status; nothing is replayed.';
   const options = () => ({replaceExisting:element('native-replace').checked, grantRuntimePermissions:element('native-grant').checked});
   const selectedCommand = () => element('native-command').value;
+  const selectedVersion = () => selectedCommand() === 'apk.deploy' ? v2 : v1;
   const hasUnresolved = () => Boolean(original && !terminal.has(original.stage));
   const observationPending = () => Boolean(observation && !terminal.has(observation.stage));
   const auth = context => JSON.stringify([context.sessionId, Boolean(context.connected)]);
   const available = context => Boolean(context.connected && context.sessionId && context.capability?.supported === true);
-  const sameOptions = () => original.command !== 'apk.install-inspected' || JSON.stringify(original.installOptions) === JSON.stringify(options());
+  const versionAvailable = (context, version) => available(context) && (version === v1 ||
+    version === v2 && Array.isArray(context.capability?.contractVersions) && context.capability.contractVersions.includes(v2));
+  const originalPath = action => `/browser/${versionOf(original) === v2 ? 'v2' : 'v1'}/retained/${action}`;
+  const sameOptions = () => !installs(original.command) || JSON.stringify(original.installOptions) === JSON.stringify(options());
   function matches(context) {
     // Core owns an independent retained copy. Missing transient source bytes do
     // not revoke that copy; a present different selection must block approval.
-    return Boolean(original?.review && original.command === selectedCommand() &&
+    return Boolean(original?.review && original.command === selectedCommand() && versionOf(original) === selectedVersion() &&
       context.selected?.isReady && context.selected.serial === original.target &&
       (!context.artifact || (context.artifact.sha256 === original.artifactSha256 && context.artifact.sizeBytes === original.artifactSizeBytes)) && sameOptions());
   }
   function update() {
     const context = getContext(), currentAuth = auth(context);
     const scope = JSON.stringify([context.selected?.serial, context.selected?.isReady, context.artifact?.id,
-      context.artifact?.sha256, context.artifact?.sizeBytes, selectedCommand(), options()]);
+      context.artifact?.sha256, context.artifact?.sizeBytes, selectedCommand(), options(), context.capability?.contractVersions]);
     if (currentAuth !== authStamp) { verified = false; element('native-confirm').checked = false; authStamp = currentAuth; authEpoch++; }
     if (sourcePresent && !context.artifact) verified = false;
     sourcePresent = Boolean(context.artifact);
     if (scope !== scopeStamp) { element('native-confirm').checked = false; scopeStamp = scope; }
     const live = available(context), command = selectedCommand();
+    const selectedLive = versionAvailable(context, selectedVersion()), originalLive = versionAvailable(context, versionOf(original));
+    element('native-command').querySelector('option[value="apk.deploy"]').disabled = !versionAvailable(context, v2);
+    element('native-original-contract').disabled = !live || probing;
+    element('native-original-contract').querySelector(`option[value="${v2}"]`).disabled = !versionAvailable(context, v2);
     const source = context.artifact && /^[a-f0-9]{32}$/.test(context.artifact.id) && hash(context.artifact.sha256) && Number.isSafeInteger(context.artifact.sizeBytes);
     const transientBlock = mutates(command) && context.unresolvedTransient;
-    element('native-prepare').disabled = !live || context.busy || preparing || executing || probing || observing || observationProbing || observationPending() || !source || !context.selected?.isReady || hasUnresolved() || transientBlock;
-    element('native-install-options').hidden = command !== 'apk.install-inspected';
+    element('native-prepare').disabled = !selectedLive || context.busy || preparing || executing || probing || observing || observationProbing || observationPending() || !source || !context.selected?.isReady || hasUnresolved() || transientBlock;
+    element('native-install-options').hidden = !installs(command);
     for (const id of ['native-command', 'native-replace', 'native-grant']) element(id).disabled = preparing || executing;
     const fresh = Boolean(original && Date.parse(original.expiresAt) > Date.now());
-    const executable = Boolean(live && !context.busy && !preparing && !executing && !probing && verified &&
+    const executable = Boolean(originalLive && !context.busy && !preparing && !executing && !probing && verified &&
       original?.stage === 'preflighted' && !original.attempted && fresh && matches(context) && !transientBlock);
     element('native-confirm').disabled = !executable;
     element('native-execute').disabled = !executable || !element('native-confirm').checked;
-    element('native-status').disabled = !live || !binding(original) || probing;
-    element('native-cancel').disabled = !live || !binding(original) || probing || original?.stage === 'preflighted' || terminal.has(original?.stage);
+    element('native-status').disabled = !originalLive || !binding(original) || probing;
+    element('native-cancel').disabled = !originalLive || !binding(original) || probing || original?.stage === 'preflighted' || terminal.has(original?.stage);
     element('native-save').disabled = !binding(original);
-    const entered = {operationId:element('native-original-id').value, commandDigest:element('native-original-digest').value};
-    const changesOriginal = hasUnresolved() && (entered.operationId !== original.operationId || entered.commandDigest !== original.commandDigest);
-    element('native-read-reference').disabled = !live || probing || !binding(entered) || changesOriginal;
+    const entered = {operationId:element('native-original-id').value, commandDigest:element('native-original-digest').value, contractVersion:element('native-original-contract').value};
+    const changesOriginal = hasUnresolved() && !sameBinding(entered, original);
+    element('native-read-reference').disabled = !versionAvailable(context, versionOf(entered)) || probing || !binding(entered) || changesOriginal;
     element('native-review').hidden = !original;
     text('native-capability', !context.connected ? 'Connect to check the configured retained owner. Use the existing QFM desktop/CLI when this host is unavailable.' :
       context.capability?.supported === true ? 'Configured retained owner available. Prepare still checks its current state, exact bytes and selected target.' :
@@ -113,6 +129,11 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
       text('native-expiry', Number.isFinite(Date.parse(original.expiresAt)) ? new Date(original.expiresAt).toLocaleString() : 'Unknown');
       text('native-options', original.installOptions ? `Replace existing: ${original.installOptions.replaceExisting ? 'yes' : 'no'}; grant runtime permissions: ${original.installOptions.grantRuntimePermissions ? 'yes' : 'no'}` : 'Not applicable');
       text('native-operation-id', original.operationId); text('native-command-digest', original.commandDigest);
+      text('native-contract', versionOf(original));
+      text('native-policy', original.command === 'apk.deploy' && versionOf(original) === v2 ? deployPolicy : 'Existing v1 command contract');
+      text('native-effects', original.command === 'apk.deploy' ? 'Installs the exact APK, resolves its launcher and launches it. App and OpenXR readiness remain unknown.' :
+        original.command === 'apk.install-inspected' ? 'Installs the inspected APK. App and OpenXR readiness remain unknown.' :
+          original.command === 'app.launch-resolved' ? 'Launches the resolved app. App and OpenXR readiness remain unknown.' : 'Reads runtime facts. App and OpenXR readiness remain unknown.');
     }
     let detail = message || 'No retained operation prepared.';
     if (original && !verified) detail += ' Read original status after authentication; reconnecting sends nothing.';
@@ -120,6 +141,7 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
     if (original?.stage === 'preflighted') detail += ' Prepared operations cannot be cancelled. Wait for expiry, then explicitly read original status before preparing another.';
     if (original?.stage === 'preflighted' && !matches(context)) detail += ' Current target, selected bytes, operation or options differ from the reviewed original.';
     if (transientBlock) detail += ' A previous transient device change requires its original readback first.';
+    if ((original && !originalLive && live) || (command === 'apk.deploy' && !selectedLive && live)) detail += ' This host does not advertise the required retained contract version. Preserve the original version; no fallback is sent.';
     text('native-state', detail);
     text('native-recovery', recovery + (hasUnresolved() ? ' New preparation in the original slot is blocked. Separate runtime investigation can read fresh facts while preserving this original; use typed owner recovery to reconcile it.' : '') +
       (!storageAvailable && original ? ' Session storage is unavailable; save this reference before leaving the page.' : ''));
@@ -139,42 +161,45 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
         observationPending() ? ' Read or cancel this observation before requesting another. No automatic retry.' : '') +
       (!storageAvailable && observation ? ' Session storage is unavailable; save the observation reference before leaving.' : ''));
   }
-  const originalBody = () => ({operationId:original.operationId, commandDigest:original.commandDigest});
+  const originalBody = () => ({...(versionOf(original) === v2 ? {contractVersion:v2} : {}),operationId:original.operationId, commandDigest:original.commandDigest});
   function applyStatus(value, label, responseAuth) {
     update();
-    if (!binding(value) || value.operationId !== original?.operationId || value.commandDigest !== original.commandDigest ||
-      !commands.has(value.command) || (original.command && value.command !== original.command) || !stages.has(value.stage) || value.stage === 'clientUncertain' ||
+    if (!binding(value) || !responseVersion(value, versionOf(original)) || value.operationId !== original?.operationId || value.commandDigest !== original.commandDigest ||
+      !versionedCommand(value.command, versionOf(original)) || (original.command && value.command !== original.command) || !stages.has(value.stage) || value.stage === 'clientUncertain' ||
       !Number.isFinite(Date.parse(value.expiresAt)) || (original.expiresAt && original.expiresAt !== value.expiresAt))
       throw new Error('Original owner response binding is invalid');
     if (!(terminal.has(original.stage) && !terminal.has(value.stage))) original.stage = value.stage;
     original.command ||= value.command;
     if (textValue(value.expiresAt, 64)) original.expiresAt = value.expiresAt;
-    verified = responseAuth === authEpoch && available(getContext());
+    verified = responseAuth === authEpoch && versionAvailable(getContext(), versionOf(original));
     element('native-confirm').checked = false;
     message = `${label}: owner reports ${original.stage}.`;
+    if (original.command === 'apk.deploy' && original.stage === 'completed') message += ' Owner completed exact installation and resolved launch. App and OpenXR readiness remain unknown.';
     if (original.stage === 'outcomeUnknownRecoveryRequired' || original.stage === 'cleanupDebt') message += ' Preserve this original; use typed owner recovery. Status alone does not reconcile it.';
     if (original.attempted && original.stage === 'preflighted') message += ' This tab already attempted execution; it will not resend the original. Use the owner recovery route.';
     persist(); showResult(value, message);
   }
   async function prepare() {
     update(); if (element('native-prepare').disabled) return;
-    const context = getContext(), request = {artifactId:context.artifact.id, sha256:context.artifact.sha256,
+    const context = getContext(), version = selectedVersion(), request = {...(version === v2 ? {contractVersion:v2} : {}),artifactId:context.artifact.id, sha256:context.artifact.sha256,
       sizeBytes:context.artifact.sizeBytes, command:selectedCommand(), serial:context.selected.serial};
-    if (request.command === 'apk.install-inspected') request.installOptions = options();
+    if (installs(request.command)) request.installOptions = options();
     const sentAuth = authEpoch;
     preparing = true; setBusy(true); update();
     try {
-      const value = await api('/browser/v1/retained/preflight', {method:'POST', body:JSON.stringify(request)});
-      if (!binding(value) || value.command !== request.command || value.artifact?.sha256 !== request.sha256 ||
+      const value = await api(`/browser/${version === v2 ? 'v2' : 'v1'}/retained/preflight`, {method:'POST', body:JSON.stringify(request)});
+      if (!binding(value) || !responseVersion(value, version) || value.command !== request.command || value.artifact?.sha256 !== request.sha256 ||
         value.artifact?.sizeBytes !== request.sizeBytes || value.target?.serial !== request.serial ||
-        value.artifact?.path !== `retained://${value.operationId}/base.apk` || !Number.isFinite(Date.parse(value.expiresAt)))
+        value.artifact?.path !== `retained://${value.operationId}/base.apk` || !Number.isFinite(Date.parse(value.expiresAt)) ||
+        (version === v2 && (value.installOptions?.replaceExisting !== request.installOptions.replaceExisting || value.installOptions?.grantRuntimePermissions !== request.installOptions.grantRuntimePermissions)))
         throw new Error('Prepared owner receipt does not match the reviewed request');
       const identity = value.artifact.identity;
       original = reference({...value, target:request.serial, artifactSha256:request.sha256, artifactSizeBytes:request.sizeBytes,
         review:identity, installOptions:request.installOptions, attempted:false, stage:'preflighted'});
       update();
-      verified = sentAuth === authEpoch && available(getContext());
+      verified = sentAuth === authEpoch && versionAvailable(getContext(), version);
       element('native-original-id').value = original.operationId; element('native-original-digest').value = original.commandDigest;
+      element('native-original-contract').value = version;
       message = 'Original operation prepared. Review the exact package, version, signer, bytes, target, expiry and options.';
       persist(); showResult(value, message);
     } catch (error) {
@@ -188,9 +213,9 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
     original.attempted = true; original.stage = 'running'; verified = false; executing = true;
     element('native-confirm').checked = false; persist(); setBusy(true);
     message = 'Original execution sent once. Waiting for owner acknowledgement; page loss does not cancel its effect.'; update();
-    try { applyStatus(await api('/browser/v1/retained/execute', {method:'POST', body:JSON.stringify(request)}), 'Original execution', sentAuth); }
+    try { applyStatus(await api(originalPath('execute'), {method:'POST', body:JSON.stringify(request)}), 'Original execution', sentAuth); }
     catch (error) {
-      if (!terminal.has(original.stage)) original.stage = 'clientUncertain';
+      if (original.stage === 'running') original.stage = 'clientUncertain';
       verified = false; persist();
       message = error.dispatched === false ? 'Execute rejected before dispatch. Keep the original reference and read or cancel it before preparing another operation.' :
         'Client outcome unknown after the execute reply was lost or rejected. Preserve the original; do not repeat execution or infer cancellation.';
@@ -203,21 +228,21 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
     const context = getContext();
     if (!available(context) || probing) return;
     if (entered) {
-      if (!binding(entered) || (hasUnresolved() && (entered.operationId !== original.operationId || entered.commandDigest !== original.commandDigest))) return;
-      if (!original || entered.operationId !== original.operationId || entered.commandDigest !== original.commandDigest)
+      if (!binding(entered) || !versionAvailable(context, versionOf(entered)) || (hasUnresolved() && !sameBinding(entered, original))) return;
+      if (!original || !sameBinding(entered, original))
         original = reference({...entered, stage:'clientUncertain', attempted:true});
     }
-    if (!binding(original) || (action === 'cancel' && (original.stage === 'preflighted' || terminal.has(original.stage)))) return;
+    if (!binding(original) || !versionAvailable(context, versionOf(original)) || (action === 'cancel' && (original.stage === 'preflighted' || terminal.has(original.stage)))) return;
     const request = originalBody(), sentAuth = authEpoch;
     probing = true; verified = false; element('native-confirm').checked = false; persist(); update();
-    try { applyStatus(await api(`/browser/v1/retained/${action}`, {method:'POST', body:JSON.stringify(request)}), action === 'cancel' ? 'Original cancellation request' : 'Original status', sentAuth); }
+    try { applyStatus(await api(originalPath(action), {method:'POST', body:JSON.stringify(request)}), action === 'cancel' ? 'Original cancellation request' : 'Original status', sentAuth); }
     catch (error) {
       verified = false; message = `Original ${action} reply unavailable: ${error.message}. Original metadata remains retained; no automatic retry or reconciliation.${alternative(error)}`;
       showResult({...request, state:original.stage, error:error.message}, message);
     } finally { probing = false; setBusy(Boolean(getContext().busy)); update(); }
   }
   function applyObservationStatus(value) {
-    if (!binding(value) || value.operationId !== observation?.operationId || value.commandDigest !== observation.commandDigest ||
+    if (!binding(value) || !responseVersion(value, v1) || value.operationId !== observation?.operationId || value.commandDigest !== observation.commandDigest ||
       value.command !== 'runtime.observe' || !stages.has(value.stage) || value.stage === 'clientUncertain' || value.expiresAt !== observation.expiresAt)
       throw new Error('Separate observation owner response binding is invalid');
     if (!(terminal.has(observation.stage) && !terminal.has(value.stage))) observation.stage = value.stage;
@@ -233,7 +258,7 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
     observing = true; observationPreflight = true; setBusy(true); update();
     try {
       const value = await api('/browser/v1/retained/preflight', {method:'POST', body:JSON.stringify(request)});
-      if (!binding(value) || value.command !== 'runtime.observe' || value.artifact?.sha256 !== request.sha256 ||
+      if (!binding(value) || !responseVersion(value, v1) || value.command !== 'runtime.observe' || value.artifact?.sha256 !== request.sha256 ||
         value.artifact?.sizeBytes !== request.sizeBytes || value.target?.serial !== request.serial ||
         value.artifact?.path !== `retained://${value.operationId}/base.apk` || !Number.isFinite(Date.parse(value.expiresAt)))
         throw new Error('Separate observation receipt does not match selected scope');
@@ -276,11 +301,11 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
   element('native-execute').addEventListener('click', execute);
   element('native-status').addEventListener('click', () => probe('status'));
   element('native-cancel').addEventListener('click', () => probe('cancel'));
-  element('native-read-reference').addEventListener('click', () => probe('status', {operationId:element('native-original-id').value, commandDigest:element('native-original-digest').value}));
+  element('native-read-reference').addEventListener('click', () => probe('status', {operationId:element('native-original-id').value, commandDigest:element('native-original-digest').value, contractVersion:element('native-original-contract').value}));
   element('native-observe').addEventListener('click', observeSelected);
   element('native-observation-status').addEventListener('click', () => probeObservation('status'));
   element('native-observation-cancel').addEventListener('click', () => probeObservation('cancel'));
-  for (const id of ['native-command', 'native-replace', 'native-grant', 'native-confirm']) element(id).addEventListener('change', update);
+  for (const id of ['native-command', 'native-replace', 'native-grant', 'native-confirm', 'native-original-contract']) element(id).addEventListener('change', update);
   for (const id of ['native-original-id', 'native-original-digest']) element(id).addEventListener('input', update);
   function save(value, fileName) {
     if (!binding(value)) return;
@@ -294,6 +319,7 @@ export function createRetainedView({api, getContext, setBusy, showResult}) {
   if (original) { element('native-command').value = original.command || 'apk.install-inspected';
     if (original.installOptions) {element('native-replace').checked = original.installOptions.replaceExisting; element('native-grant').checked = original.installOptions.grantRuntimePermissions;}
     element('native-original-id').value = original.operationId; element('native-original-digest').value = original.commandDigest;
+    element('native-original-contract').value = versionOf(original);
   }
   update();
   return {update, hasUnresolved};

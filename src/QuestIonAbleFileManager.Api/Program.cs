@@ -59,7 +59,7 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await context.Response.WriteAsJsonAsync(new
         {
-            contractVersion = LocalApiContract.Version,
+            contractVersion = ResponseContractVersion(context),
             error = "unauthorized"
         });
         return;
@@ -77,6 +77,16 @@ app.MapPost("/v1/status", (Func<HttpContext, Task<IResult>>)(async context =>
 app.MapPost("/v1/cancel", (Func<HttpContext, Task<IResult>>)(async context =>
     await InvokeSyncAsync(context, registry.Cancel)));
 
+app.MapGet("/v2/capabilities", () => Results.Json(registry.GetV2Capabilities()));
+app.MapPost("/v2/preflight", (Func<HttpContext, Task<IResult>>)(async context =>
+    await InvokeAsync(context, body => registry.PreflightV2Async(body, context.RequestAborted))));
+app.MapPost("/v2/execute", (Func<HttpContext, Task<IResult>>)(async context =>
+    await InvokeAsync(context, body => registry.ExecuteV2Async(body))));
+app.MapPost("/v2/status", (Func<HttpContext, Task<IResult>>)(async context =>
+    await InvokeSyncAsync(context, registry.GetV2Status)));
+app.MapPost("/v2/cancel", (Func<HttpContext, Task<IResult>>)(async context =>
+    await InvokeSyncAsync(context, registry.CancelV2)));
+
 await app.RunAsync();
 return 0;
 
@@ -93,7 +103,7 @@ static async Task<IResult> InvokeAsync<T>(
     {
         return Results.Json(new
         {
-            contractVersion = LocalApiContract.Version,
+            contractVersion = ResponseContractVersion(context),
             error = exception.Code,
             message = exception.Message
         }, statusCode: StatusCodes.Status400BadRequest);
@@ -113,12 +123,15 @@ static async Task<IResult> InvokeSyncAsync<T>(
     {
         return Results.Json(new
         {
-            contractVersion = LocalApiContract.Version,
+            contractVersion = ResponseContractVersion(context),
             error = exception.Code,
             message = exception.Message
         }, statusCode: StatusCodes.Status400BadRequest);
     }
 }
+
+static string ResponseContractVersion(HttpContext context) =>
+    context.Request.Path.StartsWithSegments("/v2") ? LocalApiV2Contract.Version : LocalApiContract.Version;
 
 static async Task<ReadOnlyMemory<byte>> ReadBoundedBodyAsync(
     HttpRequest request,

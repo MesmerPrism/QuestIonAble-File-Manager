@@ -31,16 +31,20 @@ The public registry constructor requires explicit state settings. The
 zero-key, generated-path convenience constructor is internal and exposed only
 to the Core test assembly; production callers cannot silently enter test mode.
 
-The versioned `/v1` surface contains capabilities, preflight, execute, status,
-and cancellation endpoints. Bodies are bounded to 16 KiB and parsed with exact
+The versioned `/v1` and `/v2` surfaces contain capabilities, preflight, execute,
+status, and cancellation endpoints. Bodies are bounded to 16 KiB and parsed with exact
 case-sensitive fields; unknown and missing fields reject. Private local APK
 paths and exact serials exist only in authenticated local request/results and
 are deliberately omitted from public examples and schemas. Responses replace
 the private state-root pathname with an operation-scoped `retained://`
 artifact identifier, including nested command and result projections.
 
-The initial closed allowlist is `apk.inspect`, `apk.install-inspected`,
-`app.launch-resolved`, and `runtime.observe`.
+The unchanged v1 closed allowlist is `apk.inspect`, `apk.install-inspected`,
+`app.launch-resolved`, and `runtime.observe`. V2 initially admits only
+`apk.deploy`: one exact inspected base APK, one ready serial, and the existing
+Core install/launch/runtime-observation command. Neither version admits split
+sets, batches, diagnostic output reservations, properties, or caller-selected
+shell operations.
 
 Preflight copies an admitted source into private state with create-new,
 no-overwrite semantics, rejects source/state reparse points and hard links,
@@ -98,3 +102,75 @@ property/process control, credential body field, Fleet/Manifold/Agent Board
 authority input, endpoint discovery, or general filesystem route.
 Inspected install through this API rejects downgrade and Android `testOnly`
 requests; those explicit development options remain CLI-only.
+
+
+## V2 exact single-target deploy
+
+The standalone native host adds these authenticated routes on its existing
+explicit listener; it uses the same registry, state root, integrity key,
+journal/anchor, exclusive state owner, staging custody, and capacity limits.
+Starting a second owner or initializing separate v2 state is unnecessary.
+The browser host projects this same owner through its explicitly versioned
+retained routes and reviewed deploy control. See [browser operations](browser-operator.md);
+other advanced deployment policies remain outside this slice.
+
+| Route | Core registry entry point | Request |
+| --- | --- | --- |
+| `GET /v2/capabilities` | `GetV2Capabilities` | No body |
+| `POST /v2/preflight` | `PreflightV2Async` | `LocalApiV2PreflightRequest` |
+| `POST /v2/execute` | `ExecuteV2Async` | `LocalApiV2ExecuteRequest` |
+| `POST /v2/status` | `GetV2Status` | `LocalApiV2OperationRequest` |
+| `POST /v2/cancel` | `CancelV2` | `LocalApiV2OperationRequest` |
+
+Every v2 body requires
+`contractVersion: "questionable.file_manager.local_api.v2"`. Preflight requires
+`command: "apk.deploy"`, `apkPath`, and `serial`; its only optional fields are
+`installOptions` and `expiresInSeconds`. Install options retain the v1 shape:
+`replaceExisting` defaults true, `grantRuntimePermissions` defaults false,
+and both `allowDowngrade` and `allowTestPackages` must remain false. Unknown
+fields, duplicate properties, missing required values, other actions, and
+unsupported options reject before admission. No verification-policy selector
+or development-metadata fallback is admitted.
+
+Execute requires only `operationId` and `commandDigest` in addition to the
+contract version. Status and cancel require only `operationId` and the version.
+The retained operation's version must match the selected entry point: v1 calls
+cannot execute, expire, or cancel v2 work, and v2 calls cannot operate v1 work.
+A version mismatch rejects before dispatch, expiry, cancellation, or journal
+persistence. Responses reuse `LocalApiPreflightResult` and
+`LocalApiOperationStatus`, reporting the operation's actual contract version
+and the same `retained://` path redaction as v1.
+
+V2 has a separate SHA-256 digest domain. Its canonical UTF-8 JSON binds the v2
+contract, `apk.deploy` action, `exact-installed-install-launch.v1` policy,
+exact target serial, normalized immutable install options and CLI arguments,
+and one ordered APK resource with role, staged filename, size, hash and
+package/version/signer identity. The existing v1 digest algorithm and v1
+request DTOs are unchanged. Execute never accepts replacement arguments or
+rebuilds the command from caller input.
+
+Journal rows for v1 remain untagged with their original field names and shape.
+A v2 row adds `operationVersion` with the full v2 contract value. Mixed v1/v2
+journals reopen under the same authenticated envelope and monotonic anchor;
+every retained policy and digest is checked before orphan cleanup, and every
+remaining staged APK is rehashed and re-inspected before acceptance. Unknown
+operation versions reject before artifact cleanup. Older binaries reject the
+new field through strict unknown-member parsing before artifact cleanup;
+returning to an older binary requires preserving that newer state, never
+removing the tag or rewriting retained evidence to appear legacy.
+
+Admission consumes once and execution remains owned until Core returns a
+terminal acknowledgement. HTTP disconnect, page loss, or cancellation of the
+caller's `ExecuteV2Async` token does not cancel admitted execution. Only the
+explicit cancel route requests operation-token cancellation. It reports
+`cancellationRequested` while the executor has not acknowledged; after possible
+mutation dispatch, cancellation without conclusive readback remains
+`outcomeUnknownRecoveryRequired`. V1 pre-execution cancel behavior remains:
+a preflighted operation rejects cancellation and otherwise expires naturally.
+
+A completed deploy confirms only the existing Core claim: exact installed
+bytes and the resolved launch effect. Install success without confirmed launch
+readback remains unknown/pending, and application/OpenXR readiness remains
+unknown. Restart never replays consumed operations; interrupted mutations
+become unknown. Terminal and unknown records retain the existing bounded
+24-hour default lifetime and journal-before-delete cleanup-debt behavior.

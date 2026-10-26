@@ -4,7 +4,8 @@ using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.BrowserHost;
 
-public sealed record BrowserRetainedCapability(bool Supported, string Code, string Reason, string Alternative);
+public sealed record BrowserRetainedCapability(bool Supported, string Code, string Reason, string Alternative,
+    IReadOnlyList<string>? ContractVersions = null);
 public sealed class BrowserRetainedException(string code, int statusCode = 400, bool? dispatched = null) : Exception(code)
 {
     public string Code { get; } = code;
@@ -13,16 +14,26 @@ public sealed class BrowserRetainedException(string code, int statusCode = 400, 
 }
 
 public sealed record BrowserRetainedPreflightRequest(string ArtifactId, string Sha256, long SizeBytes,
-    string Command, string? Serial, LocalApiInstallOptions? InstallOptions, int? ExpiresInSeconds);
+    string Command, string? Serial, LocalApiInstallOptions? InstallOptions, int? ExpiresInSeconds,
+    string ContractVersion = LocalApiContract.Version);
+
+public sealed record BrowserRetainedInstallOptions(bool ReplaceExisting, bool GrantRuntimePermissions);
+public sealed record BrowserRetainedV2PreflightResult(string ContractVersion, string OperationId, string Command,
+    string CommandDigest, DateTimeOffset ExpiresAt, ApkArtifactInspection Artifact, QuestDevice? Target,
+    BrowserRetainedInstallOptions InstallOptions);
 
 // A test seam around the existing owner methods, never a second registry or journal.
 internal sealed record BrowserRetainedOwnerCalls(
     Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiPreflightResult>> Preflight,
     Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiOperationStatus>> Execute,
     Func<ReadOnlyMemory<byte>, LocalApiOperationStatus> Status,
-    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus> Cancel, Action Dispose);
+    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus> Cancel, Action Dispose,
+    Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiPreflightResult>>? PreflightV2 = null,
+    Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiOperationStatus>>? ExecuteV2 = null,
+    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus>? StatusV2 = null,
+    Func<ReadOnlyMemory<byte>, LocalApiOperationStatus>? CancelV2 = null);
 
-/// <summary>In-process adapter to the existing explicitly configured LocalApi v1 retained owner.</summary>
+/// <summary>In-process adapter to the existing explicitly configured, versioned retained owner.</summary>
 public sealed class BrowserRetainedOperations : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -51,7 +62,8 @@ public sealed class BrowserRetainedOperations : IDisposable
             // Settings and integrity key come from the configured existing owner, once.
             var settings = LocalApiStateSettings.FromEnvironment(readEnvironment);
             var registry = new LocalApiCommandRegistry(AdbClient.CreateDefault(), settings);
-            return new(registry.PreflightAsync, registry.ExecuteAsync, registry.GetStatus, registry.Cancel, registry.Dispose);
+            return new(registry.PreflightAsync, registry.ExecuteAsync, registry.GetStatus, registry.Cancel, registry.Dispose,
+                registry.PreflightV2Async, registry.ExecuteV2Async, registry.GetV2Status, registry.CancelV2);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
@@ -68,25 +80,53 @@ public sealed class BrowserRetainedOperations : IDisposable
     }
 
     public BrowserRetainedCapability Capability => _ownerFailure ?? (_owner.IsValueCreated
-        ? new(true, "available", "The configured retained owner is open in this process.", "Preserve its state and key; reconcile original operation IDs before any new recovery action.")
+        ? new(true, "available", "The configured retained owner is open in this process.", "Preserve its state and key; reconcile original operation IDs before any new recovery action.",
+            HasV2(_owner.Value) ? [LocalApiContract.Version, LocalApiV2Contract.Version] : [LocalApiContract.Version])
         : _configuredCapability());
 
     public async Task<LocalApiPreflightResult> PreflightAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation = default)
     {
+        try { return await PreflightOwnedAsync(ParsePreflight(body), cancellation).ConfigureAwait(false); }
+        catch (Exception exception) { throw Translate(exception); }
+    }
+
+    public async Task<BrowserRetainedV2PreflightResult> PreflightV2Async(ReadOnlyMemory<byte> body, CancellationToken cancellation = default)
+    {
         try
         {
-            var request = ParsePreflight(body);
+            var request = ParseV2Preflight(body);
+            var result = await PreflightOwnedAsync(request, cancellation).ConfigureAwait(false);
+            var options = request.InstallOptions ?? new LocalApiInstallOptions();
+            // These are the exact normalized request options acknowledged by the owner,
+            // not an independent options readback. The owner digest binds its actual command.
+            return new(result.ContractVersion, result.OperationId, result.Command, result.CommandDigest, result.ExpiresAt,
+                result.Artifact, result.Target, new(options.ReplaceExisting, options.GrantRuntimePermissions));
+        }
+        catch (Exception exception) { throw Translate(exception); }
+    }
+
+    private async Task<LocalApiPreflightResult> PreflightOwnedAsync(BrowserRetainedPreflightRequest request, CancellationToken cancellation)
+    {
+        try
+        {
             using var call = EnterCall(); EnsureSupported();
             using var gate = _tryAcquireOperation() ?? throw new BrowserRetainedException("operation_busy", 409);
             await using var lease = await _artifacts().AcquireAsync(request.ArtifactId, request.Sha256, request.SizeBytes, cancellation).ConfigureAwait(false);
             if (lease.Receipt.Id != request.ArtifactId || lease.Receipt.Sha256 != request.Sha256 || lease.Receipt.SizeBytes != request.SizeBytes)
                 throw new BrowserRetainedException("artifact_binding_mismatch", 409);
-            var ownerRequest = new LocalApiPreflightRequest(LocalApiContract.Version, request.Command, lease.Path,
-                request.Serial, request.InstallOptions, request.ExpiresInSeconds);
+            var owner = OwnerForVersion(request.ContractVersion);
+            var ownerRequest = request.ContractVersion == LocalApiContract.Version
+                ? JsonSerializer.SerializeToUtf8Bytes(new LocalApiPreflightRequest(LocalApiContract.Version, request.Command, lease.Path,
+                    request.Serial, request.InstallOptions, request.ExpiresInSeconds), Json)
+                : JsonSerializer.SerializeToUtf8Bytes(new LocalApiV2PreflightRequest(LocalApiV2Contract.Version, request.Command, lease.Path,
+                    request.Serial!, request.InstallOptions, request.ExpiresInSeconds), Json);
             // Await the owner's durable staging copy and journal commit before releasing this source lease.
-            var result = await Owner().Preflight(JsonSerializer.SerializeToUtf8Bytes(ownerRequest, Json), cancellation).ConfigureAwait(false);
-            if (result.Command != request.Command || result.Artifact.Sha256 != request.Sha256 || result.Artifact.SizeBytes != request.SizeBytes ||
-                result.Artifact.Path != $"retained://{result.OperationId}/base.apk" || result.Target?.Serial != request.Serial)
+            var result = await owner.Preflight(ownerRequest, cancellation).ConfigureAwait(false);
+            if (result.ContractVersion != request.ContractVersion || result.Command != request.Command ||
+                !ValidOperationId(result.OperationId) || !ValidHash(result.CommandDigest) ||
+                result.Artifact.Sha256 != request.Sha256 || result.Artifact.SizeBytes != request.SizeBytes ||
+                result.Artifact.Path != $"retained://{result.OperationId}/base.apk" || result.Target?.Serial != request.Serial ||
+                (request.ContractVersion == LocalApiV2Contract.Version && result.Target?.IsReady != true))
                 throw new BrowserRetainedException("artifact_binding_mismatch", 409);
             return result;
         }
@@ -94,14 +134,19 @@ public sealed class BrowserRetainedOperations : IDisposable
     }
 
     /// <param name="stopping">Owner/application lifetime only; never a page's RequestAborted token.</param>
-    public async Task<LocalApiOperationStatus> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
+    public Task<LocalApiOperationStatus> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default) =>
+        ExecuteForVersionAsync(body, LocalApiContract.Version, stopping);
+    public Task<LocalApiOperationStatus> ExecuteV2Async(ReadOnlyMemory<byte> body, CancellationToken stopping = default) =>
+        ExecuteForVersionAsync(body, LocalApiV2Contract.Version, stopping);
+
+    private async Task<LocalApiOperationStatus> ExecuteForVersionAsync(ReadOnlyMemory<byte> body, string version, CancellationToken stopping)
     {
         try
         {
-            var binding = ParseBinding(body);
+            var binding = ParseBinding(body, version);
             using var call = EnterCall(); EnsureSupported();
-            var owner = Owner();
-            var current = VerifyBinding(owner.Status(OwnerOperationBody(binding.OperationId)), binding);
+            var owner = OwnerForVersion(version);
+            var current = VerifyBinding(owner.Status(OwnerOperationBody(binding)), binding);
             IDisposable gate;
             lock (_sync)
             {
@@ -114,9 +159,11 @@ public sealed class BrowserRetainedOperations : IDisposable
             {
                 try
                 {
-                    var request = new LocalApiExecuteRequest(LocalApiContract.Version, binding.OperationId, binding.CommandDigest);
+                    var request = version == LocalApiContract.Version
+                        ? JsonSerializer.SerializeToUtf8Bytes(new LocalApiExecuteRequest(version, binding.OperationId, binding.CommandDigest), Json)
+                        : JsonSerializer.SerializeToUtf8Bytes(new LocalApiV2ExecuteRequest(version, binding.OperationId, binding.CommandDigest), Json);
                     // Core awaits executor acknowledgement/terminal state; a disconnected page cannot release the gate early.
-                    return await owner.Execute(JsonSerializer.SerializeToUtf8Bytes(request, Json), stopping).ConfigureAwait(false);
+                    return VerifyBinding(await owner.Execute(request, stopping).ConfigureAwait(false), binding);
                 }
                 finally { lock (_sync) _executing.Remove(binding.OperationId); }
             }
@@ -124,49 +171,60 @@ public sealed class BrowserRetainedOperations : IDisposable
         catch (Exception exception) { throw Translate(exception); }
     }
 
-    public LocalApiOperationStatus GetStatus(ReadOnlyMemory<byte> body)
+    public LocalApiOperationStatus GetStatus(ReadOnlyMemory<byte> body) => GetStatusForVersion(body, LocalApiContract.Version);
+    public LocalApiOperationStatus GetV2Status(ReadOnlyMemory<byte> body) => GetStatusForVersion(body, LocalApiV2Contract.Version);
+    private LocalApiOperationStatus GetStatusForVersion(ReadOnlyMemory<byte> body, string version)
     {
         try
         {
-            var binding = ParseBinding(body); using var call = EnterCall(); EnsureSupported();
-            return VerifyBinding(Owner().Status(OwnerOperationBody(binding.OperationId)), binding);
+            var binding = ParseBinding(body, version); using var call = EnterCall(); EnsureSupported();
+            return VerifyBinding(OwnerForVersion(version).Status(OwnerOperationBody(binding)), binding);
         }
         catch (Exception exception) { throw Translate(exception); }
     }
 
-    public LocalApiOperationStatus Cancel(ReadOnlyMemory<byte> body)
+    public LocalApiOperationStatus Cancel(ReadOnlyMemory<byte> body) => CancelForVersion(body, LocalApiContract.Version);
+    public LocalApiOperationStatus CancelV2(ReadOnlyMemory<byte> body) => CancelForVersion(body, LocalApiV2Contract.Version);
+    private LocalApiOperationStatus CancelForVersion(ReadOnlyMemory<byte> body, string version)
     {
         try
         {
-            var binding = ParseBinding(body); using var call = EnterCall(); EnsureSupported();
-            var owner = Owner(); VerifyBinding(owner.Status(OwnerOperationBody(binding.OperationId)), binding);
-            return VerifyBinding(owner.Cancel(OwnerOperationBody(binding.OperationId)), binding);
+            var binding = ParseBinding(body, version); using var call = EnterCall(); EnsureSupported();
+            var owner = OwnerForVersion(version); VerifyBinding(owner.Status(OwnerOperationBody(binding)), binding);
+            return VerifyBinding(owner.Cancel(OwnerOperationBody(binding)), binding);
         }
         catch (Exception exception) { throw Translate(exception); }
     }
 
-    public static BrowserRetainedPreflightRequest ParsePreflight(ReadOnlyMemory<byte> body)
+    public static BrowserRetainedPreflightRequest ParsePreflight(ReadOnlyMemory<byte> body) => ParsePreflightForVersion(body, LocalApiContract.Version);
+    public static BrowserRetainedPreflightRequest ParseV2Preflight(ReadOnlyMemory<byte> body) => ParsePreflightForVersion(body, LocalApiV2Contract.Version);
+    private static BrowserRetainedPreflightRequest ParsePreflightForVersion(ReadOnlyMemory<byte> body, string version)
     {
         try
         {
             using var document = ParseObject(body);
             var root = document.RootElement;
             var allowed = new HashSet<string>(["artifactId", "sha256", "sizeBytes", "command", "serial"], StringComparer.Ordinal);
+            if (version == LocalApiV2Contract.Version) allowed.Add("contractVersion");
             if (root.TryGetProperty("installOptions", out _)) allowed.Add("installOptions");
             if (root.TryGetProperty("expiresInSeconds", out _)) allowed.Add("expiresInSeconds");
             RequireFields(root, allowed);
+            if (version == LocalApiV2Contract.Version && Text(root, "contractVersion") != version)
+                throw new BrowserRetainedException("contract_unsupported");
             var id = BrowserArtifactCommands.RequireArtifactId(Text(root, "artifactId"));
             var hash = BrowserArtifactCommands.RequireHash(Text(root, "sha256"));
             if (!root.GetProperty("sizeBytes").TryGetInt64(out var size) || size is < 0 or > BrowserArtifactCommands.MaximumArtifactBytes)
                 throw new BrowserRetainedException("artifact_size_invalid");
             var command = Text(root, "command");
-            if (!LocalApiContract.Commands.Contains(command, StringComparer.Ordinal)) throw new BrowserRetainedException("command_not_allowed");
+            if (!(version == LocalApiContract.Version ? LocalApiContract.Commands : LocalApiV2Contract.Commands).Contains(command, StringComparer.Ordinal))
+                throw new BrowserRetainedException("command_not_allowed");
             var serial = root.GetProperty("serial").ValueKind == JsonValueKind.Null ? null : Text(root, "serial");
             if ((command == "apk.inspect") != (serial is null)) throw new BrowserRetainedException("serial_invalid");
+            if (version == LocalApiV2Contract.Version) serial = AndroidInput.RequireSerial(serial!);
             LocalApiInstallOptions? options = null;
             if (root.TryGetProperty("installOptions", out var optionElement))
             {
-                if (command != "apk.install-inspected" || optionElement.ValueKind != JsonValueKind.Object)
+                if (command is not ("apk.install-inspected" or "apk.deploy") || optionElement.ValueKind != JsonValueKind.Object)
                     throw new BrowserRetainedException("fields_not_allowed");
                 RequireFields(optionElement, ["replaceExisting", "grantRuntimePermissions"]);
                 options = new(Boolean(optionElement, "replaceExisting"), GrantRuntimePermissions: Boolean(optionElement, "grantRuntimePermissions"));
@@ -178,20 +236,22 @@ public sealed class BrowserRetainedOperations : IDisposable
                     throw new BrowserRetainedException("expiry_invalid");
                 expires = seconds;
             }
-            return new(id, hash, size, command, serial, options, expires);
+            return new(id, hash, size, command, serial, options, expires, version);
         }
         catch (Exception exception) { throw Translate(exception); }
     }
 
-    private sealed record Binding(string OperationId, string CommandDigest);
-    private static Binding ParseBinding(ReadOnlyMemory<byte> body)
+    private sealed record Binding(string OperationId, string CommandDigest, string ContractVersion);
+    private static Binding ParseBinding(ReadOnlyMemory<byte> body, string version)
     {
         using var document = ParseObject(body); var root = document.RootElement;
-        RequireFields(root, ["operationId", "commandDigest"]);
+        RequireFields(root, version == LocalApiContract.Version ? ["operationId", "commandDigest"] : ["contractVersion", "operationId", "commandDigest"]);
+        if (version == LocalApiV2Contract.Version && Text(root, "contractVersion") != version)
+            throw new BrowserRetainedException("contract_unsupported");
         var id = Text(root, "operationId");
         if (!id.StartsWith("api-", StringComparison.Ordinal)) throw new BrowserRetainedException("operation_binding_invalid");
         BrowserArtifactCommands.RequireArtifactId(id[4..]);
-        return new(id, BrowserArtifactCommands.RequireHash(Text(root, "commandDigest")));
+        return new(id, BrowserArtifactCommands.RequireHash(Text(root, "commandDigest")), version);
     }
     private static JsonDocument ParseObject(ReadOnlyMemory<byte> body)
     {
@@ -212,12 +272,29 @@ public sealed class BrowserRetainedOperations : IDisposable
             ? value : throw new BrowserRetainedException("field_invalid");
     private static bool Boolean(JsonElement root, string name) => root.GetProperty(name).ValueKind switch
     { JsonValueKind.True => true, JsonValueKind.False => false, _ => throw new BrowserRetainedException("field_invalid") };
-    private static byte[] OwnerOperationBody(string id) => JsonSerializer.SerializeToUtf8Bytes(new LocalApiOperationRequest(LocalApiContract.Version, id), Json);
+    private static byte[] OwnerOperationBody(Binding binding) => binding.ContractVersion == LocalApiContract.Version
+        ? JsonSerializer.SerializeToUtf8Bytes(new LocalApiOperationRequest(binding.ContractVersion, binding.OperationId), Json)
+        : JsonSerializer.SerializeToUtf8Bytes(new LocalApiV2OperationRequest(binding.ContractVersion, binding.OperationId), Json);
     private static LocalApiOperationStatus VerifyBinding(LocalApiOperationStatus value, Binding binding)
     {
         if (value.OperationId != binding.OperationId || value.CommandDigest != binding.CommandDigest)
             throw new BrowserRetainedException("digest_mismatch", 409);
+        if (value.ContractVersion != binding.ContractVersion) throw new BrowserRetainedException("operation_version_mismatch", 409);
+        if (!(binding.ContractVersion == LocalApiContract.Version ? LocalApiContract.Commands : LocalApiV2Contract.Commands).Contains(value.Command, StringComparer.Ordinal))
+            throw new BrowserRetainedException("operation_binding_mismatch", 409);
         return value;
+    }
+
+    private static bool ValidOperationId(string id) => id.StartsWith("api-", StringComparison.Ordinal) &&
+        Guid.TryParseExact(id[4..], "N", out var parsed) && parsed != Guid.Empty && id[4..] == parsed.ToString("N");
+    private static bool ValidHash(string hash) => hash.Length == 64 && hash.All(static character => char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');
+    private static bool HasV2(BrowserRetainedOwnerCalls owner) => owner.PreflightV2 is not null && owner.ExecuteV2 is not null && owner.StatusV2 is not null && owner.CancelV2 is not null;
+    private BrowserRetainedOwnerCalls OwnerForVersion(string version)
+    {
+        var owner = Owner();
+        if (version == LocalApiContract.Version) return owner;
+        if (!HasV2(owner)) throw new BrowserRetainedException("retained_contract_unavailable", 501);
+        return owner with { Preflight = owner.PreflightV2!, Execute = owner.ExecuteV2!, Status = owner.StatusV2!, Cancel = owner.CancelV2! };
     }
 
     private BrowserRetainedOwnerCalls Owner()
@@ -247,7 +324,7 @@ public sealed class BrowserRetainedOperations : IDisposable
             return new(false, "retained_configuration_invalid", "The private journal configuration is invalid.", "Use the existing valid 32–512 byte journal secret; never replace a key to bypass retained uncertainty.");
         return Configured();
     }
-    private static BrowserRetainedCapability Configured() => new(true, "configured_not_opened", "Configuration is present; the owner is validated on an explicit request.", "Preserve the configured state and journal secret across browser sessions and companion restarts.");
+    private static BrowserRetainedCapability Configured() => new(true, "configured_not_opened", "Configuration is present; the owner is validated on an explicit request.", "Preserve the configured state and journal secret across browser sessions and companion restarts.", [LocalApiContract.Version, LocalApiV2Contract.Version]);
     private IDisposable? TryAcquireLocal() => Interlocked.CompareExchange(ref _localBusy, 1, 0) == 0
         ? new Release(() => Interlocked.Exchange(ref _localBusy, 0)) : null;
     private IDisposable EnterCall()
@@ -273,9 +350,10 @@ public sealed class BrowserRetainedOperations : IDisposable
         BrowserRetainedException retained => retained,
         BrowserRequestException request when request.Code is "artifact_id_invalid" or "artifact_hash_invalid" => new(request.Code),
         JsonException or InvalidOperationException when exception is not LocalApiException => new("request_invalid"),
-        LocalApiException api when api.Code is "operation_consumed" or "running_capacity" or "operation_expired" or "operation_not_running" or "digest_mismatch" or "state_in_use" => new(api.Code, 409),
+        ArgumentException => new("request_invalid"),
+        LocalApiException api when api.Code is "operation_consumed" or "running_capacity" or "operation_expired" or "operation_not_running" or "digest_mismatch" or "state_in_use" or "operation_version_mismatch" => new(api.Code, 409),
         LocalApiException api when api.Code is "operation_unknown" => new(api.Code, 404),
-        LocalApiException api when api.Code is "target_not_ready" or "split_not_supported" or "expiry_invalid" or "command_not_allowed" => new(api.Code),
+        LocalApiException api when api.Code is "target_not_ready" or "split_not_supported" or "expiry_invalid" or "command_not_allowed" or "contract_unsupported" => new(api.Code),
         BrowserArtifactException artifact when artifact.Code is "artifact_not_found" => new(artifact.Code, 404),
         BrowserArtifactException artifact when artifact.Code is "artifact_integrity_mismatch" or "artifact_in_use" => new(artifact.Code, 409),
         OperationCanceledException => new("retained_operation_cancelled", 408),

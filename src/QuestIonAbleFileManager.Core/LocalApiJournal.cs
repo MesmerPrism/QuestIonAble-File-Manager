@@ -20,7 +20,9 @@ internal sealed record LocalApiJournalEntry(
     JsonElement? ResultEvidence,
     OperatorMutationReceipt? MutationEvidence,
     string? ErrorCode,
-    string? Error);
+    string? Error,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? OperationVersion = null);
 
 internal sealed class LocalApiJournal : IDisposable
 {
@@ -85,7 +87,13 @@ internal sealed class LocalApiJournal : IDisposable
             _lastEnvelopeHash = envelopeHash;
             _anchorHandle = FleetWindowsFileSafety.OpenRetainedReadOnlyFile(_anchorPath);
             FleetWindowsFileSafety.ValidateFile(_anchorHandle.SafeFileHandle, _anchorPath, requireSingleLink: true);
-            return JsonSerializer.Deserialize<LocalApiJournalEntry[]>(payload, Json) ?? [];
+            var entries = JsonSerializer.Deserialize<LocalApiJournalEntry[]>(payload, Json) ?? [];
+            // Validate every version before registry recovery may delete an orphan or cleanup debt.
+            // Older readers reject this new field through their strict unknown-member handling.
+            if (entries.Any(static entry => entry.OperationVersion is not null &&
+                    entry.OperationVersion != LocalApiV2Contract.Version))
+                throw new LocalApiException("journal_version_unsupported", "A retained operation version is unsupported.");
+            return entries;
         }
         catch (Exception exception) when (exception is not LocalApiException)
         {

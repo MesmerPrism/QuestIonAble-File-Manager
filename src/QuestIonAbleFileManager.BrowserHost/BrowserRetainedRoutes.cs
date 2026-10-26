@@ -19,10 +19,18 @@ public static class BrowserRetainedRoutes
             var routeAction = action;
             app.MapPost("/browser/v1/retained/" + routeAction, (HttpContext context) =>
                 InvokeAsync(context, operations, routeAction, app.Lifetime.ApplicationStopping));
+            app.MapPost("/browser/v2/retained/" + routeAction, (HttpContext context) =>
+                InvokeV2Async(context, operations, routeAction, app.Lifetime.ApplicationStopping));
         }
     }
 
     internal static async Task InvokeAsync(HttpContext context, BrowserRetainedOperations operations, string action,
+        CancellationToken stopping = default) => await InvokeVersionAsync(context, operations, action, false, stopping);
+
+    internal static async Task InvokeV2Async(HttpContext context, BrowserRetainedOperations operations, string action,
+        CancellationToken stopping = default) => await InvokeVersionAsync(context, operations, action, true, stopping);
+
+    private static async Task InvokeVersionAsync(HttpContext context, BrowserRetainedOperations operations, string action, bool v2,
         CancellationToken stopping = default)
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -35,11 +43,11 @@ public static class BrowserRetainedRoutes
             var body = await ReadBodyAsync(context);
             object result = action switch
             {
-                "preflight" => await operations.PreflightAsync(body, context.RequestAborted),
+                "preflight" => v2 ? await operations.PreflightV2Async(body, context.RequestAborted) : await operations.PreflightAsync(body, context.RequestAborted),
                 // Once admitted, only owner lifetime and explicit retained cancellation affect execution.
-                "execute" => await operations.ExecuteAsync(body, stopping),
-                "status" => operations.GetStatus(body),
-                "cancel" => operations.Cancel(body),
+                "execute" => v2 ? await operations.ExecuteV2Async(body, stopping) : await operations.ExecuteAsync(body, stopping),
+                "status" => v2 ? operations.GetV2Status(body) : operations.GetStatus(body),
+                "cancel" => v2 ? operations.CancelV2(body) : operations.Cancel(body),
                 _ => throw new BrowserRetainedException("command_not_allowed", 404, false)
             };
             await context.Response.WriteAsJsonAsync(result, Json, CancellationToken.None);

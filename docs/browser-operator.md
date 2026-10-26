@@ -315,18 +315,21 @@ Linux/macOS report this protected retained owner unavailable and offer the
 Windows companion alternative.
 
 Choose and stage an APK, select one ready target, then prepare an inspected
-install, resolved launch or runtime observation. Preparation creates the owner's
-independent protected copy and commits its journal before releasing the transient
+install, resolved launch, exact single-target deploy or runtime observation.
+Preparation creates the owner's independent protected copy and commits its
+journal before releasing the transient
 upload lease. Review package, version, signer, SHA-256, size, target, options and
 expiry before approving and executing once. Removing the transient upload does
 not remove this retained copy. A present different APK selection blocks approval;
 after authentication or source removal, explicitly read the original status
 again. Default approval lifetime is 120 seconds, with a maximum of 300 seconds.
-A prepared, unexecuted owner record cannot be cancelled by v1; let its approval
+A prepared, unexecuted owner record cannot be cancelled; let its approval
 expire and explicitly read status before replacing that browser reference.
 Single-APK install supports replace-existing and requested runtime permission
 options. Downgrade, test-only, split sets and parallel deployment remain outside
-this retained v1 contract.
+these retained contracts. Deploy installs the exact APK and invokes its resolved
+launcher once through the existing Core composite. Completion confirms the
+installed-byte and resolved-launch effect; app/OpenXR readiness remains unknown.
 
 All four POST routes require JSON, the same origin/bearer/session checks, the
 4 KiB body bound and strict duplicate/unknown-field rejection:
@@ -337,6 +340,34 @@ All four POST routes require JSON, the same origin/bearer/session checks, the
 | `/browser/v1/retained/execute` | `operationId` and `commandDigest` from preflight; consumes the existing owner command once. |
 | `/browser/v1/retained/status` | The original `operationId` and `commandDigest`; reads its retained state without executing. |
 | `/browser/v1/retained/cancel` | The original binding; asks the owner to cancel running work. A preflighted record returns `operation_not_running`. Cancellation is not proof that a dispatched mutation had no effect. |
+
+The configured capability advertises `contractVersions`; exact deploy requires
+`questionable.file_manager.local_api.v2`. Legacy hosts without this advertisement
+retain the v1 choices. V2 routes use the same private owner, journal, key and
+shared gate, with no additional listener:
+
+| Route | Exact request |
+| --- | --- |
+| `/browser/v2/retained/preflight` | `contractVersion` exactly `questionable.file_manager.local_api.v2`, `artifactId`, `sha256`, `sizeBytes`, `command` exactly `apk.deploy`, `serial`; optional `installOptions` and `expiresInSeconds`. Options contain exactly boolean `replaceExisting` and `grantRuntimePermissions`. |
+| `/browser/v2/retained/execute` | The v2 `contractVersion`, original `operationId` and `commandDigest`. |
+| `/browser/v2/retained/status` | The same v2 version and original binding; never dispatches. |
+| `/browser/v2/retained/cancel` | The same v2 version and original binding; requests cancellation with owner acknowledgement. |
+
+The v2 preflight response adds normalized `installOptions` to the existing owner
+receipt. This echoes the exact request forwarded to Core after its bound durable
+acknowledgement; the v2 digest owns the immutable option binding. Every lifecycle
+response must match the original version, ID, digest, command and expiry. Wrong
+versions reject before executing, expiring or cancelling another version's work.
+The UI saves the v2 contract in its small original reference and requires explicit
+version selection for manually entered references. Legacy saved references without
+a version remain v1. Reconnecting or changing the operation selector never changes
+the original's version or authorizes a fallback.
+
+Mixed v1/v2 rows share the authenticated journal and anchor. Older owner binaries
+reject v2 rows; preserve the current qualified owner for recovery rather than
+starting an older binary against that state or replacing the state/key. The
+separate runtime investigation remains a v1 read-only operation and preserves
+either version's original unknown mutation.
 
 Retained preparation/execution and transient Core commands share one host
 operation gate. Retained status/cancel remain available during execution.
