@@ -24,10 +24,34 @@ public sealed class BoundedByteReadTests
         Assert.Equal(new[] { "-s", "FIXTURE", "shell", "-T", "-n" }, runner.StreamCalls[0].Take(5));
         Assert.Equal(8, runner.MaximumBytes);
         Assert.Equal(TimeSpan.FromMinutes(5), runner.Timeout);
-        Assert.Contains("[ ! -f /proc/self/fd/3 ]", runner.StreamCalls[0][5]);
-        Assert.Contains("stat -L -c %s -- /proc/self/fd/3", runner.StreamCalls[0][5]);
-        Assert.Equal(2, runner.StreamCalls[0][5].Split("stat -L -c %d:%i:%s:%Y:%Z -- /proc/self/fd/3").Length - 1);
+        Assert.Contains("[ ! -f /proc/$$/fd/3 ]", runner.StreamCalls[0][5]);
+        Assert.Contains("stat -L -c %s -- /proc/$$/fd/3", runner.StreamCalls[0][5]);
+        Assert.Equal(2, runner.StreamCalls[0][5].Split("stat -L -c %d:%i:%s:%Y:%Z -- /proc/$$/fd/3").Length - 1);
+        Assert.DoesNotContain("/proc/self/fd/3", runner.StreamCalls[0][5]);
         Assert.Contains("-gt 8", runner.StreamCalls[0][5]);
+    }
+
+    [Fact]
+    public async Task ShellOwnedDescriptorSurvivesExternalStatClosingItsChildCopy()
+    {
+        // Linux exercises the actual generated shell against procfs. Windows
+        // still checks the exact owner-PID probes above; no ADB is involved.
+        if (!OperatingSystem.IsLinux()) return;
+        var directory = Path.Combine(Path.GetTempPath(), "qfm-bounded-read-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var source = Path.Combine(directory, "opened file.bin");
+        try
+        {
+            byte[] bytes = [1, 2, 3];
+            await File.WriteAllBytesAsync(source, bytes);
+            using var destination = new MemoryStream();
+            var result = await new AdbClient("fixture-adb", new ClosedChildDescriptorRunner())
+                .PullFileBoundedAsync("FIXTURE", source, destination, bytes.Length);
+            Assert.Equal(bytes, destination.ToArray());
+            Assert.Equal(bytes.Length, result.BytesWritten);
+            Assert.Equal(Hash(bytes), result.Sha256);
+        }
+        finally { File.Delete(source); Directory.Delete(directory); }
     }
 
     [Fact]
@@ -164,6 +188,21 @@ public sealed class BoundedByteReadTests
     }
 
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private sealed class ClosedChildDescriptorRunner : IStreamingCommandRunner
+    {
+        public Task<CommandResult> RunAsync(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<StreamingCommandResult> RunToStreamAsync(string fileName, IReadOnlyList<string> arguments,
+            Stream destination, long maximumBytes, TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            // Prove the external child has no FD 3, then execute real stat with
+            // that descriptor closed. The opening shell must retain its copy.
+            const string closedChild = "stat() { /usr/bin/test ! -e /proc/self/fd/3 3<&- || return 69; command stat \"$@\" 3<&-; }; ";
+            return new CommandRunner().RunToStreamAsync("/bin/bash", ["-c", closedChild + arguments[5]],
+                destination, maximumBytes, TimeSpan.FromSeconds(10), cancellationToken);
+        }
+    }
 
     private sealed class FailingDestination : MemoryStream
     {

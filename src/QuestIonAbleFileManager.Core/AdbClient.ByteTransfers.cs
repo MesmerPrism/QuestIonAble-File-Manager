@@ -31,14 +31,15 @@ public sealed partial class AdbClient
         // remote-root/authority policy or caller-selected shell text is admitted.
         var command = $"candidate=$(realpath {AndroidInput.ShellQuote(remotePath)}) || exit 41; " +
             "expected=\"$candidate\"; " + BuildOpenedRemoteHandleProof() +
-            "if [ ! -f /proc/self/fd/3 ]; then printf 'qfm-byte-transfer:not-regular\\n' >&2; exit 44; fi; " +
-            "before=$(stat -L -c %d:%i:%s:%Y:%Z -- /proc/self/fd/3) || exit 45; " +
-            "size=$(stat -L -c %s -- /proc/self/fd/3) || exit 45; " +
+            // The shell owns FD 3; Android may close it in external stat children.
+            "if [ ! -f /proc/$$/fd/3 ]; then printf 'qfm-byte-transfer:not-regular\\n' >&2; exit 44; fi; " +
+            "before=$(stat -L -c %d:%i:%s:%Y:%Z -- /proc/$$/fd/3) || exit 45; " +
+            "size=$(stat -L -c %s -- /proc/$$/fd/3) || exit 45; " +
             "case \"$size\" in ''|*[!0-9]*) exit 46;; esac; " +
             $"if [ \"$size\" -gt {maximumBytes.ToString(CultureInfo.InvariantCulture)} ]; then " +
             "printf 'qfm-byte-transfer:maximum-bytes\\n' >&2; exit 47; fi; " +
             "cat <&3 || exit 50; " +
-            "after=$(stat -L -c %d:%i:%s:%Y:%Z -- /proc/self/fd/3) || exit 45; " +
+            "after=$(stat -L -c %d:%i:%s:%Y:%Z -- /proc/$$/fd/3) || exit 45; " +
             "if [ \"$before\" != \"$after\" ]; then printf 'qfm-byte-transfer:source-changed\\n' >&2; exit 51; fi; " +
             $"printf '{BoundedReadFrame}%s\\n' \"$size\" >&2";
         // Raw shell-v2 preserves binary stdout, separate stderr and remote exit
