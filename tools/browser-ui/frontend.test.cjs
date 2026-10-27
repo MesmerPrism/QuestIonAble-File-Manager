@@ -80,7 +80,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js','direct-upload-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -588,4 +588,72 @@ test('real app cached Direct inventory remains historical after close and host r
   await f.page.locator('#disconnect-host').click();await f.connect();
   assert.equal(f.calls.filter(c=>c.body?.action===directStagingAction).length,1);
   assert.equal(await f.outstanding(),null);
+});
+
+const directUploadAction='kiosk.direct.staging-upload',directUploadKey='qfm-browser-direct-upload-v1';
+function directUploadSession(){return {...directTagsSession(),actions:[...directTagsSession().actions,directUploadAction]};}
+function directUploadReply(body,connection){return {requestId:body.requestId,action:directUploadAction,state:'completed',result:null,mutation:null,privateSourcePath:'private-source-sentinel',kioskDirectUpload:{connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,artifactId:body.artifactId,sha256:body.sha256,sizeBytes:body.sizeBytes,stagedName:body.name,disposition:'confirmed',verification:'signed-upload-size-sha256',coreReceipt:{actionId:'action_'+'b'.repeat(32),action:'uploadStaging',stage:'confirmed'}}};}
+async function prepareDirectUpload(f){
+  assert.equal(await f.page.locator('#direct-upload-send').count(),1);
+  await f.connect();await f.selectA();
+  await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});
+  await f.page.locator('#stage-apk').click();await f.settled();
+  await f.page.locator('#direct-connect-confirm').check();await f.page.locator('#direct-connect').click();await f.settled();
+  await f.page.locator('#direct-upload-name').fill('reviewed fixture (1)+@.apk');await f.page.locator('#direct-upload-confirm').check();
+}
+test('real app lost Direct upload blocks mutations, permits exact-source close and recovers cached acknowledgement',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directUploadSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directUploadAction?directUploadReply(body,connection):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return body.action===directUploadAction?route.abort('failed'):route.fulfill({json:value});
+  }});
+  await prepareDirectUpload(f);await f.page.locator('#direct-upload-send').click();await f.settled();
+  const original=await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey);assert.ok(original);
+  await f.page.locator('#power-confirm').check();assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  await f.page.locator('#direct-close-confirm').check();assert.equal(await f.page.locator('#direct-close').isEnabled(),true);
+  await f.page.locator('#direct-close').click();await f.settled();
+  assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey),original);
+  await f.page.locator('#direct-upload-original').click();await f.page.waitForFunction(key=>sessionStorage.getItem(key)===null,directUploadKey);await f.settled();
+  assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey),null);
+  assert.equal(f.calls.filter(c=>c.body?.action===directUploadAction).length,1);
+  assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.close').length,1);
+  assert.equal(f.calls.filter(c=>c.method==='GET'&&c.path.startsWith('/browser/v1/requests/')).length,1);
+  assert.equal((await f.page.locator('#result-json').textContent()).includes('private-source-sentinel'),false);
+  assert.equal(await f.outstanding(),null);
+});
+test('real app restored Direct upload never bypasses an unrelated original for source cleanup',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directUploadSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directUploadAction?directUploadReply(body,connection):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return body.action===directUploadAction?route.abort('failed'):route.fulfill({json:value});
+  }});
+  await prepareDirectUpload(f);await f.page.locator('#direct-upload-send').click();await f.settled();
+  const upload=await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey),other={requestId:'f1234567-1234-4234-8234-123456789abc',sessionId:'fixture-session',action:'device.keep-awake',serial:'FIXTURE-A'};
+  await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:originalKey,value:other});await f.page.reload();await f.connect();
+  assert.equal(await f.page.locator('#direct-close').isDisabled(),true);
+  assert.equal(await f.page.locator('#direct-upload-send').isDisabled(),true);
+  assert.deepEqual(await f.outstanding(),other);assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey),upload);
+  assert.equal(f.calls.filter(c=>c.body?.action===directUploadAction).length,1);
+  assert.equal(f.calls.some(c=>c.body?.action==='kiosk.direct.close'),false);
+});
+test('real app cleanup joins every unresolved Direct source before permitting Close',async t=>{
+  for(const sameConnection of [true,false])await t.test(sameConnection?'same source':'different source',async t=>{
+    let connection;
+    const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directUploadSession()}),mutation:({route,body,retained})=>{
+      const value=body.action===directUploadAction?directUploadReply(body,connection):directTagsConnectionReply(body,connection);
+      if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+      retained.set(body.requestId,value);return body.action===directUploadAction?route.abort('failed'):route.fulfill({json:value});
+    }});
+    await prepareDirectUpload(f);await f.page.locator('#direct-upload-send').click();await f.settled();
+    const requestId='e1234567-1234-4234-8234-123456789abc',source={sessionId:'fixture-session',connectionId:sameConnection?connection.connectionId:'f1234567-1234-4234-8234-123456789abc',connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,requestId,action:'kiosk.direct.invoke',logicalRequestId:'kiosk_'+requestId.replaceAll('-',''),command:'status',value:null};
+    await f.page.evaluate(value=>sessionStorage.setItem('qfm-browser-direct-command-v1',JSON.stringify({original:value,cancellation:null,damaged:false})),source);
+    await f.page.reload();await f.connect();
+    if(sameConnection)await f.page.locator('#direct-close-confirm').check();
+    else assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),true);
+    assert.equal(await f.page.locator('#direct-close').isEnabled(),sameConnection);
+    assert.equal(f.calls.some(c=>c.body?.action==='kiosk.direct.close'),false);
+    assert.ok(await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey));
+  });
 });

@@ -43,6 +43,9 @@ can be saved after the source connection closes under the same host/authenticati
 A separate Direct staging view reads a signed, bounded inventory through that
 connection without requiring protected local file staging. It shows historical
 names, sizes and modification times; upload, delete and install stay separate.
+Its upload card uses a reviewed file already in protected local staging and an
+explicit remote filename/replacement approval. Signed receipt agreement binds
+the uploaded name, size and SHA-256; installation remains a separate workflow.
 The local Windows connectivity profile card uses the existing current-user
 Credential Manager owner for explicit list/status, private input, replacement and
 revocation. It tests stored validity, not connectivity, and keeps private documents

@@ -696,8 +696,45 @@ Malformed input fails with a fixed error rather than appearing empty.
 without querying the provider again. It remains a historical snapshot after
 Direct close or expiry within its original host session. References stay in
 tab memory; reconnect does not automatically refresh, replay or reconcile any
-unrelated uncertain operation. Upload, download, delete and install remain
+unrelated uncertain operation. Download, delete and install remain
 separate CLI workflows. Listing metadata grants none of those operations.
+
+## Upload to Direct staging
+
+Stage a local file using the existing local APK source controls, adopt a Direct
+connection, then review the source bytes, target/channel and remote staging
+name in the upload card. Approve replacing any existing file with that exact
+name and send once. The name is literal: leading/trailing whitespace, paths,
+controls and unsupported characters are rejected rather than normalized.
+The upload does not require an APK inspection and does not prove APK validity.
+
+`kiosk.direct.staging-upload` accepts exactly `requestId`, `action`,
+`connectionId`, `artifactId`, `sha256`, `sizeBytes`, `name` and `confirmed:true`.
+The existing protected artifact owner revalidates and leases the exact source
+through the actual Core operation and browser ledger publication. No caller
+supplies a native source path or credential. This route requires supported
+Windows protected staging and the adopted Direct connection; the existing
+artifact limit is 1 GiB. Cancellation requests do not prove a stopped transfer
+or remote cleanup, and no percentage is inferred from elapsed time.
+
+The optional `kioskDirectUpload` outcome binds the exact source and connection
+to `stagedName`, `disposition`, `verification` and a sanitized Core receipt.
+`confirmed` means the signed provider acknowledgement matched the exact name,
+size and SHA-256. It is historical receipt agreement, not an independent
+download, ongoing file integrity, APK installation or app readiness claim.
+Core's upload timestamp is a host acknowledgement time and is not projected
+as a remote modification time. No no-overwrite or atomic replacement guarantee
+is offered by this existing provider route.
+
+The browser saves its minimal original reference before dispatch. A lost,
+crossed, malformed or unknown acknowledgement blocks new mutations. Explicit
+cached-result recovery reads that original browser ledger entry without
+uploading again. A bound `notDispatched` outcome can retire that original only
+when Core Upload was never invoked. A missing request after host restart or a
+metadata-only staging inventory cannot establish what happened to the write.
+Close may clean up the same source connection while preserving its unresolved
+upload reference; it cannot bypass an unrelated uncertain operation.
+No remote delete or automatic partial-upload cleanup is added here.
 
 ## Private Kiosk tag backup
 
