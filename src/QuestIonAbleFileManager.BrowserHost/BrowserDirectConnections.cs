@@ -66,7 +66,7 @@ public sealed partial class BrowserDirectConnections
             {
                 entry=_entry is { } found && found.Id==request.ConnectionId ? found : throw new BrowserRequestException("direct_connection_not_found",404);
                 Expire(entry);
-                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list";
+                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list" or "kiosk.direct.staging-upload";
                 if(requiresLive && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
                 if(entry.Session is null || requiresLive && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
@@ -80,13 +80,15 @@ public sealed partial class BrowserDirectConnections
     }
 
     internal async Task<BrowserCommandOutcome> ExecuteAsync(Operation operation,CancellationToken cancellation,
-        Func<KioskDirectTagExportLease,CancellationToken,Task<BrowserArtifactReceipt>>? stageTagExport=null)
+        Func<KioskDirectTagExportLease,CancellationToken,Task<BrowserArtifactReceipt>>? stageTagExport=null,
+        Func<CancellationToken,Task<BrowserArtifactLease>>? acquireUpload=null)
     {
         var request=operation.Request; var entry=operation.Entry;
         try
         {
             if(request.Action=="kiosk.direct.tags-export")return await ExecuteTagExportAsync(operation,stageTagExport,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.staging-list")return await ExecuteStagingListAsync(operation,cancellation).ConfigureAwait(false);
+            if(request.Action=="kiosk.direct.staging-upload")return await ExecuteUploadAsync(operation,acquireUpload,cancellation).ConfigureAwait(false);
             if(request.IsCommand)return await ExecuteCommandAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.connect-usb")
             {
@@ -148,8 +150,14 @@ public sealed partial class BrowserDirectConnections
 
     internal void Complete(Operation operation)
     {
-        lock(_sync){if(ReferenceEquals(_active,operation))_active=null;}
-        operation.Completion.TrySetResult();
+        // ExecuteDirectAsync has cached the terminal outcome before Complete.
+        // Release source custody only after actual Core settlement/publication.
+        try{Interlocked.Exchange(ref operation.UploadSourceLease,null)?.Dispose();}
+        finally
+        {
+            lock(_sync){if(ReferenceEquals(_active,operation))_active=null;}
+            operation.Completion.TrySetResult();
+        }
     }
 
     public Task<bool> ShutdownAsync()
@@ -228,7 +236,10 @@ public sealed partial class BrowserDirectConnections
         internal BrowserDirectAdoption? Adoption; internal BrowserDirectCleanup? Cleanup;
     }
     internal sealed record Operation(BrowserDirectRequest Request,Entry Entry,BrowserDirectCommandOutcome? CommandMetadata=null)
-    { internal TaskCompletionSource Completion {get;}=new(TaskCreationOptions.RunContinuationsAsynchronously); }
+    {
+        internal TaskCompletionSource Completion {get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal BrowserArtifactLease? UploadSourceLease;
+    }
 
     private sealed class NativeSession(RustyKioskUsbDirectLinkSession session):IBrowserDirectSession
     {

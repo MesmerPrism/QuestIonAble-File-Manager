@@ -23,6 +23,8 @@ public sealed record BrowserCommandOutcome(
     public BrowserDirectTagsOutcome? KioskDirectTags { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BrowserDirectStagingOutcome? KioskDirectStaging { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserDirectUploadOutcome? KioskDirectUpload { get; init; }
 }
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);

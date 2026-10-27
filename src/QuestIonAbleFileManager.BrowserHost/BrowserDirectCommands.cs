@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.BrowserHost;
@@ -9,16 +10,20 @@ public sealed record BrowserDirectRequest(string RequestId, string Action, strin
 {
     public string UsbOperationId => "usb_" + Guid.Parse(RequestId).ToString("N");
     public string LogicalRequestId => "kiosk_" + Guid.Parse(RequestId).ToString("N");
-    public bool Mutation => Action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel";
+    public bool Mutation => Action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload";
     public bool IsCommand => Action is "kiosk.direct.invoke" or "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel";
     public bool Recovery => Action is "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ArtifactId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ArtifactSha256 { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? ArtifactSizeBytes { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? StagedName { get; init; }
 }
 
 public sealed partial class BrowserCommands
 {
     private IReadOnlyList<string> DirectActions => _directConnections is null ? [] :
         _artifactStore is not null && BrowserArtifactStore.Capability.Supported ? BrowserDirectCommands.Actions :
-        BrowserDirectCommands.Actions.Where(action => action != "kiosk.direct.tags-export").ToArray();
+        BrowserDirectCommands.Actions.Where(action => action is not ("kiosk.direct.tags-export" or "kiosk.direct.staging-upload")).ToArray();
 
     private async Task<BrowserCommandOutcome> ExecuteDirectAsync(BrowserDirectRequest request,CancellationToken stopping)
     {
@@ -28,7 +33,7 @@ public sealed partial class BrowserCommands
             if(_requests.ContainsKey(request.RequestId))throw new BrowserRequestException("request_already_consumed",409);
             if(_running || _operationGate.IsBusy)throw new BrowserRequestException("busy",409);
             if(_requests.Count>=MaximumRequests)throw new BrowserRequestException("session_capacity_reached",409);
-            if(request.Action=="kiosk.direct.tags-export" && (_artifactStore is null || !BrowserArtifactStore.Capability.Supported))
+            if(request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-upload" && (_artifactStore is null || !BrowserArtifactStore.Capability.Supported))
                 throw new BrowserRequestException("artifact_staging_unavailable",503);
             if(_directConnections is null)throw new BrowserRequestException("direct_unavailable",409);
             BrowserDirectCommandOutcome? original=null;
@@ -51,7 +56,9 @@ public sealed partial class BrowserCommands
             timeout.CancelAfter(TimeSpan.FromSeconds(90));
             var outcome=await _directConnections.ExecuteAsync(operation,timeout.Token,
                 request.Action=="kiosk.direct.tags-export" ? (lease,token)=>_artifactStore!().StageAsync(
-                    "app-tags.json",lease.Stream,lease.SizeBytes,lease.Sha256,token) : null).ConfigureAwait(false);
+                    "app-tags.json",lease.Stream,lease.SizeBytes,lease.Sha256,token) : null,
+                request.Action=="kiosk.direct.staging-upload" ? token=>_artifactStore!().AcquireAsync(
+                    request.ArtifactId!,request.ArtifactSha256!,request.ArtifactSizeBytes!.Value,token) : null).ConfigureAwait(false);
             _requests[request.RequestId]=outcome;return outcome;
         }
         finally
@@ -65,7 +72,7 @@ public sealed partial class BrowserCommands
 public static class BrowserDirectCommands
 {
     public static readonly IReadOnlyList<string> Actions = ["kiosk.direct.connect-usb", "kiosk.direct.status", "kiosk.direct.close",
-        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export", "kiosk.direct.staging-list"];
+        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export", "kiosk.direct.staging-list", "kiosk.direct.staging-upload"];
     public static bool IsDirectAction(ReadOnlyMemory<byte> body)
     {
         if (body.Length is 0 or > BrowserCommands.MaximumRequestBytes) return false;
@@ -93,13 +100,32 @@ public static class BrowserDirectCommands
             if (action == "kiosk.direct.connect-usb") { expected.Add("serial"); expected.Add("productChannel"); }
             else expected.Add("connectionId");
             if (action == "kiosk.direct.invoke") { expected.Add("command"); expected.Add("value"); }
+            if (action == "kiosk.direct.staging-upload") foreach(var field in new[]{"artifactId","sha256","sizeBytes","name"}) expected.Add(field);
             if (action is "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel") expected.Add("originalRequestId");
-            var mutation = action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel";
+            var mutation = action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload";
             if (mutation) expected.Add("confirmed");
             if (!names.SetEquals(expected)) throw new BrowserRequestException("fields_invalid");
             var id = Id(Text(root, "requestId"));
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
+            if (action == "kiosk.direct.staging-upload")
+            {
+                var artifactId=Text(root,"artifactId");
+                if(!Guid.TryParseExact(artifactId,"N",out var artifact) || artifact==Guid.Empty || artifact.ToString("N")!=artifactId)
+                    throw new BrowserRequestException("artifact_id_invalid");
+                var hash=Text(root,"sha256");
+                if(hash.Length!=64 || hash.Any(c=>c is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+                    throw new BrowserRequestException("artifact_hash_invalid");
+                var size=root.GetProperty("sizeBytes");
+                if(size.ValueKind!=JsonValueKind.Number || !size.TryGetInt64(out var length) || length is < 1 or > BrowserArtifactStore.MaximumFileBytes)
+                    throw new BrowserRequestException("artifact_size_invalid");
+                var name=Text(root,"name");
+                if(name.Length>160 || !char.IsAsciiLetterOrDigit(name[0]) || name[^1]==' ' ||
+                    name.Any(c=>!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or ' ' or '(' or ')' or '+' or '@' or '-')))
+                    throw new BrowserRequestException("direct_upload_name_invalid");
+                return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")))
+                    {ArtifactId=artifactId,ArtifactSha256=hash,ArtifactSizeBytes=length,StagedName=name};
+            }
             if (action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list")
                 return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")));
             if (action is "kiosk.direct.invoke" or "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel")

@@ -217,6 +217,19 @@
       <div class="actions"><button id="direct-command-cancellation-status" type="button" disabled>Read original cancellation acknowledgement</button><button id="direct-command-save-reference" type="button" disabled>Save nonsecret command references</button></div>
       <p class="hint">Reload, reconnect and expiry send nothing. Lifecycle status and listener cleanup never acknowledge a typed original or an uncertain cancellation call. Only its actual bound cached acknowledgement can recover that cancellation. Explicit close may end native result access while preserving these references.</p>
     </section>
+<section class="panel" id="direct-upload-view" aria-labelledby="direct-upload-heading">
+  <h2 id="direct-upload-heading">Upload to Kiosk Direct staging</h2>
+  <p>Transfer the file already staged in Local APK to the adopted Direct connection. This does not install it.</p>
+  <p id="direct-upload-capability" class="hint">Connect and stage a local file to review an upload.</p>
+  <dl class="apk-facts"><div><dt>Local source</dt><dd id="direct-upload-source">No staged file</dd></div><div><dt>Artifact</dt><dd id="direct-upload-artifact"></dd></div><div><dt>Size</dt><dd id="direct-upload-size"></dd></div><div><dt>SHA-256</dt><dd id="direct-upload-sha"></dd></div><div><dt>Connection</dt><dd id="direct-upload-target">No adopted connection</dd></div></dl>
+  <label for="direct-upload-name">Remote staging name</label><input id="direct-upload-name" type="text" maxlength="160" autocomplete="off" spellcheck="false" disabled>
+  <label class="check"><input id="direct-upload-confirm" type="checkbox" disabled> I approve uploading these bytes with this exact name, replacing any same-name remote file.</label>
+  <div class="actions"><button id="direct-upload-send" type="button" disabled>Upload staged file</button><button id="direct-upload-original" type="button" disabled>Read original upload result</button></div>
+  <p id="direct-upload-state" role="status" aria-live="polite">No Direct staging upload requested.</p>
+  <div id="direct-upload-facts" hidden><dl class="apk-facts"><div><dt>Original request</dt><dd id="direct-upload-request"></dd></div><div><dt>Original source</dt><dd id="direct-upload-original-source"></dd></div><div><dt>Remote name</dt><dd id="direct-upload-staged-name"></dd></div><div><dt>Transfer result</dt><dd id="direct-upload-verification"></dd></div></dl></div>
+  <p class="hint">The upload agreement confirms the provider's reported size and SHA-256 at acknowledgement time. It is not an independent download, ongoing file check, APK inspection, installation or app readiness. A lost reply stays unresolved; closing the connection does not reconcile it. Original-result reads never upload again.</p>
+</section>
+
 <section class="panel" id="direct-staging-view" aria-labelledby="direct-staging-heading">
   <h2 id="direct-staging-heading">Kiosk Direct staging inventory</h2>
   <p>Read a signed inventory snapshot from the adopted Direct connection. Names, byte counts and raw modification milliseconds are historical metadata. They do not verify content or authorize transfer or installation.</p>
