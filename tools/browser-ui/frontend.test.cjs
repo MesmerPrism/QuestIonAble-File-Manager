@@ -80,7 +80,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -532,5 +532,60 @@ test('real app tag copy survives Direct close and retires on the shared staging 
   assert.equal(f.calls.filter(c=>c.body?.action===directTagsAction).length,1);
   assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.close').length,1);
   await f.page.locator('#clear-artifacts').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-save').isDisabled(),true);assert.equal(await f.page.locator('#direct-tags-original').isDisabled(),true);
+  assert.equal(await f.outstanding(),null);
+});
+
+const directStagingAction='kiosk.direct.staging-list';
+function directStagingSession(){return {...directTagsSession(),artifactStaging:{supported:false},actions:[...directTagsSession().actions,directStagingAction]};}
+function directStagingReply(body,connection){return {requestId:body.requestId,action:directStagingAction,state:'completed',result:null,mutation:null,privateEndpoint:'private-sentinel',kioskDirectStaging:{connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,totalCount:2,returnedCount:2,omittedCount:0,complete:true,files:[{name:'my app (1)+@.apk',bytes:123,modifiedAtMs:1700000000000},{name:'a'+'+'.repeat(159),bytes:Number.MAX_SAFE_INTEGER,modifiedAtMs:Number.MAX_SAFE_INTEGER}],coreReceipt:{actionId:'action_'+'a'.repeat(32),action:'listStaging',stage:'confirmed'}}};}
+async function adoptDirectForStaging(f){
+  assert.equal(await f.page.locator('#direct-staging-read').count(),1);
+  await f.connect();await f.selectA();await f.page.locator('#direct-connect-confirm').check();await f.page.locator('#direct-connect').click();await f.settled();
+  await f.page.waitForFunction(()=>!document.querySelector('#direct-staging-read').disabled);
+}
+test('real app Direct inventory needs no artifact staging and preserves an unrelated unknown effect',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directStagingSession()}),mutation:({route,body,retained})=>{
+    if(body.action==='kiosk.direct.connect-usb'){const value=directTagsConnectionReply(body);connection=value.kioskDirectConnection;retained.set(body.requestId,value);return route.fulfill({json:value});}
+    if(body.action==='device.keep-awake')return route.abort('failed');
+    if(body.action===directStagingAction){retained.set(body.requestId,directStagingReply(body,connection));return route.abort('failed');}
+    return route.abort('blockedbyclient');
+  }});
+  await adoptDirectForStaging(f);await f.page.locator('#power-confirm').check();await f.page.locator('#apply-hold').click();await f.settled();
+  const original=await f.outstanding(),before=await f.page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage)));
+  await f.page.locator('#direct-staging-read').click();await f.settled();
+  await f.page.locator('#direct-staging-original').click();await f.settled();
+  assert.match(await f.page.locator('#direct-staging-files').textContent(),/my app \(1\)\+@\.apk/);
+  assert.ok((await f.page.locator('#direct-staging-files').textContent()).includes('a'+'+'.repeat(159)));
+  for(const width of [390,1280]){
+    await f.page.setViewportSize({width,height:900});
+    assert.equal(await f.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'Inventory fits the page');
+    assert.equal(await f.page.locator('#direct-staging-view').evaluate(e=>e.scrollWidth<=e.clientWidth),true,'Inventory fits its panel');
+    if(process.env.QFM_BROWSER_UI_EVIDENCE){await fs.mkdir(process.env.QFM_BROWSER_UI_EVIDENCE,{recursive:true});await f.page.locator('#direct-staging-view').screenshot({path:path.join(process.env.QFM_BROWSER_UI_EVIDENCE,`direct-staging-${width}.png`)});}
+  }
+  assert.equal(f.calls.filter(c=>c.body?.action===directStagingAction).length,1);
+  assert.equal(f.calls.filter(c=>c.method==='GET'&&c.path.startsWith('/browser/v1/requests/')).length,1);
+  assert.equal(f.calls.some(c=>c.path.endsWith('/'+original.requestId)),false);
+  assert.deepEqual(await f.outstanding(),original);assert.deepEqual(await f.page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage))),before);
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  assert.equal((await f.page.locator('#result-json').textContent()).includes('private-sentinel'),false);
+  assert.equal(f.calls.some(c=>c.path.startsWith('/browser/v1/artifacts')),false);
+});
+test('real app cached Direct inventory remains historical after close and host reconnect sends no read',async t=>{
+  let connection;
+  const f=await fixture(t,{session:route=>route.fulfill({json:directStagingSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directStagingAction?directStagingReply(body,connection):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return route.fulfill({json:value});
+  }});
+  await adoptDirectForStaging(f);await f.page.locator('#direct-staging-read').click();await f.settled();
+  await f.page.locator('#direct-close-confirm').check();await f.page.locator('#direct-close').click();await f.settled();
+  assert.equal(await f.page.locator('#direct-staging-read').isDisabled(),true);
+  assert.equal(await f.page.locator('#direct-staging-original').isEnabled(),true);
+  await f.page.locator('#direct-staging-original').click();await f.settled();
+  assert.match(await f.page.locator('#direct-staging-files').textContent(),/my app/);
+  assert.match(await f.page.locator('#direct-staging-state').textContent(),/historical/i);
+  await f.page.locator('#disconnect-host').click();await f.connect();
+  assert.equal(f.calls.filter(c=>c.body?.action===directStagingAction).length,1);
   assert.equal(await f.outstanding(),null);
 });

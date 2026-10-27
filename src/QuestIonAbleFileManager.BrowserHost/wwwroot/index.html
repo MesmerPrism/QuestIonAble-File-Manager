@@ -217,6 +217,21 @@
       <div class="actions"><button id="direct-command-cancellation-status" type="button" disabled>Read original cancellation acknowledgement</button><button id="direct-command-save-reference" type="button" disabled>Save nonsecret command references</button></div>
       <p class="hint">Reload, reconnect and expiry send nothing. Lifecycle status and listener cleanup never acknowledge a typed original or an uncertain cancellation call. Only its actual bound cached acknowledgement can recover that cancellation. Explicit close may end native result access while preserving these references.</p>
     </section>
+<section class="panel" id="direct-staging-view" aria-labelledby="direct-staging-heading">
+  <h2 id="direct-staging-heading">Kiosk Direct staging inventory</h2>
+  <p>Read a signed inventory snapshot from the adopted Direct connection. Names, byte counts and raw modification milliseconds are historical metadata. They do not verify content or authorize transfer or installation.</p>
+  <p id="direct-staging-capability" class="hint">Connect through the existing Direct card to read staging metadata. Protected artifact staging is not required.</p>
+  <dl class="apk-facts"><div><dt>Source scope</dt><dd id="direct-staging-source">No source connection</dd></div></dl>
+  <div class="actions"><button id="direct-staging-read" type="button" disabled>Read staging inventory</button><button id="direct-staging-original" type="button" disabled>Read cached inventory result</button></div>
+  <p id="direct-staging-state" role="status" aria-live="polite">No staging inventory requested.</p>
+  <div id="direct-staging-facts" hidden>
+    <p id="direct-staging-counts"></p>
+    <p id="direct-staging-empty" hidden>No files were listed in this historical inventory.</p>
+    <div class="file-entries"><table id="direct-staging-table"><caption>Historical staging metadata; modification time is shown as raw milliseconds.</caption><thead><tr><th scope="col">Name</th><th scope="col">Bytes</th><th scope="col">Modified at (ms)</th></tr></thead><tbody id="direct-staging-files"></tbody></table></div>
+  </div>
+  <p class="hint">At most 128 rows are shown in provider order. A partial result reports omitted rows; use the existing typed Kiosk Direct CLI for a complete inventory. No SHA-256 or content verification is supplied by this listing. Cached result reads do not query the provider again or reconcile any other operation. Read references stay in tab memory only and disappear on reload.</p>
+</section>
+
     <section id="kiosk-view" class="panel" aria-labelledby="kiosk-title">
       <h2 id="kiosk-title">Optional Rusty Kiosk catalog</h2>
       <p id="kiosk-capability" class="hint">Connect to check this host's Kiosk actions.</p>
