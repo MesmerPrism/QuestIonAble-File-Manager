@@ -14,6 +14,10 @@ cancellation remains available and leaves the remote effect uncertain; inspect
 the exact target before deciding what to do next. Read-only probes and sensitive
 credential operations retain their own bounds. These elapsed warnings do not
 expire an app session, require new enrollment, or authorize repeating a mutation.
+The stop operation also retains its required before/after process observations
+through actual completion or explicit cancellation. It still rejects malformed,
+denied or conflicting evidence; a separate elapsed estimate cannot make that
+same held confirmation expire.
 
 1. Read the source repository's tracked agent instructions and use its owned
    build command. Do not make File Manager infer or reproduce that build.

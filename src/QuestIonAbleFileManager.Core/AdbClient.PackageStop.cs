@@ -46,7 +46,7 @@ public sealed partial class AdbClient
             var activities = await RunForDeviceAsync(
                 serial,
                 ["shell", "dumpsys", "activity", "activities"],
-                InspectionTimeout,
+                Timeout.InfiniteTimeSpan,
                 cancellationToken).ConfigureAwait(false);
             activities.EnsureSuccess("Read package-stop activity state");
             RequireSilentStandardError(activities, "Read package-stop activity state");
@@ -54,7 +54,7 @@ public sealed partial class AdbClient
             var processes = await RunForDeviceAsync(
                 serial,
                 ["shell", "pidof", packageName],
-                InspectionTimeout,
+                Timeout.InfiniteTimeSpan,
                 cancellationToken).ConfigureAwait(false);
             var quiescence = ReadPackageStopQuiescence(
                 packageName,
@@ -138,7 +138,7 @@ public sealed partial class AdbClient
         var result = await RunForDeviceAsync(
             serial,
             ["shell", $"pm path --user current {AndroidInput.ShellQuote(packageName)}"],
-            InspectionTimeout,
+            Timeout.InfiniteTimeSpan,
             cancellationToken).ConfigureAwait(false);
         if (await IsConfirmedSilentCurrentUserPackageAbsenceForStopAsync(
                 serial,
@@ -183,7 +183,7 @@ public sealed partial class AdbClient
         var packageList = await RunForDeviceAsync(
             serial,
             ["shell", $"pm list packages --user current {AndroidInput.ShellQuote(packageName)}"],
-            InspectionTimeout,
+            Timeout.InfiniteTimeSpan,
             cancellationToken).ConfigureAwait(false);
         packageList.EnsureSuccess($"Confirm current-user package {packageName} absence");
         return string.IsNullOrWhiteSpace(packageList.StandardOutput) &&
