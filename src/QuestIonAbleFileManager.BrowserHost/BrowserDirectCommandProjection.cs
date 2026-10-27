@@ -13,6 +13,14 @@ public sealed record BrowserDirectTypedResult(string Schema,string RequestId,str
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? RequestWifiAdbAfterBoot { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? AccessibilityEnabled { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SystemPassthroughEnabled { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PassthroughStyle { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? PassthroughLutApplied { get; init; }
 }
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
@@ -85,7 +93,11 @@ internal static class BrowserDirectCommandProjection
         return new(typed.Schema,typed.RequestId,typed.Command.ToWireName(),typed.Accepted,typed.Completed,state.ControlsOpen,key,package,
             state.SelectedInstalled,state.SelectedLaunchable,requirement,state.PendingRequirementLaunch,state.GuardArmed,state.SetupHelperInstalled,state.SetupHelperReady,entry)
         {
-            RequestWifiAdbAfterBoot=typed.Command is RustyKioskCommand.EnableWifiAfterBoot or RustyKioskCommand.DisableWifiAfterBoot ? state.RequestWifiAdbAfterBoot : null
+            RequestWifiAdbAfterBoot=typed.Command is RustyKioskCommand.EnableWifiAfterBoot or RustyKioskCommand.DisableWifiAfterBoot ? state.RequestWifiAdbAfterBoot : null,
+            AccessibilityEnabled=typed.Command is RustyKioskCommand.EnableAccessibility or RustyKioskCommand.DisableAccessibility ? state.AccessibilityEnabled : null,
+            SystemPassthroughEnabled=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.SystemPassthroughEnabled : null,
+            PassthroughStyle=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.PassthroughStyle?.ToWireName() : null,
+            PassthroughLutApplied=typed.Command==RustyKioskCommand.PassthroughContour ? state.PassthroughLutApplied : null
         };
     }
 }

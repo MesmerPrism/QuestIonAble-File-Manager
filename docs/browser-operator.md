@@ -618,10 +618,11 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its eleven commands are `status`, `show-controls`, `show-apps`, `reload`,
+connection above. Its fifteen commands are `status`, `show-controls`, `show-apps`, `reload`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
-`disable-wifi-adb-after-boot`. Only `set-launch-requirement` accepts a
+`disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
+`passthrough-natural` and `passthrough-contour`. Only `set-launch-requirement` accepts a
 value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
@@ -643,6 +644,22 @@ Confirmation proves neither current Wi-Fi ADB nor success after a future
 restart, connectivity or wearer approval. These controls do not reboot the
 headset or set up the host's ADB transport. Lost replies use the same explicit
 original-result recovery and never resend the preference command.
+
+The accessibility controls request enable or disable through the existing Core
+commands. Confirmation requires `accessibilityEnabled` to be a literal boolean
+matching the requested state, together with the bound, accepted and completed
+typed original result and Core's confirmed receipt. This observes Kiosk's
+reported enabled flag; any protected settings prompt remains a wearer decision.
+
+Natural passthrough requires `systemPassthroughEnabled:true` and
+`passthroughStyle:"natural"`. Contour passthrough requires the enabled flag,
+`passthroughStyle:"contour-lut"` and `passthroughLutApplied:true`. The same original
+result and receipt checks apply. Confirmation observes Kiosk's reported mode
+and applicable LUT state; it does not prove camera imagery, visual output,
+foreground, application readiness or an OS permission grant. Missing, malformed,
+contrary or pending evidence keeps the original unresolved for explicit
+recovery without replay. These optional fields appear only for their relevant
+new commands; the preceding eleven command projections are unchanged.
 
 Launch addresses Kiosk's current selection at execution time. A previous
 catalog selection is a separate operation; this card cannot bind an atomic

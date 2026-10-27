@@ -43,7 +43,8 @@ public sealed class BrowserDirectCommandTests
         var initial = new[] { RustyKioskCommand.Status, RustyKioskCommand.ShowControls, RustyKioskCommand.ShowApps,
             RustyKioskCommand.CheckSetupHelper, RustyKioskCommand.SetLaunchRequirement, RustyKioskCommand.CancelPendingLaunch,
             RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload,
-            RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot };
+            RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
+            RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
@@ -359,5 +360,208 @@ public sealed class BrowserDirectCommandTests
             {"accessibility_enabled",false},{"guard_armed",false},{"status_line","private-sentinel"}};
         if(preference is not null)state["request_wifi_adb_after_boot"]=preference;
         return JsonSerializer.Serialize(new{schema=RustyKioskContract.ResultSchema,request_id=id,command=wire,accepted=true,completed=true,message="private-sentinel",state});
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility",RustyKioskCommand.EnableAccessibility)]
+    [InlineData("disable-accessibility",RustyKioskCommand.DisableAccessibility)]
+    [InlineData("passthrough-natural",RustyKioskCommand.PassthroughNatural)]
+    [InlineData("passthrough-contour",RustyKioskCommand.PassthroughContour)]
+    public void AccessibilityAndPassthroughMapOnlyExistingNullValueCoreCommands(string wire,RustyKioskCommand expected)
+    {
+        var parsed=BrowserDirectCommands.Parse(Body(command:wire));Assert.Equal(expected,parsed.Command);Assert.Null(parsed.Value);Assert.True(parsed.Mutation);
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility")]
+    [InlineData("disable-accessibility")]
+    [InlineData("passthrough-natural")]
+    [InlineData("passthrough-contour")]
+    public async Task AccessibilityAndPassthroughExposeOnlyMatchingCommandRelevantFacts(string wire)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetControls(fixture,wire);var result=await fixture.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("completed",result.State);Assert.Equal("confirmed",d.OriginalEffect);Assert.True(d.ReconcilesOriginal);Assert.Equal(OperatorMutationStage.Confirmed,d.CoreReceipt!.Stage);
+            Assert.Equal(d.LogicalRequestId,d.TypedResult!.RequestId);Assert.Equal(wire,d.TypedResult.Command);Assert.True(d.TypedResult.Accepted);Assert.True(d.TypedResult.Completed);
+            var json=JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web));Assert.False(json.TryGetProperty("requestWifiAdbAfterBoot",out _));
+            if(wire.EndsWith("accessibility",StringComparison.Ordinal))
+            {
+                Assert.Equal(wire=="enable-accessibility",json.GetProperty("accessibilityEnabled").GetBoolean());
+                foreach(var field in new[]{"systemPassthroughEnabled","passthroughStyle","passthroughLutApplied"})Assert.False(json.TryGetProperty(field,out _));
+            }
+            else
+            {
+                Assert.True(json.GetProperty("systemPassthroughEnabled").GetBoolean());Assert.Equal(wire=="passthrough-natural"?"natural":"contour-lut",json.GetProperty("passthroughStyle").GetString());
+                Assert.False(json.TryGetProperty("accessibilityEnabled",out _));
+                if(wire=="passthrough-contour")Assert.True(json.GetProperty("passthroughLutApplied").GetBoolean());else Assert.False(json.TryGetProperty("passthroughLutApplied",out _));
+            }
+            Assert.DoesNotContain("private-sentinel",json.GetRawText());Assert.Null(result.Result);Assert.Null(result.Mutation);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility","access")]
+    [InlineData("disable-accessibility","access")]
+    [InlineData("passthrough-natural","system")]
+    [InlineData("passthrough-natural","system-null")]
+    [InlineData("passthrough-natural","style")]
+    [InlineData("passthrough-natural","style-null")]
+    [InlineData("passthrough-contour","system")]
+    [InlineData("passthrough-contour","system-null")]
+    [InlineData("passthrough-contour","style")]
+    [InlineData("passthrough-contour","style-null")]
+    [InlineData("passthrough-contour","lut")]
+    [InlineData("passthrough-contour","lut-null")]
+    public async Task ContraryOrUnavailableControlsNeverConfirmOrInventFalse(string wire,string variant)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetControls(fixture,wire,variant);var result=await fixture.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("pending",result.State);Assert.Equal("pendingWearerAction",d.OriginalEffect);Assert.False(d.ReconcilesOriginal);Assert.Equal(OperatorMutationStage.PendingWearerAction,d.CoreReceipt!.Stage);
+            var json=JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            if(variant=="system-null")Assert.False(json.TryGetProperty("systemPassthroughEnabled",out _));
+            if(variant=="style-null")Assert.False(json.TryGetProperty("passthroughStyle",out _));
+            if(variant=="lut-null")Assert.False(json.TryGetProperty("passthroughLutApplied",out _));
+            if(variant=="system")Assert.False(json.GetProperty("systemPassthroughEnabled").GetBoolean());
+            if(variant=="lut")Assert.False(json.GetProperty("passthroughLutApplied").GetBoolean());
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility")]
+    [InlineData("disable-accessibility")]
+    [InlineData("passthrough-natural")]
+    [InlineData("passthrough-contour")]
+    public async Task ControlProofStillRequiresCompleteAcceptedAndMatchingCoreTuple(string wire)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            foreach(var variant in new[]{"accepted","completed","marker","pending-marker"})
+            {
+                fixture.Native.Transform=(command,result)=>
+                {
+                    var value=ControlsResult(command,result,wire);
+                    return variant switch
+                    {
+                        "accepted"=>value with{KioskResult=value.KioskResult! with{Accepted=false}},
+                        "completed"=>value with{KioskResult=value.KioskResult! with{Completed=false}},
+                        "marker"=>value with{Mutation=value.Mutation with{RequestId="crossed-request"}},
+                        _=>value with{Mutation=value.Mutation with{Stage=OperatorMutationStage.PendingWearerAction}}
+                    };
+                };
+                var result=await fixture.Invoke(wire);Assert.Equal("outcomeUnknown",result.State);Assert.False(result.KioskDirectCommand!.ReconcilesOriginal);Assert.Null(result.KioskDirectCommand.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);
+            }
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("passthrough-natural")]
+    [InlineData("passthrough-contour")]
+    public async Task UnknownTypedStyleCannotEscapeClosedWireEnum(string wire)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetControls(fixture,wire,"unknown-style");var result=await fixture.Invoke(wire);
+            Assert.Equal("outcomeUnknown",result.State);Assert.Null(result.KioskDirectCommand!.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);Assert.False(result.KioskDirectCommand.ReconcilesOriginal);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility","missing-access")]
+    [InlineData("disable-accessibility","missing-access")]
+    [InlineData("enable-accessibility","bad-access")]
+    [InlineData("disable-accessibility","bad-access")]
+    [InlineData("passthrough-natural","bad-system")]
+    [InlineData("passthrough-contour","bad-system")]
+    [InlineData("passthrough-natural","bad-style")]
+    [InlineData("passthrough-contour","bad-style")]
+    [InlineData("passthrough-contour","bad-lut")]
+    public async Task MissingRequiredOrMalformedProtocolFactsCannotAcknowledgeControls(string wire,string variant)
+    {
+        var valid=RustyKioskOperatorResult.Parse(ControlsProtocol(wire,"kiosk_fixture_123",null));Assert.True(RustyKioskReadback.Confirms(valid.Command,null,valid));
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            fixture.Native.Transform=(command,result)=>result with{KioskResult=RustyKioskOperatorResult.Parse(ControlsProtocol(wire,command.RequestId!,variant))};
+            var result=await fixture.Invoke(wire);Assert.Equal("outcomeUnknown",result.State);Assert.Null(result.KioskDirectCommand!.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);Assert.False(result.KioskDirectCommand.ReconcilesOriginal);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-accessibility")]
+    [InlineData("disable-accessibility")]
+    [InlineData("passthrough-natural")]
+    [InlineData("passthrough-contour")]
+    public async Task NewControlsKeepLiteralNullAndRecoverSameOriginalWithoutReplay(string wire)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            foreach(var value in new object[]{""," ","null",false,"natural",1})
+            {
+                var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(Body(command:wire,handle:fixture.Handle))!;fields["value"]=JsonSerializer.SerializeToElement(value);var before=fixture.Native.Core.Count;
+                Assert.Equal("direct_value_invalid",(await Assert.ThrowsAsync<BrowserRequestException>(()=>fixture.Broker.ExecuteAsync(JsonSerializer.SerializeToUtf8Bytes(fields)))).Code);Assert.Equal(before,fixture.Native.Core.Count);
+            }
+            fixture.Native.Transform=(_,_)=>throw new IOException("lost reply");var original=await fixture.Invoke(wire);Assert.Equal("outcomeUnknown",original.State);
+            fixture.Native.Transform=null;fixture.Native.Lifecycle="confirmed";Assert.False((await fixture.Recover("kiosk.direct.request-status",original.RequestId)).KioskDirectCommand!.ReconcilesOriginal);
+            fixture.Native.Lifecycle=null;SetControls(fixture,wire);var read=await fixture.Recover("kiosk.direct.request-result",original.RequestId);
+            Assert.True(read.KioskDirectCommand!.ReconcilesOriginal);Assert.Equal(original.KioskDirectCommand!.LogicalRequestId,read.KioskDirectCommand.LogicalRequestId);Assert.Same(original,fixture.Broker.Get(original.RequestId));
+            Assert.Single(fixture.Native.Core,c=>c.Action==KioskDirectOperatorAction.Invoke);Assert.Single(fixture.Native.Core,c=>c.Action==KioskDirectOperatorAction.RequestResult);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Fact]
+    public async Task OldElevenOutputsNeverGainUnrelatedControlFields()
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetControls(fixture,"passthrough-contour");
+            foreach(var wire in new[]{"status","show-controls","show-apps","check-setup-helper","set-launch-requirement","cancel-pending-launch","launch-normal","launch-kiosk","reload","enable-wifi-adb-after-boot","disable-wifi-adb-after-boot"})
+            {
+                var result=await fixture.Invoke(wire,wire=="set-launch-requirement"?"any":null);Assert.NotNull(result.KioskDirectCommand!.TypedResult);
+                var json=JsonSerializer.SerializeToElement(result.KioskDirectCommand.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                foreach(var field in new[]{"accessibilityEnabled","systemPassthroughEnabled","passthroughStyle","passthroughLutApplied"})Assert.False(json.TryGetProperty(field,out _));
+                Assert.Equal(wire.EndsWith("after-boot",StringComparison.Ordinal),json.TryGetProperty("requestWifiAdbAfterBoot",out _));
+            }
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    private static void SetControls(BrowserDirectCommandBrokerTests.Fixture fixture,string wire,string? variant=null)=>
+        fixture.Native.Transform=(command,result)=>ControlsResult(command,result,wire,variant);
+
+    private static KioskDirectOperatorResult ControlsResult(KioskDirectOperatorCommand command,KioskDirectOperatorResult result,string wire,string? variant=null)
+    {
+        if(result.KioskResult is not { } typed)return result;
+        var access=wire=="enable-accessibility";bool? system=true,lut=true;
+        RustyKioskPassthroughStyle? style=wire=="passthrough-natural"?RustyKioskPassthroughStyle.Natural:RustyKioskPassthroughStyle.ContourLut;
+        if(variant=="access")access=!access;if(variant=="system")system=false;if(variant=="system-null")system=null;if(variant=="lut")lut=false;if(variant=="lut-null")lut=null;
+        if(variant=="style")style=style==RustyKioskPassthroughStyle.Natural?RustyKioskPassthroughStyle.ContourLut:RustyKioskPassthroughStyle.Natural;
+        if(variant=="style-null")style=null;if(variant=="unknown-style")style=(RustyKioskPassthroughStyle)999;
+        typed=typed with{State=typed.State with{AccessibilityEnabled=access,SystemPassthroughEnabled=system,PassthroughStyle=style,PassthroughLutApplied=lut}};
+        return result with{KioskResult=typed,Mutation=result.Mutation with{Stage=RustyKioskReadback.Confirms(typed.Command,command.Value,typed)?OperatorMutationStage.Confirmed:OperatorMutationStage.PendingWearerAction}};
+    }
+
+    private static string ControlsProtocol(string wire,string id,string? variant)
+    {
+        var root=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(BootProtocol(wire,id,false))!;
+        var state=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(root["state"].GetRawText())!;
+        state["accessibility_enabled"]=JsonSerializer.SerializeToElement(wire=="enable-accessibility");state["system_passthrough_enabled"]=JsonSerializer.SerializeToElement(true);
+        state["passthrough_style"]=JsonSerializer.SerializeToElement(wire=="passthrough-natural"?"natural":"contour-lut");state["passthrough_lut_applied"]=JsonSerializer.SerializeToElement(true);
+        if(variant=="missing-access")state.Remove("accessibility_enabled");if(variant=="bad-access")state["accessibility_enabled"]=JsonSerializer.SerializeToElement("false");
+        if(variant=="bad-system")state["system_passthrough_enabled"]=JsonSerializer.SerializeToElement("true");if(variant=="bad-style")state["passthrough_style"]=JsonSerializer.SerializeToElement("future-style");
+        if(variant=="bad-lut")state["passthrough_lut_applied"]=JsonSerializer.SerializeToElement("true");root["state"]=JsonSerializer.SerializeToElement(state);return JsonSerializer.Serialize(root);
     }
 }

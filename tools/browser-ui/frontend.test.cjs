@@ -411,7 +411,7 @@ for(const [command,desired] of [['enable-wifi-adb-after-boot',true],['disable-wi
       typedResult:{schema:'rusty.kiosk.cli_result.v1',requestId:logicalRequestId,command,accepted:true,completed:true,controlsOpen:null,selectedKey:null,selectedPackage:null,selectedInstalled:false,selectedLaunchable:false,selectedLaunchRequirement:null,pendingRequirementLaunch:null,guardArmed:false,setupHelperInstalled:false,setupHelperReady:false,selectedEntry:null,requestWifiAdbAfterBoot:desired}}});
     return route.abort('failed');
   }});
-  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(-2).map(option=>option.value)),['enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
+  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(9,11).map(option=>option.value)),['enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
   await adoptDirectForTags(f);await f.page.locator('#direct-command-command').selectOption(command);
   assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.settled();
@@ -430,6 +430,43 @@ for(const [command,desired] of [['enable-wifi-adb-after-boot',true],['disable-wi
   assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.invoke').length,1);
   assert.equal(f.calls.filter(call=>call.method==='GET'&&call.path.startsWith('/browser/v1/requests/')).length,1);
   assert.equal(f.calls.some(call=>call.body?.action==='kiosk.direct.request-result'),false);
+});
+
+const directControlCases=[
+  ['enable-accessibility',{accessibilityEnabled:true},{accessibilityEnabled:false}],
+  ['disable-accessibility',{accessibilityEnabled:false},{accessibilityEnabled:true}],
+  ['passthrough-natural',{systemPassthroughEnabled:true,passthroughStyle:'natural'},{systemPassthroughEnabled:false,passthroughStyle:'natural'}],
+  ['passthrough-contour',{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:true},{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:false}]
+];
+for(const [command,desired,contrary] of directControlCases)test('real app Direct control preserves pending then reads its original typed result: '+command,async t=>{
+  let connection,original;
+  const f=await fixture(t,{session:route=>route.fulfill({json:{...directTagsSession(),actions:[...directTagsSession().actions,'kiosk.direct.invoke','kiosk.direct.request-result']}}),mutation:({route,body,retained})=>{
+    if(body.action==='kiosk.direct.connect-usb'){const value=directTagsConnectionReply(body);connection=value.kioskDirectConnection;return route.fulfill({json:value});}
+    const recovery=body.action==='kiosk.direct.request-result';
+    assert.equal(body.action,recovery?'kiosk.direct.request-result':'kiosk.direct.invoke');
+    if(!recovery){original={...body};assert.equal(body.command,command);assert.equal(body.value,null);assert.equal(body.confirmed,true);}
+    else {assert.equal(body.originalRequestId,original.requestId);assert.equal(body.connectionId,original.connectionId);}
+    const logicalRequestId='kiosk_'+original.requestId.replaceAll('-','');
+    const value={requestId:body.requestId,action:body.action,state:recovery?'completed':'pending',result:null,mutation:null,kioskDirectCommand:{
+      connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,
+      operation:recovery?'requestResult':'invoke',originalRequestId:original.requestId,logicalRequestId,command,value:null,originalEffect:recovery?'confirmed':'pendingWearerAction',reconcilesOriginal:recovery,cancellationAcknowledged:false,lifecycle:null,
+      coreReceipt:{actionId:'action_'+body.requestId.replaceAll('-',''),action:recovery?'requestResult':'invoke',requestId:logicalRequestId,stage:recovery?'confirmed':'pendingWearerAction'},
+      typedResult:{schema:'rusty.kiosk.cli_result.v1',requestId:logicalRequestId,command,accepted:true,completed:true,controlsOpen:null,selectedKey:null,selectedPackage:null,selectedInstalled:false,selectedLaunchable:false,selectedLaunchRequirement:null,pendingRequirementLaunch:null,guardArmed:false,setupHelperInstalled:false,setupHelperReady:false,selectedEntry:null,...(recovery?desired:contrary)}}};
+    retained.set(body.requestId,value);return route.fulfill({json:value});
+  }});
+  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(-4).map(option=>option.value)),directControlCases.map(([command])=>command));
+  await adoptDirectForTags(f);await f.page.locator('#direct-command-command').selectOption(command);
+  await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.settled();
+  const pending=await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-command-v1')));
+  assert.equal(pending.original.requestId,original.requestId);assert.equal(pending.original.command,command);
+  assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  await f.page.locator('#direct-command-request-result').click();await f.settled();
+  assert.equal(await f.page.evaluate(()=>sessionStorage.getItem('qfm-browser-direct-command-v1')),null);
+  const shown=JSON.parse(await f.page.locator('#result-json').textContent());
+  assert.equal(shown.originalRequestId,original.requestId);assert.equal(shown.command,command);
+  for(const [field,value] of Object.entries(desired))assert.equal(shown.typedResult[field],value);
+  assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.invoke').length,1);
+  assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.request-result').length,1);
 });
 
 const fleetSession = route => route.fulfill({json:{sessionId:'fixture-session',actions:['devices','device.status','device.keep-awake','fleet.status'],fleetInstallerStatus:{supported:true}}});
