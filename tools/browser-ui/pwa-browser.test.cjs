@@ -7,7 +7,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const {renderShell}=require('./pwa-shell-fixture.cjs');
 const root = path.resolve(__dirname, '../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
-const allowed = new Set(['index.html','agent.html','app.js','pwa.js','retained-view.js','transfer-view.js','verified-download.js','apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js','direct-upload-view.js','vendor/noble-sha256.js','vendor/NOBLE_HASHES_NOTICES.txt','sw.js','styles.css',
+const allowed = new Set(['index.html','agent.html','app.js','pwa.js','retained-view.js','transfer-view.js','verified-download.js','apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js','direct-upload-view.js','direct-install-view.js','vendor/noble-sha256.js','vendor/NOBLE_HASHES_NOTICES.txt','sw.js','styles.css',
   'usb-proof.js','usb-proof-core.js','vendor/tango-adb.js','manifest.webmanifest','icons/qfm-192.png','icons/qfm-512.png']);
 
 test('installed worker opens offline UI/help; secrets and API data never enter caches; reconnect is inert',

@@ -10,20 +10,21 @@ public sealed record BrowserDirectRequest(string RequestId, string Action, strin
 {
     public string UsbOperationId => "usb_" + Guid.Parse(RequestId).ToString("N");
     public string LogicalRequestId => "kiosk_" + Guid.Parse(RequestId).ToString("N");
-    public bool Mutation => Action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload";
+    public bool Mutation => Action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload" or "kiosk.direct.install";
     public bool IsCommand => Action is "kiosk.direct.invoke" or "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel";
     public bool Recovery => Action is "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel";
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ArtifactId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ArtifactSha256 { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public long? ArtifactSizeBytes { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? StagedName { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? InspectionRequestId { get; init; }
 }
 
 public sealed partial class BrowserCommands
 {
     private IReadOnlyList<string> DirectActions => _directConnections is null ? [] :
         _artifactStore is not null && BrowserArtifactStore.Capability.Supported ? BrowserDirectCommands.Actions :
-        BrowserDirectCommands.Actions.Where(action => action is not ("kiosk.direct.tags-export" or "kiosk.direct.staging-upload")).ToArray();
+        BrowserDirectCommands.Actions.Where(action => action is not ("kiosk.direct.tags-export" or "kiosk.direct.staging-upload" or "kiosk.direct.install")).ToArray();
 
     private async Task<BrowserCommandOutcome> ExecuteDirectAsync(BrowserDirectRequest request,CancellationToken stopping)
     {
@@ -33,10 +34,20 @@ public sealed partial class BrowserCommands
             if(_requests.ContainsKey(request.RequestId))throw new BrowserRequestException("request_already_consumed",409);
             if(_running || _operationGate.IsBusy)throw new BrowserRequestException("busy",409);
             if(_requests.Count>=MaximumRequests)throw new BrowserRequestException("session_capacity_reached",409);
-            if(request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-upload" && (_artifactStore is null || !BrowserArtifactStore.Capability.Supported))
+            if(request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-upload" or "kiosk.direct.install" && (_artifactStore is null || !BrowserArtifactStore.Capability.Supported))
                 throw new BrowserRequestException("artifact_staging_unavailable",503);
             if(_directConnections is null)throw new BrowserRequestException("direct_unavailable",409);
             BrowserDirectCommandOutcome? original=null;
+            BrowserDirectInstallSource? inspection=null; BrowserDirectInstallOutcome? installOriginal=null;
+            if(request.Action=="kiosk.direct.install")inspection=ReadInstallInspection(request);
+            if(request.Action=="kiosk.direct.install-status")
+            {
+                if(!_requests.TryGetValue(request.OriginalRequestId!,out var prior) || prior.Action!="kiosk.direct.install" || prior.KioskDirectInstall is not { } source)
+                    throw new BrowserRequestException("direct_install_original_unavailable",404);
+                if(source.Operation!="install" || source.OriginalRequestId!=request.OriginalRequestId || source.ConnectionId!=request.ConnectionId || source.OriginalEffect=="notDispatched")
+                    throw new BrowserRequestException("direct_install_original_mismatch",409);
+                installOriginal=source;
+            }
             if(request.Recovery)
             {
                 if(!_requests.TryGetValue(request.OriginalRequestId!,out var prior) || prior.Action!="kiosk.direct.invoke" || prior.KioskDirectCommand is not { } source)
@@ -46,9 +57,9 @@ public sealed partial class BrowserCommands
                 original=source;
             }
             gate=_operationGate.TryAcquire() ?? throw new BrowserRequestException("busy",409);
-            try{operation=_directConnections.Reserve(request,SessionId,original);}
+            try{operation=_directConnections.Reserve(request,SessionId,original,inspection,installOriginal);}
             catch{gate.Dispose();throw;}
-            _requests[request.RequestId]=new(request.RequestId,request.Action,"running",KioskDirectCommand:operation.CommandMetadata);_running=true;
+            _requests[request.RequestId]=new(request.RequestId,request.Action,"running",KioskDirectCommand:operation.CommandMetadata){KioskDirectInstall=operation.InstallMetadata};_running=true;
         }
         try
         {
@@ -57,7 +68,7 @@ public sealed partial class BrowserCommands
             var outcome=await _directConnections.ExecuteAsync(operation,timeout.Token,
                 request.Action=="kiosk.direct.tags-export" ? (lease,token)=>_artifactStore!().StageAsync(
                     "app-tags.json",lease.Stream,lease.SizeBytes,lease.Sha256,token) : null,
-                request.Action=="kiosk.direct.staging-upload" ? token=>_artifactStore!().AcquireAsync(
+                request.Action is "kiosk.direct.staging-upload" or "kiosk.direct.install" ? token=>_artifactStore!().AcquireAsync(
                     request.ArtifactId!,request.ArtifactSha256!,request.ArtifactSizeBytes!.Value,token) : null).ConfigureAwait(false);
             _requests[request.RequestId]=outcome;return outcome;
         }
@@ -72,7 +83,7 @@ public sealed partial class BrowserCommands
 public static class BrowserDirectCommands
 {
     public static readonly IReadOnlyList<string> Actions = ["kiosk.direct.connect-usb", "kiosk.direct.status", "kiosk.direct.close",
-        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export", "kiosk.direct.staging-list", "kiosk.direct.staging-upload"];
+        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export", "kiosk.direct.staging-list", "kiosk.direct.staging-upload", "kiosk.direct.install", "kiosk.direct.install-status"];
     public static bool IsDirectAction(ReadOnlyMemory<byte> body)
     {
         if (body.Length is 0 or > BrowserCommands.MaximumRequestBytes) return false;
@@ -101,14 +112,18 @@ public static class BrowserDirectCommands
             else expected.Add("connectionId");
             if (action == "kiosk.direct.invoke") { expected.Add("command"); expected.Add("value"); }
             if (action == "kiosk.direct.staging-upload") foreach(var field in new[]{"artifactId","sha256","sizeBytes","name"}) expected.Add(field);
+            if (action == "kiosk.direct.install") foreach(var field in new[]{"artifactId","sha256","sizeBytes","inspectionRequestId"}) expected.Add(field);
+            if (action == "kiosk.direct.install-status") expected.Add("originalRequestId");
             if (action is "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel") expected.Add("originalRequestId");
-            var mutation = action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload";
+            var mutation = action is "kiosk.direct.connect-usb" or "kiosk.direct.close" or "kiosk.direct.invoke" or "kiosk.direct.request-cancel" or "kiosk.direct.staging-upload" or "kiosk.direct.install";
             if (mutation) expected.Add("confirmed");
             if (!names.SetEquals(expected)) throw new BrowserRequestException("fields_invalid");
             var id = Id(Text(root, "requestId"));
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
-            if (action == "kiosk.direct.staging-upload")
+            if (action == "kiosk.direct.install-status")
+                return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")),OriginalRequestId:CanonicalId(Text(root,"originalRequestId")));
+            if (action is "kiosk.direct.staging-upload" or "kiosk.direct.install")
             {
                 var artifactId=Text(root,"artifactId");
                 if(!Guid.TryParseExact(artifactId,"N",out var artifact) || artifact==Guid.Empty || artifact.ToString("N")!=artifactId)
@@ -119,6 +134,8 @@ public static class BrowserDirectCommands
                 var size=root.GetProperty("sizeBytes");
                 if(size.ValueKind!=JsonValueKind.Number || !size.TryGetInt64(out var length) || length is < 1 or > BrowserArtifactStore.MaximumFileBytes)
                     throw new BrowserRequestException("artifact_size_invalid");
+                if(action=="kiosk.direct.install")return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")))
+                    {ArtifactId=artifactId,ArtifactSha256=hash,ArtifactSizeBytes=length,InspectionRequestId=CanonicalId(Text(root,"inspectionRequestId"))};
                 var name=Text(root,"name");
                 if(name.Length>160 || !char.IsAsciiLetterOrDigit(name[0]) || name[^1]==' ' ||
                     name.Any(c=>!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or ' ' or '(' or ')' or '+' or '@' or '-')))

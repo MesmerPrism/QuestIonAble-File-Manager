@@ -15,6 +15,7 @@ node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/direct-tags.test.cjs
 node --test tools/browser-ui/direct-staging.test.cjs
 node --test tools/browser-ui/direct-upload.test.cjs
+node --test tools/browser-ui/direct-install.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
 node --test tools/browser-ui/fleet-status.test.cjs
 node --test tools/browser-ui/diagnostics.test.cjs

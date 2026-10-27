@@ -25,6 +25,8 @@ public sealed record BrowserCommandOutcome(
     public BrowserDirectStagingOutcome? KioskDirectStaging { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BrowserDirectUploadOutcome? KioskDirectUpload { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserDirectInstallOutcome? KioskDirectInstall { get; init; }
 }
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
