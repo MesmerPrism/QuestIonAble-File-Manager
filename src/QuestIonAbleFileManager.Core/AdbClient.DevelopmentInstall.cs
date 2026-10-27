@@ -23,7 +23,7 @@ public sealed partial class AdbClient
         arguments.Add(admission.Path);
         cancellationToken.ThrowIfCancellationRequested();
         deviceDispatchObserved?.Invoke();
-        var commandResult = await RunForDeviceAsync(serial, arguments, TransferTimeout, cancellationToken).ConfigureAwait(false);
+        var commandResult = await RunForDeviceAsync(serial, arguments, Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
         commandResult.EnsureSuccess("Install development APK");
         var metadata = await ReadDevelopmentMetadataAsync(serial, artifact.Identity.PackageName, cancellationToken).ConfigureAwait(false);
         if (metadata.VersionCode != artifact.Identity.VersionCode ||

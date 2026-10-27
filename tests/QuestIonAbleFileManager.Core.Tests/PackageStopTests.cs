@@ -53,6 +53,9 @@ public sealed class PackageStopTests
 
         var result = await client.StopPackageAsync(Serial, Package);
 
+        Assert.Equal(Timeout.InfiniteTimeSpan,
+            Assert.Single(runner.Waits, call => call.Arguments.Contains("force-stop")).Timeout);
+        Assert.All(runner.Waits.Where(call => !call.Arguments.Contains("force-stop")), call => Assert.True(call.Timeout > TimeSpan.Zero));
         Assert.True(result.PackagePresentBeforeDispatch);
         Assert.True(result.PackagePresentAfterDispatch);
         Assert.True(result.Quiescence.IsQuiescent);
@@ -327,6 +330,7 @@ public sealed class PackageStopTests
         Func<string, IReadOnlyList<string>, CommandResult> handler) : ICommandRunner
     {
         public List<(string FileName, IReadOnlyList<string> Arguments)> Calls { get; } = [];
+        public List<(IReadOnlyList<string> Arguments, TimeSpan Timeout)> Waits { get; } = [];
 
         public Task<CommandResult> RunAsync(
             string fileName,
@@ -335,6 +339,7 @@ public sealed class PackageStopTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add((fileName, arguments.ToArray()));
+            Waits.Add((arguments.ToArray(), timeout));
             var result = handler(fileName, arguments);
             return Task.FromResult(result with { FileName = fileName, Arguments = arguments.ToArray() });
         }

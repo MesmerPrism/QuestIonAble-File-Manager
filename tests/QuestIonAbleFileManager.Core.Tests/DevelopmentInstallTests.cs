@@ -31,6 +31,7 @@ public sealed class DevelopmentInstallTests
         Assert.Equal(42, install.InstalledMetadata.VersionCode);
         Assert.Equal("1.0+src.example", install.InstalledMetadata.VersionName);
         Assert.Equal(2, fixture.Runner.MetadataReads);
+        Assert.Equal(Timeout.InfiniteTimeSpan, fixture.Runner.InstallWait);
         Assert.True(fixture.Runner.StagedWriteRejected);
         Assert.DoesNotContain(fixture.Runner.Calls, args => args.Contains("exec-out") || args.Contains("pull") || args.Contains("pidof"));
         var receipt = Assert.IsType<OperatorMutationReceipt>(result.MutationReceipt);
@@ -179,6 +180,7 @@ public sealed class DevelopmentInstallTests
         public int MetadataReads { get; private set; }
         public bool StagedWriteRejected { get; private set; }
         public IReadOnlyList<string>? InstallArguments { get; private set; }
+        public TimeSpan? InstallWait { get; private set; }
         public List<IReadOnlyList<string>> Calls { get; } = [];
         public Task<CommandResult> RunAsync(string fileName, IReadOnlyList<string> args, TimeSpan timeout, CancellationToken cancellationToken = default)
         {
@@ -194,6 +196,7 @@ public sealed class DevelopmentInstallTests
                 if (args.Contains("install"))
                 {
                     InstallArguments = args.ToArray();
+                    InstallWait = timeout;
                     try { File.WriteAllBytes(args[^1], [1]); } catch (IOException) { StagedWriteRejected = true; }
                     Assert.True(StagedWriteRejected);
                     if (Failure == "cancel-after-install") throw new OperationCanceledException();

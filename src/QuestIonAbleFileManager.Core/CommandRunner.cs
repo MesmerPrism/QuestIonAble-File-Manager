@@ -8,6 +8,20 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
 {
     private const int StreamBufferBytes = 64 * 1024;
     private const int MaximumStandardErrorCharacters = 64 * 1024;
+    private readonly TimeSpan _retainedWarningInterval;
+    private readonly Action<TimeSpan> _retainedWaitWarning;
+
+    public CommandRunner() : this(TimeSpan.FromMinutes(1), null) { }
+
+    public CommandRunner(TimeSpan retainedWarningInterval, Action<TimeSpan>? retainedWaitWarning = null)
+    {
+        _retainedWarningInterval = retainedWarningInterval;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_retainedWarningInterval, TimeSpan.Zero);
+        // Keep CLI JSON/stdout and protocol stderr clean. UI/hosts can inject a
+        // progress observer; the default warning goes to diagnostic trace only.
+        _retainedWaitWarning = retainedWaitWarning ?? (_ => Trace.TraceWarning(
+            "WARNING: operation exceeds its estimate; retaining the same local process and output readers. Explicit cancellation remains available."));
+    }
 
     async Task<TruncatingCommandResult> ITruncatingCommandRunner.RunTruncatingAsync(
         string fileName, IReadOnlyList<string> arguments,
@@ -88,7 +102,9 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        if (timeout != Timeout.InfiniteTimeSpan)
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var startInfo = new ProcessStartInfo
         {
@@ -135,7 +151,24 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         string standardError;
         try
         {
-            await process.WaitForExitAsync(linkedSource.Token).ConfigureAwait(false);
+            var completion = Task.WhenAll(process.WaitForExitAsync(linkedSource.Token), outputTask, errorTask);
+            if (timeout == Timeout.InfiniteTimeSpan)
+            {
+                while (!completion.IsCompleted)
+                {
+                    try { await completion.WaitAsync(_retainedWarningInterval, linkedSource.Token).ConfigureAwait(false); }
+                    catch (TimeoutException)
+                    {
+                        // An observer failure cannot cancel an issued effect or lose its readers.
+                        if (!completion.IsCompleted)
+                        {
+                            try { _retainedWaitWarning(stopwatch.Elapsed); }
+                            catch (Exception) { Trace.TraceWarning("Retained operation warning observer failed."); }
+                        }
+                    }
+                }
+            }
+            await completion.ConfigureAwait(false);
             standardOutput = await outputTask.ConfigureAwait(false);
             standardError = await errorTask.ConfigureAwait(false);
         }
