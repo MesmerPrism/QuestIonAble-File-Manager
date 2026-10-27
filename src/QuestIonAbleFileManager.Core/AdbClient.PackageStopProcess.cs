@@ -19,7 +19,9 @@ public sealed partial class AdbClient
 
     private async Task<string> ReadStopFactAsync(string serial, CancellationToken token, params string[] arguments)
     {
-        var result = await RunForDeviceAsync(serial, arguments, InspectionTimeout, token).ConfigureAwait(false);
+        // These reads belong to this one held stop operation, not a detached
+        // health probe. A slow observation cannot abandon its confirmation.
+        var result = await RunForDeviceAsync(serial, arguments, Timeout.InfiniteTimeSpan, token).ConfigureAwait(false);
         result.EnsureSuccess("Read fixed package-stop process evidence");
         if (!string.IsNullOrWhiteSpace(result.StandardError) || result.StandardOutput.Length > 262144)
             throw new InvalidDataException("Package-stop evidence was denied or oversized.");
@@ -89,9 +91,7 @@ public sealed partial class AdbClient
 
     private async Task<StopSnapshot?> TryReadStopSnapshotAsync(string serial, string package, CancellationToken token)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(InspectionTimeout);
-        try { return await ReadStopSnapshotAsync(serial, package, true, deadline.Token).ConfigureAwait(false); }
+        try { return await ReadStopSnapshotAsync(serial, package, true, token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { return null; }
         catch (Exception e) when (e is InvalidDataException or AdbCommandException or IOException or TimeoutException) { return null; }
     }
@@ -100,20 +100,18 @@ public sealed partial class AdbClient
         string serial, string package, StopSnapshot? before, CancellationToken token)
     {
         if (before is null) return (null, null);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(InspectionTimeout);
         try
         {
             for (var phase = 0; phase < 2; phase++)
             {
-                var after = await ReadStopSnapshotAsync(serial, package, false, deadline.Token).ConfigureAwait(false);
+                var after = await ReadStopSnapshotAsync(serial, package, false, token).ConfigureAwait(false);
                 if (after.User != before.User || after.Uid != before.Uid)
                     return (null, null);
                 if (after.Processes.Values.Contains(before.Uid))
                     return (false, new(before.User, before.Uid, before.Births, false, phase + 1));
                 foreach (var birth in before.Births)
                     if (after.Processes.TryGetValue(birth.ProcessId, out var replacementUid) &&
-                        await ReadStopBirthAsync(serial, birth.ProcessId, replacementUid, deadline.Token).ConfigureAwait(false) == birth.StartTicks)
+                        await ReadStopBirthAsync(serial, birth.ProcessId, replacementUid, token).ConfigureAwait(false) == birth.StartTicks)
                         return (null, null);
             }
             return (true, new(before.User, before.Uid, before.Births, true, 2));

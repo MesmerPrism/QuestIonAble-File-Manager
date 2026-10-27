@@ -55,7 +55,7 @@ public sealed class PackageStopTests
 
         Assert.Equal(Timeout.InfiniteTimeSpan,
             Assert.Single(runner.Waits, call => call.Arguments.Contains("force-stop")).Timeout);
-        Assert.All(runner.Waits.Where(call => !call.Arguments.Contains("force-stop")), call => Assert.True(call.Timeout > TimeSpan.Zero));
+        Assert.All(runner.Waits, call => Assert.Equal(Timeout.InfiniteTimeSpan, call.Timeout));
         Assert.True(result.PackagePresentBeforeDispatch);
         Assert.True(result.PackagePresentAfterDispatch);
         Assert.True(result.Quiescence.IsQuiescent);
