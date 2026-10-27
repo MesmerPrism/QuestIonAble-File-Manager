@@ -31,10 +31,12 @@ card reads installation facts, explicitly opens its catalog, and selects a revie
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 An explicit USB Direct card adopts one short-lived Kiosk operator connection,
 reads signed status and closes its opaque handle with separate listener cleanup.
-Its Direct controls card provides fifteen typed Kiosk actions and
+Its Direct controls card provides seventeen typed Kiosk actions and
 explicit original-result recovery, including the stored preference to ask about
 Wi-Fi ADB after restart. That preference does not establish current connectivity
-or approval of a protected prompt. Accessibility and natural/contour passthrough
+or approval of a protected prompt. Separate Wi-Fi ADB request/disable controls
+observe Kiosk's reported enabled flag without connecting the host.
+Accessibility and natural/contour passthrough
 controls confirm only Kiosk's reported flag, mode and applicable LUT state;
 protected prompts remain wearer decisions. Guard-mode acknowledgement does not prove
 app foreground or readiness, and cancellation never implies rollback.

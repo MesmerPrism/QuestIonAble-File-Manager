@@ -44,7 +44,8 @@ public sealed class BrowserDirectCommandTests
             RustyKioskCommand.CheckSetupHelper, RustyKioskCommand.SetLaunchRequirement, RustyKioskCommand.CancelPendingLaunch,
             RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload,
             RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
-            RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour };
+            RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour,
+            RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
@@ -563,5 +564,142 @@ public sealed class BrowserDirectCommandTests
         if(variant=="missing-access")state.Remove("accessibility_enabled");if(variant=="bad-access")state["accessibility_enabled"]=JsonSerializer.SerializeToElement("false");
         if(variant=="bad-system")state["system_passthrough_enabled"]=JsonSerializer.SerializeToElement("true");if(variant=="bad-style")state["passthrough_style"]=JsonSerializer.SerializeToElement("future-style");
         if(variant=="bad-lut")state["passthrough_lut_applied"]=JsonSerializer.SerializeToElement("true");root["state"]=JsonSerializer.SerializeToElement(state);return JsonSerializer.Serialize(root);
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",RustyKioskCommand.RequestWifiAdb)]
+    [InlineData("disable-wifi-adb",RustyKioskCommand.DisableWifiAdb)]
+    public void CurrentWifiAdbPairMapsExistingCoreEnumsWithoutValueAuthority(string wire,RustyKioskCommand expected)
+    {
+        var request=BrowserDirectCommands.Parse(Body(command:wire));Assert.Equal(expected,request.Command);Assert.Null(request.Value);Assert.True(request.Mutation);
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",true)]
+    [InlineData("disable-wifi-adb",false)]
+    public async Task CurrentWifiAdbConfirmsOnlyMatchingReportedBoolean(string wire,bool desired)
+    {
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetWifiAdb(f,desired);var result=await f.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("completed",result.State);Assert.Equal("confirmed",d.OriginalEffect);Assert.True(d.ReconcilesOriginal);
+            Assert.Equal(wire,d.TypedResult!.Command);Assert.Equal(d.LogicalRequestId,d.TypedResult.RequestId);Assert.True(d.TypedResult.Accepted);Assert.True(d.TypedResult.Completed);Assert.Equal(OperatorMutationStage.Confirmed,d.CoreReceipt!.Stage);
+            var json=JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web));Assert.Equal(desired,json.GetProperty("wifiAdbEnabled").GetBoolean());
+            foreach(var field in new[]{"requestWifiAdbAfterBoot","accessibilityEnabled","systemPassthroughEnabled","passthroughStyle","passthroughLutApplied","endpoint","pairingCode"})Assert.False(json.TryGetProperty(field,out _));
+            Assert.DoesNotContain("private-sentinel",json.GetRawText());Assert.Null(result.Result);Assert.Null(result.Mutation);
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",true)]
+    [InlineData("disable-wifi-adb",false)]
+    public async Task ContraryCurrentWifiFlagNeverAcknowledgesTheOriginal(string wire,bool desired)
+    {
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetWifiAdb(f,!desired);var result=await f.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("pending",result.State);Assert.Equal("pendingWearerAction",d.OriginalEffect);Assert.False(d.ReconcilesOriginal);Assert.Equal(OperatorMutationStage.PendingWearerAction,d.CoreReceipt!.Stage);
+            Assert.Equal(!desired,JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web)).GetProperty("wifiAdbEnabled").GetBoolean());Assert.Same(result,f.Broker.Get(result.RequestId));
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",true)]
+    [InlineData("disable-wifi-adb",false)]
+    public async Task MatchingWifiFlagCannotBypassFullTypedAndCoreProof(string wire,bool desired)
+    {
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            foreach(var variant in new[]{"accepted","completed","command","marker-request","pending-marker"})
+            {
+                f.Native.Transform=(command,result)=>
+                {
+                    var value=WifiAdbResult(command,result,desired);
+                    return variant switch
+                    {
+                        "accepted"=>value with{KioskResult=value.KioskResult! with{Accepted=false}},
+                        "completed"=>value with{KioskResult=value.KioskResult! with{Completed=false}},
+                        "command"=>value with{KioskResult=value.KioskResult! with{Command=RustyKioskCommand.Status}},
+                        "marker-request"=>value with{Mutation=value.Mutation with{RequestId="crossed-request"}},
+                        _=>value with{Mutation=value.Mutation with{Stage=OperatorMutationStage.PendingWearerAction}}
+                    };
+                };
+                var result=await f.Invoke(wire);Assert.Equal("outcomeUnknown",result.State);Assert.False(result.KioskDirectCommand!.ReconcilesOriginal);Assert.Null(result.KioskDirectCommand.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);
+            }
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",true,false)]
+    [InlineData("disable-wifi-adb",false,false)]
+    [InlineData("request-wifi-adb",true,true)]
+    [InlineData("disable-wifi-adb",false,true)]
+    public async Task RequiredWifiProtocolBooleanNeverDefaultsOrCoerces(string wire,bool desired,bool malformed)
+    {
+        var valid=RustyKioskOperatorResult.Parse(WifiProtocol(wire,"kiosk_fixture_123",desired));Assert.True(RustyKioskReadback.Confirms(valid.Command,null,valid));
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            f.Native.Transform=(command,result)=>result with{KioskResult=RustyKioskOperatorResult.Parse(WifiProtocol(wire,command.RequestId!,malformed?"false":null))};
+            var result=await f.Invoke(wire);Assert.Equal("outcomeUnknown",result.State);Assert.Null(result.KioskDirectCommand!.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);Assert.False(result.KioskDirectCommand.ReconcilesOriginal);
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("request-wifi-adb",true)]
+    [InlineData("disable-wifi-adb",false)]
+    public async Task WifiPairKeepsLiteralNullAndOriginalResultRecoveryWithoutReplay(string wire,bool desired)
+    {
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            foreach(var value in new object[]{""," ","null",false,true,1})
+            {
+                var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(Body(command:wire,handle:f.Handle))!;fields["value"]=JsonSerializer.SerializeToElement(value);var before=f.Native.Core.Count;
+                Assert.Equal("direct_value_invalid",(await Assert.ThrowsAsync<BrowserRequestException>(()=>f.Broker.ExecuteAsync(JsonSerializer.SerializeToUtf8Bytes(fields)))).Code);Assert.Equal(before,f.Native.Core.Count);
+            }
+            f.Native.Transform=(_,_)=>throw new IOException("lost reply");var original=await f.Invoke(wire);Assert.Equal("outcomeUnknown",original.State);
+            f.Native.Transform=null;f.Native.Lifecycle="confirmed";Assert.False((await f.Recover("kiosk.direct.request-status",original.RequestId)).KioskDirectCommand!.ReconcilesOriginal);
+            f.Native.Lifecycle=null;SetWifiAdb(f,desired);var read=await f.Recover("kiosk.direct.request-result",original.RequestId);
+            Assert.True(read.KioskDirectCommand!.ReconcilesOriginal);Assert.Equal(original.KioskDirectCommand!.LogicalRequestId,read.KioskDirectCommand.LogicalRequestId);
+            Assert.Equal(desired,JsonSerializer.SerializeToElement(read.KioskDirectCommand.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web)).GetProperty("wifiAdbEnabled").GetBoolean());
+            Assert.Same(original,f.Broker.Get(original.RequestId));Assert.Single(f.Native.Core,c=>c.Action==KioskDirectOperatorAction.Invoke);Assert.Single(f.Native.Core,c=>c.Action==KioskDirectOperatorAction.RequestResult);
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    [Fact]
+    public async Task OldFifteenCommandsNeverGainCurrentWifiWireProperty()
+    {
+        var f=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            SetWifiAdb(f,true);
+            foreach(var wire in new[]{"status","show-controls","show-apps","check-setup-helper","set-launch-requirement","cancel-pending-launch","launch-normal","launch-kiosk","reload","enable-wifi-adb-after-boot","disable-wifi-adb-after-boot","enable-accessibility","disable-accessibility","passthrough-natural","passthrough-contour"})
+            {
+                var result=await f.Invoke(wire,wire=="set-launch-requirement"?"any":null);Assert.NotNull(result.KioskDirectCommand!.TypedResult);
+                Assert.False(JsonSerializer.SerializeToElement(result.KioskDirectCommand.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web)).TryGetProperty("wifiAdbEnabled",out _));
+            }
+        }
+        finally{Assert.True(await f.Owner.ShutdownAsync());}
+    }
+
+    private static void SetWifiAdb(BrowserDirectCommandBrokerTests.Fixture f,bool enabled)=>f.Native.Transform=(command,result)=>WifiAdbResult(command,result,enabled);
+    private static KioskDirectOperatorResult WifiAdbResult(KioskDirectOperatorCommand command,KioskDirectOperatorResult result,bool enabled)
+    {
+        if(result.KioskResult is not { } typed)return result;typed=typed with{State=typed.State with{WifiAdbEnabled=enabled}};
+        return result with{KioskResult=typed,Mutation=result.Mutation with{Stage=RustyKioskReadback.Confirms(typed.Command,command.Value,typed)?OperatorMutationStage.Confirmed:OperatorMutationStage.PendingWearerAction}};
+    }
+    private static string WifiProtocol(string wire,string id,object? enabled)
+    {
+        var root=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(BootProtocol(wire,id,false))!;var state=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(root["state"].GetRawText())!;
+        if(enabled is null)state.Remove("wifi_adb_enabled");else state["wifi_adb_enabled"]=JsonSerializer.SerializeToElement(enabled);root["state"]=JsonSerializer.SerializeToElement(state);return JsonSerializer.Serialize(root);
     }
 }

@@ -184,6 +184,8 @@ public static class BrowserDirectCommands
         "disable-accessibility" => RustyKioskCommand.DisableAccessibility,
         "passthrough-natural" => RustyKioskCommand.PassthroughNatural,
         "passthrough-contour" => RustyKioskCommand.PassthroughContour,
+        "request-wifi-adb" => RustyKioskCommand.RequestWifiAdb,
+        "disable-wifi-adb" => RustyKioskCommand.DisableWifiAdb,
         "check-setup-helper" => RustyKioskCommand.CheckSetupHelper,
         "set-launch-requirement" => RustyKioskCommand.SetLaunchRequirement,
         "cancel-pending-launch" => RustyKioskCommand.CancelPendingLaunch,

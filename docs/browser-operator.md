@@ -618,11 +618,12 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its fifteen commands are `status`, `show-controls`, `show-apps`, `reload`,
+connection above. Its seventeen commands are `status`, `show-controls`, `show-apps`, `reload`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
 `disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
-`passthrough-natural` and `passthrough-contour`. Only `set-launch-requirement` accepts a
+`passthrough-natural`, `passthrough-contour`, `request-wifi-adb` and
+`disable-wifi-adb`. Only `set-launch-requirement` accepts a
 value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
@@ -644,6 +645,20 @@ Confirmation proves neither current Wi-Fi ADB nor success after a future
 restart, connectivity or wearer approval. These controls do not reboot the
 headset or set up the host's ADB transport. Lost replies use the same explicit
 original-result recovery and never resend the preference command.
+
+**Request Wi-Fi ADB now** and **Request Wi-Fi ADB disable** are separate from
+that after-restart preference. They use the existing Core request/disable
+commands with literal `value:null` and explicit confirmation. Confirmation
+requires the bound, accepted and completed typed original result, Core's
+confirmed receipt and literal `wifiAdbEnabled:true` or `false`, respectively.
+This optional field appears only for this pair, preserving the previous fifteen
+command projections. Missing, malformed, contrary or pending evidence keeps
+the original unresolved for explicit recovery without resending it.
+The result observes only Kiosk's reported enabled flag. It does not establish
+host discovery, connection, pairing, an address, reachability, future restart
+behavior or application readiness. Protected headset prompts remain wearer
+decisions. Disabling Wi-Fi ADB may immediately close an existing wireless ADB
+connection. These browser routes do not set up or reconnect the host ADB transport.
 
 The accessibility controls request enable or disable through the existing Core
 commands. Confirmation requires `accessibilityEnabled` to be a literal boolean

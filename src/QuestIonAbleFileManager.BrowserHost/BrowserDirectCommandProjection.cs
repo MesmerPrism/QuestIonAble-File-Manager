@@ -21,6 +21,8 @@ public sealed record BrowserDirectTypedResult(string Schema,string RequestId,str
     public string? PassthroughStyle { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? PassthroughLutApplied { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? WifiAdbEnabled { get; init; }
 }
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
@@ -97,7 +99,8 @@ internal static class BrowserDirectCommandProjection
             AccessibilityEnabled=typed.Command is RustyKioskCommand.EnableAccessibility or RustyKioskCommand.DisableAccessibility ? state.AccessibilityEnabled : null,
             SystemPassthroughEnabled=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.SystemPassthroughEnabled : null,
             PassthroughStyle=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.PassthroughStyle?.ToWireName() : null,
-            PassthroughLutApplied=typed.Command==RustyKioskCommand.PassthroughContour ? state.PassthroughLutApplied : null
+            PassthroughLutApplied=typed.Command==RustyKioskCommand.PassthroughContour ? state.PassthroughLutApplied : null,
+            WifiAdbEnabled=typed.Command is RustyKioskCommand.RequestWifiAdb or RustyKioskCommand.DisableWifiAdb ? state.WifiAdbEnabled : null
         };
     }
 }
