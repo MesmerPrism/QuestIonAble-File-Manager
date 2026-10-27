@@ -397,6 +397,41 @@ for (const kind of ['command-only','other-original','changed-host-command','cros
   assert.deepEqual(await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-command-v1'))),commandReference,'Cleanup never acknowledges a command');
 });
 
+for(const [command,desired] of [['enable-wifi-adb-after-boot',true],['disable-wifi-adb-after-boot',false]])test('real app boot preference recovers only its cached original: '+command,async t=>{
+  const commandKey='qfm-browser-direct-command-v1';let connection,savedBeforeDispatch;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:{...directTagsSession(),actions:[...directTagsSession().actions,'kiosk.direct.invoke','kiosk.direct.request-result']}}),mutation:async({route,body,retained})=>{
+    if(body.action==='kiosk.direct.connect-usb'){const value=directTagsConnectionReply(body);connection=value.kioskDirectConnection;return route.fulfill({json:value});}
+    assert.equal(body.action,'kiosk.direct.invoke');assert.equal(body.command,command);assert.equal(body.value,null);assert.equal(body.confirmed,true);
+    savedBeforeDispatch=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),commandKey);
+    const logicalRequestId='kiosk_'+body.requestId.replaceAll('-','');
+    retained.set(body.requestId,{requestId:body.requestId,action:body.action,state:'completed',result:null,mutation:null,kioskDirectCommand:{
+      connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,
+      operation:'invoke',originalRequestId:body.requestId,logicalRequestId,command,value:null,originalEffect:'confirmed',reconcilesOriginal:true,cancellationAcknowledged:false,lifecycle:null,
+      coreReceipt:{actionId:'action_'+body.requestId.replaceAll('-',''),action:'invoke',requestId:logicalRequestId,stage:'confirmed'},
+      typedResult:{schema:'rusty.kiosk.cli_result.v1',requestId:logicalRequestId,command,accepted:true,completed:true,controlsOpen:null,selectedKey:null,selectedPackage:null,selectedInstalled:false,selectedLaunchable:false,selectedLaunchRequirement:null,pendingRequirementLaunch:null,guardArmed:false,setupHelperInstalled:false,setupHelperReady:false,selectedEntry:null,requestWifiAdbAfterBoot:desired}}});
+    return route.abort('failed');
+  }});
+  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(-2).map(option=>option.value)),['enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
+  await adoptDirectForTags(f);await f.page.locator('#direct-command-command').selectOption(command);
+  assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);
+  await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.settled();
+  const original=await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),commandKey);
+  assert.deepEqual(original,savedBeforeDispatch);assert.equal(original.original.command,command);
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  const other={requestId:'f1234567-1234-4234-8234-123456789abc',sessionId:'fixture-session',action:'device.keep-awake',serial:'FIXTURE-A'};
+  await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:originalKey,value:other});
+  const callsBeforeReload=f.calls.length;await f.page.reload();assert.equal(f.calls.length,callsBeforeReload);await f.connect();
+  await f.page.locator('#direct-command-original-status').click();
+  await f.page.waitForFunction(key=>sessionStorage.getItem(key)===null,commandKey);
+  assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),commandKey),null);
+  assert.deepEqual(await f.outstanding(),other);assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  assert.match(await f.page.locator('#direct-command-state').textContent(),/request-after-restart preference observed/i);
+  assert.match(await f.page.locator('#result-summary').textContent(),new RegExp('preference observed.*'+(desired?'on':'off'),'i'));
+  assert.equal(f.calls.filter(call=>call.body?.action==='kiosk.direct.invoke').length,1);
+  assert.equal(f.calls.filter(call=>call.method==='GET'&&call.path.startsWith('/browser/v1/requests/')).length,1);
+  assert.equal(f.calls.some(call=>call.body?.action==='kiosk.direct.request-result'),false);
+});
+
 const fleetSession = route => route.fulfill({json:{sessionId:'fixture-session',actions:['devices','device.status','device.keep-awake','fleet.status'],fleetInstallerStatus:{supported:true}}});
 const fleetReply = body => ({requestId:body.requestId,action:'fleet.status',state:'completed',result:null,mutation:null,fleet:{operation:'status',status:{
   schema:'questionable.file_manager.fleet_installer_status.v1',status:'ready',configured:true,sourceKind:'embedded_pages_metadata',product:'rusty-fleet-labs',version:'1.2.3',channel:'labs',descriptorId:'fixture-release',descriptorSha256:'a'.repeat(64),highestHandoffVersion:null,lastOutcome:null,observedAtMs:1770000000000}}});

@@ -42,7 +42,8 @@ public sealed class BrowserDirectCommandTests
     {
         var initial = new[] { RustyKioskCommand.Status, RustyKioskCommand.ShowControls, RustyKioskCommand.ShowApps,
             RustyKioskCommand.CheckSetupHelper, RustyKioskCommand.SetLaunchRequirement, RustyKioskCommand.CancelPendingLaunch,
-            RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload };
+            RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload,
+            RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
@@ -204,5 +205,159 @@ public sealed class BrowserDirectCommandTests
             Assert.Single(fixture.Native.Core, item => item.Action == KioskDirectOperatorAction.RequestResult);
         }
         finally { Assert.True(await fixture.Owner.ShutdownAsync()); }
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",RustyKioskCommand.EnableWifiAfterBoot)]
+    [InlineData("disable-wifi-adb-after-boot",RustyKioskCommand.DisableWifiAfterBoot)]
+    public void BootPreferencePairUsesExistingCoreEnumsAndLiteralNull(string wire,RustyKioskCommand expected)
+    {
+        var parsed=BrowserDirectCommands.Parse(Body(command:wire));Assert.Equal(expected,parsed.Command);Assert.Null(parsed.Value);Assert.True(parsed.Mutation);
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true)]
+    [InlineData("disable-wifi-adb-after-boot",false)]
+    public async Task BootPreferenceConfirmsOnlyItsMatchingBooleanAndFullCoreReceipt(string wire,bool desired)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            BootReadback(fixture,desired);var result=await fixture.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("completed",result.State);Assert.Equal("confirmed",d.OriginalEffect);Assert.True(d.ReconcilesOriginal);
+            var json=JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.Equal(desired,json.GetProperty("requestWifiAdbAfterBoot").GetBoolean());
+            Assert.Equal(OperatorMutationStage.Confirmed,d.CoreReceipt!.Stage);Assert.Equal(d.LogicalRequestId,d.TypedResult!.RequestId);
+            Assert.Equal(wire,d.TypedResult.Command);Assert.True(d.TypedResult.Accepted);Assert.True(d.TypedResult.Completed);
+            Assert.Null(result.Result);Assert.Null(result.Mutation);Assert.DoesNotContain("private-sentinel",json.GetRawText());
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true)]
+    [InlineData("disable-wifi-adb-after-boot",false)]
+    public async Task ContraryBootPreferenceReadbackRetainsPendingOriginal(string wire,bool desired)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            BootReadback(fixture,!desired);var result=await fixture.Invoke(wire);var d=result.KioskDirectCommand!;
+            Assert.Equal("pending",result.State);Assert.Equal("pendingWearerAction",d.OriginalEffect);Assert.False(d.ReconcilesOriginal);
+            Assert.Equal(OperatorMutationStage.PendingWearerAction,d.CoreReceipt!.Stage);
+            Assert.Equal(!desired,JsonSerializer.SerializeToElement(d.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web)).GetProperty("requestWifiAdbAfterBoot").GetBoolean());
+            Assert.Same(result,fixture.Broker.Get(result.RequestId));
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true)]
+    [InlineData("disable-wifi-adb-after-boot",false)]
+    public async Task PendingMarkerCannotConfirmEvenWhenPreferenceMatches(string wire,bool desired)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            BootReadback(fixture,desired,OperatorMutationStage.PendingWearerAction);var result=await fixture.Invoke(wire);
+            Assert.Equal("outcomeUnknown",result.State);Assert.False(result.KioskDirectCommand!.ReconcilesOriginal);Assert.Null(result.KioskDirectCommand.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true)]
+    [InlineData("disable-wifi-adb-after-boot",false)]
+    public async Task OnlyLiteralNullPreferenceValueReachesTheOwner(string wire,bool desired)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            foreach(var value in new object[]{""," ","null",desired,1})
+            {
+                var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(Body(command:wire,handle:fixture.Handle))!;
+                fields["value"]=JsonSerializer.SerializeToElement(value);var before=fixture.Native.Core.Count;
+                Assert.Equal("direct_value_invalid",(await Assert.ThrowsAsync<BrowserRequestException>(()=>fixture.Broker.ExecuteAsync(JsonSerializer.SerializeToUtf8Bytes(fields)))).Code);
+                Assert.Equal(before,fixture.Native.Core.Count);Assert.Equal("request_not_found",Assert.Throws<BrowserRequestException>(()=>fixture.Broker.Get(fields["requestId"].GetString()!)).Code);
+            }
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true,false)]
+    [InlineData("disable-wifi-adb-after-boot",false,false)]
+    [InlineData("enable-wifi-adb-after-boot",true,true)]
+    [InlineData("disable-wifi-adb-after-boot",false,true)]
+    public async Task MissingOrMalformedRequiredCoreBooleanCannotBecomeFalseOrConfirmation(string wire,bool desired,bool malformed)
+    {
+        // Positive control proves this synthetic protocol fixture reaches the
+        // required Core boolean rather than failing an unrelated missing field.
+        var valid=BootProtocol(wire,"kiosk_fixture_123",desired);
+        Assert.Equal(desired,RustyKioskOperatorResult.Parse(valid).State.RequestWifiAdbAfterBoot);
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            fixture.Native.Transform=(command,result)=>result with{KioskResult=RustyKioskOperatorResult.Parse(BootProtocol(wire,command.RequestId!,malformed?"false":null))};
+            var result=await fixture.Invoke(wire);Assert.Equal("outcomeUnknown",result.State);Assert.Equal("unknown",result.KioskDirectCommand!.OriginalEffect);
+            Assert.False(result.KioskDirectCommand.ReconcilesOriginal);Assert.Null(result.KioskDirectCommand.TypedResult);Assert.Null(result.KioskDirectCommand.CoreReceipt);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Theory]
+    [InlineData("enable-wifi-adb-after-boot",true)]
+    [InlineData("disable-wifi-adb-after-boot",false)]
+    public async Task BootPreferenceTypedRecoveryUsesOriginalLogicalIdWithoutReplay(string wire,bool desired)
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            fixture.Native.Transform=(_,_)=>throw new IOException("lost reply");var original=await fixture.Invoke(wire);Assert.Equal("outcomeUnknown",original.State);
+            fixture.Native.Transform=null;fixture.Native.Lifecycle="confirmed";var status=await fixture.Recover("kiosk.direct.request-status",original.RequestId);Assert.False(status.KioskDirectCommand!.ReconcilesOriginal);
+            fixture.Native.Lifecycle=null;BootReadback(fixture,desired);var recovered=await fixture.Recover("kiosk.direct.request-result",original.RequestId);
+            Assert.True(recovered.KioskDirectCommand!.ReconcilesOriginal);Assert.Equal(original.KioskDirectCommand!.LogicalRequestId,recovered.KioskDirectCommand.LogicalRequestId);
+            Assert.Equal(desired,JsonSerializer.SerializeToElement(recovered.KioskDirectCommand.TypedResult,new JsonSerializerOptions(JsonSerializerDefaults.Web)).GetProperty("requestWifiAdbAfterBoot").GetBoolean());
+            Assert.Same(original,fixture.Broker.Get(original.RequestId));Assert.Single(fixture.Native.Core,c=>c.Action==KioskDirectOperatorAction.Invoke);Assert.Single(fixture.Native.Core,c=>c.Action==KioskDirectOperatorAction.RequestResult);
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+    }
+
+    [Fact]
+    public async Task ExistingNineCommandsNeverExposeTheNewBooleanAndTypedConstructorWireIsUnchanged()
+    {
+        var fixture=await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            BootReadback(fixture,true);
+            foreach(var wire in new[]{"status","show-controls","show-apps","check-setup-helper","set-launch-requirement","cancel-pending-launch","launch-normal","launch-kiosk","reload"})
+            {
+                var result=await fixture.Invoke(wire,wire=="set-launch-requirement"?"any":null);Assert.NotNull(result.KioskDirectCommand!.TypedResult);
+                Assert.DoesNotContain("requestWifiAdbAfterBoot",JsonSerializer.Serialize(result,new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            }
+        }
+        finally{Assert.True(await fixture.Owner.ShutdownAsync());}
+        var old=new BrowserDirectTypedResult("schema","kiosk_original","status",true,true,null,null,null,false,false,null,null,false,false,false,null);
+        var (schema,id,command,accepted,completed,controls,key,package,installed,launchable,requirement,pending,guard,helperInstalled,helperReady,entry)=old;
+        Assert.Equal(old,new BrowserDirectTypedResult(schema,id,command,accepted,completed,controls,key,package,installed,launchable,requirement,pending,guard,helperInstalled,helperReady,entry));
+        Assert.Single(typeof(BrowserDirectTypedResult).GetConstructors(),constructor=>constructor.GetParameters().Length==16);
+        const string literal="{\"schema\":\"schema\",\"requestId\":\"kiosk_original\",\"command\":\"status\",\"accepted\":true,\"completed\":true,\"controlsOpen\":null,\"selectedKey\":null,\"selectedPackage\":null,\"selectedInstalled\":false,\"selectedLaunchable\":false,\"selectedLaunchRequirement\":null,\"pendingRequirementLaunch\":null,\"guardArmed\":false,\"setupHelperInstalled\":false,\"setupHelperReady\":false,\"selectedEntry\":null}";
+        Assert.Equal(literal,JsonSerializer.Serialize(old,new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    private static void BootReadback(BrowserDirectCommandBrokerTests.Fixture fixture,bool observed,OperatorMutationStage? forcedStage=null) =>
+        fixture.Native.Transform=(command,result)=>result.KioskResult is not { } typed?result:result with
+        {
+            KioskResult=typed with{State=typed.State with{RequestWifiAdbAfterBoot=observed}},
+            Mutation=result.Mutation with{Stage=forcedStage??(RustyKioskReadback.Confirms(typed.Command,command.Value,typed with{State=typed.State with{RequestWifiAdbAfterBoot=observed}})?OperatorMutationStage.Confirmed:OperatorMutationStage.PendingWearerAction)}
+        };
+
+    private static string BootProtocol(string wire,string id,object? preference)
+    {
+        var state=new Dictionary<string,object?>{{"installed_count",0},{"not_installed_count",0},{"visible_count",0},{"visible_entries_truncated",false},{"entries",Array.Empty<object>()},
+            {"search","private-search"},{"selected_installed",false},{"selected_launchable",false},{"wifi_adb_enabled",false},{"setup_helper_installed",false},{"setup_helper_ready",false},
+            {"accessibility_enabled",false},{"guard_armed",false},{"status_line","private-sentinel"}};
+        if(preference is not null)state["request_wifi_adb_after_boot"]=preference;
+        return JsonSerializer.Serialize(new{schema=RustyKioskContract.ResultSchema,request_id=id,command=wire,accepted=true,completed=true,message="private-sentinel",state});
     }
 }

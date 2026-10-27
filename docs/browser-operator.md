@@ -615,12 +615,13 @@ outcome. The existing [typed Direct CLI](kiosk-direct-authorized-usb.md) remains
 the alternative for the other Direct workflows and its own explicitly scoped
 live-session operations.
 
-## Direct commands for Kiosk's current selection
+## Kiosk Direct controls
 
-The separate **Kiosk Direct commands** card uses the acknowledged opaque
-connection above. Its nine commands are `status`, `show-controls`, `show-apps`, `reload`,
+The separate **Kiosk Direct controls** card uses the acknowledged opaque
+connection above. Its eleven commands are `status`, `show-controls`, `show-apps`, `reload`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
-`launch-normal` and `launch-kiosk`. Only `set-launch-requirement` accepts a
+`launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
+`disable-wifi-adb-after-boot`. Only `set-launch-requirement` accepts a
 value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
@@ -629,6 +630,19 @@ original command's bound, accepted and completed typed result with Core's
 confirmed receipt acknowledges the provider reload. This does not prove a
 fresh catalog, foreground, application or OpenXR readiness. A lost reply uses
 the same explicit original-result lookup and never repeats Reload.
+
+**Ask about Wi-Fi ADB after restart** and **Stop asking about Wi-Fi ADB after
+restart** use the existing Core preference commands with literal `value:null`
+and the same explicit confirmation. Only their matching, accepted and completed
+typed original result plus Core's confirmed receipt and literal
+`requestWifiAdbAfterBoot:true` or `false`, respectively, confirms the stored
+request-after-restart preference. This optional boolean is emitted only for
+these two commands; existing command projections keep their previous shape.
+Missing, malformed, contrary or pending evidence preserves the original.
+Confirmation proves neither current Wi-Fi ADB nor success after a future
+restart, connectivity or wearer approval. These controls do not reboot the
+headset or set up the host's ADB transport. Lost replies use the same explicit
+original-result recovery and never resend the preference command.
 
 Launch addresses Kiosk's current selection at execution time. A previous
 catalog selection is a separate operation; this card cannot bind an atomic
