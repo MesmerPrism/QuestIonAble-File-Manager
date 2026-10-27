@@ -670,6 +670,35 @@ cleanup of this same connection while its command is unresolved. Closing erases
 the key and may end result recovery; listener cleanup never acknowledges a
 command. Expiry and host restart cannot reconstruct the old credential.
 
+## Direct staging inventory
+
+After adopting a Direct connection, **Read staging inventory** performs the
+existing signed Core `ListStaging()` read. It uses the same connection owner,
+shared operation gate and one-use request ledger. Protected local artifact
+staging and retained APK configuration are not prerequisites.
+
+The request contains exactly `requestId`, `action: "kiosk.direct.staging-list"`
+and the opaque `connectionId`. A fresh signed status must match the adopted
+session and generation. The response's optional `kioskDirectStaging` object
+binds the original connection/USB scope and confirmed `listStaging` Core
+receipt, plus `files` containing literal `name`, `bytes` and `modifiedAtMs`.
+No SHA-256 or file-content verification is implied by this inventory.
+
+The browser returns at most 128 entries in provider order and reports
+`totalCount`, `returnedCount`, `omittedCount` and `complete`. A partial list is
+explicit; use the typed CLI for the complete inventory. All entries are
+validated before projection, including omitted entries: names use the existing
+160-character transfer-safe grammar, duplicates are rejected, and sizes and
+modification milliseconds must be nonnegative JavaScript-safe integers.
+Malformed input fails with a fixed error rather than appearing empty.
+
+**Read cached inventory result** fetches the exact original browser request
+without querying the provider again. It remains a historical snapshot after
+Direct close or expiry within its original host session. References stay in
+tab memory; reconnect does not automatically refresh, replay or reconcile any
+unrelated uncertain operation. Upload, download, delete and install remain
+separate CLI workflows. Listing metadata grants none of those operations.
+
 ## Private Kiosk tag backup
 
 With an adopted USB Direct connection and protected Windows staging, **Stage

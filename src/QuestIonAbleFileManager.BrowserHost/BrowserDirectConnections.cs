@@ -66,7 +66,7 @@ public sealed partial class BrowserDirectConnections
             {
                 entry=_entry is { } found && found.Id==request.ConnectionId ? found : throw new BrowserRequestException("direct_connection_not_found",404);
                 Expire(entry);
-                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action=="kiosk.direct.tags-export";
+                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list";
                 if(requiresLive && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
                 if(entry.Session is null || requiresLive && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
@@ -86,6 +86,7 @@ public sealed partial class BrowserDirectConnections
         try
         {
             if(request.Action=="kiosk.direct.tags-export")return await ExecuteTagExportAsync(operation,stageTagExport,cancellation).ConfigureAwait(false);
+            if(request.Action=="kiosk.direct.staging-list")return await ExecuteStagingListAsync(operation,cancellation).ConfigureAwait(false);
             if(request.IsCommand)return await ExecuteCommandAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.connect-usb")
             {

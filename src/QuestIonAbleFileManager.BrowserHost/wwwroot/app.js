@@ -11,11 +11,12 @@ import {createProfileView} from './profile-view.js';
 import {createFleetStatusView} from './fleet-status-view.js';
 import {createDiagnosticsView} from './diagnostics-view.js';
 import {createDirectTagsView} from './direct-tags-view.js';
+import {createDirectStagingView} from './direct-staging-view.js';
 
 const byId = id => document.getElementById(id);
 const host = { token: '', session: '', selected: '', devices: [], actions: new Set(), busy: false, original: null,
   artifact:null, artifactSession:'', artifactStaging:{supported:false}, retainedCapability:{supported:false}, profileCapability:{supported:false}, fleetStatusCapability:{supported:false}, stagingGeneration:0 };
-let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, directCommandView, profileView, fleetStatusView, diagnosticsView, directTagsView;
+let retainedView, transferView, apkReadView, filePushView, kioskView, directConnectionView, directCommandView, profileView, fleetStatusView, diagnosticsView, directTagsView, directStagingView;
 const mutations = new Set(['wifi.enable', 'wifi.connect', 'wifi.disconnect', 'device.keep-awake', 'device.normal', 'device.performance', 'device.performance-clear']);
 const originalKey = 'qfm-browser-original-v1';
 const localHostMode = location.protocol === 'http:' && (location.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(location.hostname));
@@ -73,6 +74,7 @@ function controls() {
   fleetStatusView?.update();
   diagnosticsView?.update();
   directTagsView?.update();
+  directStagingView?.update();
 }
 function clearStatus() { for (const id of ['power-value','display-value','proximity-value','hold-value']) text(id, 'Unknown'); text('status-age',''); byId('file-entries').replaceChildren(); byId('packages').replaceChildren();byId('package-name').value='';byId('actor-pid').value='';text('files-state','Select a ready headset to browse its shell-accessible storage.');text('permissions-state','Permission facts are read-only; they do not grant access or decide app readiness.'); }
 function applyStatus(value) {
@@ -220,6 +222,7 @@ directCommandView=createDirectCommandView({api,getContext:()=>({sessionId:host.s
 profileView=createProfileView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.profileCapability,authGeneration:connectionGeneration,selected:readySelected() || null,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || diagnosticsView?.hasUnresolved())}),setBusy:value=>{host.busy=value;controls();},showResult});
 fleetStatusView=createFleetStatusView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),busy:host.busy,actions:host.actions,capability:host.fleetStatusCapability,authGeneration:connectionGeneration}),setBusy:value=>{host.busy=value;controls();},showResult});
 diagnosticsView=createDiagnosticsView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),authGeneration:connectionGeneration,busy:host.busy,selected:readySelected() || null,capability:host.retainedCapability,artifactStaging:host.artifactStaging,stagingGeneration:host.stagingGeneration,externalUnresolved:Boolean(host.original || retainedView?.hasUnresolved() || filePushView?.hasUnresolved() || kioskView?.hasUnresolved() || directConnectionView?.hasUnresolved() || directCommandView?.hasUnresolved() || profileView?.hasUnresolved())}),getArtifact:()=>host.artifactSession===host.session && host.artifact ? {...host.artifact} : null,setBusy:value=>{host.busy=value;controls();},showResult,downloadVerified:saveOwnedArtifact});
+directStagingView=createDirectStagingView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),authGeneration:connectionGeneration,busy:host.busy,actions:host.actions,connection:directConnectionView?.getConnectionReference()}),setBusy:value=>{host.busy=value;controls();},showResult});
 directTagsView=createDirectTagsView({api,getContext:()=>({sessionId:host.session,connected:localHostMode && Boolean(host.token && host.session),authGeneration:connectionGeneration,busy:host.busy,actions:host.actions,connection:directConnectionView?.getConnectionReference(),artifactStaging:host.artifactStaging,stagingGeneration:host.stagingGeneration}),setBusy:value=>{host.busy=value;controls();},showResult,downloadVerified:saveOwnedArtifact});
 if (!localHostMode) text('host-status','Use the local QFM host page. Never enter a host token on a public page.');
 controls();

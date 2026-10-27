@@ -65,7 +65,7 @@ public sealed partial class BrowserCommands
 public static class BrowserDirectCommands
 {
     public static readonly IReadOnlyList<string> Actions = ["kiosk.direct.connect-usb", "kiosk.direct.status", "kiosk.direct.close",
-        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export"];
+        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export", "kiosk.direct.staging-list"];
     public static bool IsDirectAction(ReadOnlyMemory<byte> body)
     {
         if (body.Length is 0 or > BrowserCommands.MaximumRequestBytes) return false;
@@ -100,7 +100,7 @@ public static class BrowserDirectCommands
             var id = Id(Text(root, "requestId"));
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
-            if (action == "kiosk.direct.tags-export")
+            if (action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list")
                 return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")));
             if (action is "kiosk.direct.invoke" or "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel")
             {
