@@ -90,6 +90,12 @@ lost replies across reload and explicit cached-result recovery while an
 unrelated original remains blocked. These are synthetic preference receipts;
 they do not change host ADB transports, reboot a headset or approve wearer prompts.
 
+Accessibility and passthrough fixtures validate literal boolean/style/LUT
+readback, exact desired values and the complete original Core receipt binding.
+The full-app cases preserve a pending original until an explicit typed-result
+read confirms it, with one Invoke and no replay. Reported flags and mode are
+distinct from real visual output, camera/OS permission or wearer approval.
+
 Profile fixtures use synthetic intercepted responses and injected backend stores.
 They cover manual/private-file byte input, fixed headers and reviewed ID,
 private-field/buffer clearing, explicit replacement/revoke, exact rollback
