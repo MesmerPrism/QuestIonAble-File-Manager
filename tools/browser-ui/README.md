@@ -96,6 +96,11 @@ The full-app cases preserve a pending original until an explicit typed-result
 read confirms it, with one Invoke and no replay. Reported flags and mode are
 distinct from real visual output, camera/OS permission or wearer approval.
 
+The separate Wi-Fi ADB request/disable fixtures require the literal reported
+enabled flag and exact desired value, preserving pending originals until an
+explicit bound result read. The prior fifteen projection shapes stay unchanged.
+These fixtures never set up, discover or connect a real host/device transport.
+
 Profile fixtures use synthetic intercepted responses and injected backend stores.
 They cover manual/private-file byte input, fixed headers and reviewed ID,
 private-field/buffer clearing, explicit replacement/revoke, exact rollback

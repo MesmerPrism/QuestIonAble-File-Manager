@@ -436,7 +436,9 @@ const directControlCases=[
   ['enable-accessibility',{accessibilityEnabled:true},{accessibilityEnabled:false}],
   ['disable-accessibility',{accessibilityEnabled:false},{accessibilityEnabled:true}],
   ['passthrough-natural',{systemPassthroughEnabled:true,passthroughStyle:'natural'},{systemPassthroughEnabled:false,passthroughStyle:'natural'}],
-  ['passthrough-contour',{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:true},{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:false}]
+  ['passthrough-contour',{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:true},{systemPassthroughEnabled:true,passthroughStyle:'contour-lut',passthroughLutApplied:false}],
+  ['request-wifi-adb',{wifiAdbEnabled:true},{wifiAdbEnabled:false}],
+  ['disable-wifi-adb',{wifiAdbEnabled:false},{wifiAdbEnabled:true}]
 ];
 for(const [command,desired,contrary] of directControlCases)test('real app Direct control preserves pending then reads its original typed result: '+command,async t=>{
   let connection,original;
@@ -454,8 +456,9 @@ for(const [command,desired,contrary] of directControlCases)test('real app Direct
       typedResult:{schema:'rusty.kiosk.cli_result.v1',requestId:logicalRequestId,command,accepted:true,completed:true,controlsOpen:null,selectedKey:null,selectedPackage:null,selectedInstalled:false,selectedLaunchable:false,selectedLaunchRequirement:null,pendingRequirementLaunch:null,guardArmed:false,setupHelperInstalled:false,setupHelperReady:false,selectedEntry:null,...(recovery?desired:contrary)}}};
     retained.set(body.requestId,value);return route.fulfill({json:value});
   }});
-  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(-4).map(option=>option.value)),directControlCases.map(([command])=>command));
+  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.slice(11).map(option=>option.value)),directControlCases.map(([command])=>command));
   await adoptDirectForTags(f);await f.page.locator('#direct-command-command').selectOption(command);
+  if(command==='disable-wifi-adb')assert.match(await f.page.locator('#direct-command-boundary').textContent(),/may immediately close an existing wireless ADB connection/);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.settled();
   const pending=await f.page.evaluate(()=>JSON.parse(sessionStorage.getItem('qfm-browser-direct-command-v1')));
   assert.equal(pending.original.requestId,original.requestId);assert.equal(pending.original.command,command);
