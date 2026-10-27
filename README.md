@@ -36,6 +36,10 @@ explicit original-result recovery. Guard-mode acknowledgement does not prove
 app foreground or readiness, and cancellation never implies rollback.
 Its credential stays on the host; expiry or status never reconciles a lost effect
 reply, and a restarted host cannot restore the old connection.
+A private tag-backup card reads the existing signed, validated document through
+that connection and prepares a separate verified download copy. It preserves
+the exact bounded bytes and never imports tags or reloads Kiosk. A prepared copy
+can be saved after the source connection closes under the same host/authentication.
 The local Windows connectivity profile card uses the existing current-user
 Credential Manager owner for explicit list/status, private input, replacement and
 revocation. It tests stored validity, not connectivity, and keeps private documents

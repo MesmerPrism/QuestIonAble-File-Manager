@@ -670,6 +670,48 @@ cleanup of this same connection while its command is unresolved. Closing erases
 the key and may end result recovery; listener cleanup never acknowledges a
 command. Expiry and host restart cannot reconstruct the old credential.
 
+## Private Kiosk tag backup
+
+With an adopted USB Direct connection and protected Windows staging, **Stage
+private tag backup** reads Kiosk's signed tag document through the existing Core
+export. It validates the v1/v2 schema and 256 KiB limit, preserves exact UTF-8
+bytes, then stages `app-tags.json` with independently checked size/SHA-256. It
+never imports tags, invokes Reload or installs an app. The document can contain
+private app labels and tags; keep it private.
+
+The existing execute route accepts exactly
+`{requestId,action:"kiosk.direct.tags-export",connectionId}`. There is no caller
+path, output name, raw document, credential or confirmation field. The same
+owner, operation gate and immutable request ledger apply. A fresh signed status
+binds the adopted session/generation; the read and output lease stay owned until
+the protected store acknowledges the exact copy. The session omits this action
+on hosts without configured staging support. Use the existing typed Direct tag export
+or Windows companion as the alternative.
+
+A completed response has `result:null`, `mutation:null` and a bounded
+`kioskDirectTags` projection: original connection/connect/USB IDs, serial,
+channel, schema, size/SHA, artifact receipt and actual Core export receipt.
+Raw tags, native paths, credentials and full provider status never appear in
+that projection. Completion acknowledges the captured copy, not current tags,
+foreground, application or OpenXR readiness.
+
+Loading, authentication, connection changes and expiry send no export. A lost
+reply may leave bounded transient bytes. **Read cached export result** looks up
+only that original browser request/session and scope; it never performs another
+provider read. These read references stay in tab memory and disappear on reload.
+They are separate from every effect/UNKNOWN original and cannot reconcile one.
+A fresh export always requires another explicit click.
+
+Save, checksum and Remove address the exact prepared copy. Under the same host
+and authentication, the historical copy remains usable after its source
+connection closes or expires; its original scope stays visible. Save uses the
+existing streamed verifier or bounded buffered handoff, retaining their different
+final-save claims. Remove and the same host's staging Clear affect owned
+transient bytes only. Clear invalidates cached copy reuse; export again explicitly
+if needed. No document, credential or API result enters browser storage or the
+offline cache. Host restart invalidates the transient receipt. The existing
+Core/CLI/WPF file-output API remains available.
+
 ## Optional Windows Fleet release status
 
 The **Get Fleet** card performs only the typed `fleet status` read.
