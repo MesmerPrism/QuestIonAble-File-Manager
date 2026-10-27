@@ -31,8 +31,10 @@ card reads installation facts, explicitly opens its catalog, and selects a revie
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 An explicit USB Direct card adopts one short-lived Kiosk operator connection,
 reads signed status and closes its opaque handle with separate listener cleanup.
-Its current-selection command card provides nine typed Kiosk actions and
-explicit original-result recovery. Guard-mode acknowledgement does not prove
+Its Direct controls card provides eleven typed Kiosk actions and
+explicit original-result recovery, including the stored preference to ask about
+Wi-Fi ADB after restart. That preference does not establish current connectivity
+or approval of a protected prompt. Guard-mode acknowledgement does not prove
 app foreground or readiness, and cancellation never implies rollback.
 Its credential stays on the host; expiry or status never reconciles a lost effect
 reply, and a restarted host cannot restore the old connection.

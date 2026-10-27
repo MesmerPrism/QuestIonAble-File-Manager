@@ -83,6 +83,13 @@ opaque scope, expiry/explicit close, pre-existing listener preservation, origina
 UNKNOWN custody, no replay, private-field exclusion and cross-view blocking.
 They do not mint a real credential or enable a listener on a headset.
 
+Direct-command fixtures also cover the two after-restart Wi-Fi ADB preference
+commands: literal null input, exact boolean readback and preservation of an
+original when proof is malformed, contrary or pending. Full-app fixtures check
+lost replies across reload and explicit cached-result recovery while an
+unrelated original remains blocked. These are synthetic preference receipts;
+they do not change host ADB transports, reboot a headset or approve wearer prompts.
+
 Profile fixtures use synthetic intercepted responses and injected backend stores.
 They cover manual/private-file byte input, fixed headers and reviewed ID,
 private-field/buffer clearing, explicit replacement/revoke, exact rollback
