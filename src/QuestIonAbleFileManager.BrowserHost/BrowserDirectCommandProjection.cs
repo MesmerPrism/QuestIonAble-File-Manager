@@ -1,4 +1,5 @@
 using QuestIonAbleFileManager.Core;
+using System.Text.Json.Serialization;
 
 namespace QuestIonAbleFileManager.BrowserHost;
 
@@ -8,7 +9,11 @@ public sealed record BrowserDirectSelectedEntry(string Key,string LaunchRequirem
 public sealed record BrowserDirectTypedResult(string Schema,string RequestId,string Command,bool Accepted,bool Completed,
     bool? ControlsOpen,string? SelectedKey,string? SelectedPackage,bool SelectedInstalled,bool SelectedLaunchable,
     string? SelectedLaunchRequirement,bool? PendingRequirementLaunch,bool GuardArmed,bool SetupHelperInstalled,bool SetupHelperReady,
-    BrowserDirectSelectedEntry? SelectedEntry);
+    BrowserDirectSelectedEntry? SelectedEntry)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? RequestWifiAdbAfterBoot { get; init; }
+}
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
     BrowserDirectCoreReceipt? CoreReceipt=null,BrowserDirectLifecycle? Lifecycle=null,BrowserDirectTypedResult? TypedResult=null,bool CancellationAcknowledged=false);
@@ -78,6 +83,9 @@ internal static class BrowserDirectCommandProjection
         var selected=key is null?[]:state.Entries.Where(entry=>entry.Key==key).Take(2).ToArray();
         var entry=selected.Length==1?new BrowserDirectSelectedEntry(key!,selected[0].LaunchRequirement.ToWireName()):null;
         return new(typed.Schema,typed.RequestId,typed.Command.ToWireName(),typed.Accepted,typed.Completed,state.ControlsOpen,key,package,
-            state.SelectedInstalled,state.SelectedLaunchable,requirement,state.PendingRequirementLaunch,state.GuardArmed,state.SetupHelperInstalled,state.SetupHelperReady,entry);
+            state.SelectedInstalled,state.SelectedLaunchable,requirement,state.PendingRequirementLaunch,state.GuardArmed,state.SetupHelperInstalled,state.SetupHelperReady,entry)
+        {
+            RequestWifiAdbAfterBoot=typed.Command is RustyKioskCommand.EnableWifiAfterBoot or RustyKioskCommand.DisableWifiAfterBoot ? state.RequestWifiAdbAfterBoot : null
+        };
     }
 }

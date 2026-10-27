@@ -178,6 +178,8 @@ public static class BrowserDirectCommands
         "show-controls" => RustyKioskCommand.ShowControls,
         "show-apps" => RustyKioskCommand.ShowApps,
         "reload" => RustyKioskCommand.Reload,
+        "enable-wifi-adb-after-boot" => RustyKioskCommand.EnableWifiAfterBoot,
+        "disable-wifi-adb-after-boot" => RustyKioskCommand.DisableWifiAfterBoot,
         "check-setup-helper" => RustyKioskCommand.CheckSetupHelper,
         "set-launch-requirement" => RustyKioskCommand.SetLaunchRequirement,
         "cancel-pending-launch" => RustyKioskCommand.CancelPendingLaunch,
