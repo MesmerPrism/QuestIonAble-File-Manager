@@ -217,6 +217,18 @@
       <div class="actions"><button id="direct-command-cancellation-status" type="button" disabled>Read original cancellation acknowledgement</button><button id="direct-command-save-reference" type="button" disabled>Save nonsecret command references</button></div>
       <p class="hint">Reload, reconnect and expiry send nothing. Lifecycle status and listener cleanup never acknowledge a typed original or an uncertain cancellation call. Only its actual bound cached acknowledgement can recover that cancellation. Explicit close may end native result access while preserving these references.</p>
     </section>
+<section class="panel" id="direct-install-view" aria-labelledby="direct-install-heading">
+  <h2 id="direct-install-heading">Attended APK install through Direct</h2>
+  <p>Inspect one base APK in Local APK, then review its expected identity and the adopted Direct connection. The headset may require a wearer approval.</p>
+  <p id="direct-install-capability" class="hint">Connect, stage and inspect one base APK to review an install.</p>
+  <dl class="apk-facts"><div><dt>Local source</dt><dd id="direct-install-source">No inspected base APK</dd></div><div><dt>Artifact</dt><dd id="direct-install-artifact"></dd></div><div><dt>Source size</dt><dd id="direct-install-size"></dd></div><div><dt>Source SHA-256</dt><dd id="direct-install-sha"></dd></div><div><dt>Expected package</dt><dd id="direct-install-package"></dd></div><div><dt>Expected version code</dt><dd id="direct-install-version"></dd></div><div><dt>Expected signer SHA-256</dt><dd id="direct-install-signer"></dd></div><div><dt>Connection</dt><dd id="direct-install-target">No adopted connection</dd></div></dl>
+  <label class="check"><input id="direct-install-confirm" type="checkbox" disabled> I approve installing or replacing this exact inspected APK on this connection. I will handle any required approval on the headset.</label>
+  <div class="actions"><button id="direct-install-send" type="button" disabled>Install inspected APK</button><button id="direct-install-status" type="button" disabled>Read install status</button><button id="direct-install-original" type="button" disabled>Read original install result</button></div>
+  <p id="direct-install-state" role="status" aria-live="polite">No Direct install requested.</p>
+  <div id="direct-install-facts" hidden><dl class="apk-facts"><div><dt>Original request</dt><dd id="direct-install-request"></dd></div><div><dt>Logical install ID</dt><dd id="direct-install-logical"></dd></div><div><dt>Original scope</dt><dd id="direct-install-original-source"></dd></div><div><dt>Install result</dt><dd id="direct-install-result"></dd></div></dl></div>
+  <p class="hint">Status and cached-result reads do not upload or install again. Pending, missing or lost replies keep the original unresolved. Closing Direct does not resolve an install or a permission prompt. Android-reported success does not verify current installed bytes, signer or app readiness. Failure does not prove rollback or resource cleanup. If credentials are lost, preserve the logical install ID and use the typed owner route.</p>
+</section>
+
 <section class="panel" id="direct-upload-view" aria-labelledby="direct-upload-heading">
   <h2 id="direct-upload-heading">Upload to Kiosk Direct staging</h2>
   <p>Transfer the file already staged in Local APK to the adopted Direct connection. This does not install it.</p>

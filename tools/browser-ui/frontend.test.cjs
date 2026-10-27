@@ -80,7 +80,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js','direct-upload-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js','direct-staging-view.js','direct-upload-view.js','direct-install-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -656,4 +656,60 @@ test('real app cleanup joins every unresolved Direct source before permitting Cl
     assert.equal(f.calls.some(c=>c.body?.action==='kiosk.direct.close'),false);
     assert.ok(await f.page.evaluate(key=>sessionStorage.getItem(key),directUploadKey));
   });
+});
+
+const directInstallAction='kiosk.direct.install',directInstallStatus='kiosk.direct.install-status',directInstallKey='qfm-browser-direct-install-v1';
+function directInstallSession(){return {...directUploadSession(),actions:[...directUploadSession().actions,'apk.inspect',directInstallAction,directInstallStatus]};}
+function directInstallReply(body,connection,original,installed=false){
+  const first=body.action===directInstallAction,prior=first?null:original.kioskDirectInstall,originalRequestId=first?body.requestId:prior.originalRequestId,installRequestId='install_'+originalRequestId.replaceAll('-','');
+  return {requestId:body.requestId,action:body.action,state:installed?'completed':'pending',result:null,mutation:null,privatePath:'private-install-sentinel',kioskDirectInstall:{connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,operation:first?'install':'installStatus',originalRequestId,installRequestId,inspectionRequestId:first?body.inspectionRequestId:prior.inspectionRequestId,artifactId:first?body.artifactId:prior.artifactId,sha256:first?body.sha256:prior.sha256,sizeBytes:first?body.sizeBytes:prior.sizeBytes,packageName:'example.fixture.app',versionCode:1,signerSha256:'a'.repeat(64),originalEffect:installed?'installed':'pendingWearerAction',reconcilesOriginal:installed,coreReceipt:{actionId:'action_'+'a'.repeat(32),action:first?'install':'installStatus',requestId:installRequestId,stage:installed?'confirmed':'pendingWearerAction'},receipt:{requestId:installRequestId,state:installed?'installed':'pending-wearer-confirmation',completed:installed,sessionId:7,packageName:installed?'example.fixture.app':null}}};
+}
+async function prepareDirectInstall(f){
+  assert.equal(await f.page.locator('#direct-install-send').count(),1);
+  await f.connect();await f.selectA();
+  await f.page.locator('#apk-upload').setInputFiles({name:'fixture.apk',mimeType:'application/octet-stream',buffer:Buffer.from([1,2,3])});await f.page.locator('#stage-apk').click();await f.settled();
+  assert.equal(await f.page.locator('#direct-install-send').isDisabled(),true);
+  await f.page.locator('#inspect-apk').click();await f.settled();
+  await f.page.locator('#direct-connect-confirm').check();await f.page.locator('#direct-connect').click();await f.settled();
+  await f.page.locator('#direct-install-confirm').check();
+}
+test('real app attended Direct install remains pending then status resolves without source bytes or another install',async t=>{
+  let connection;
+  const f=await fixture(t,{session:route=>route.fulfill({json:directInstallSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directInstallAction||body.action===directInstallStatus?directInstallReply(body,connection,retained.get(body.originalRequestId),body.action===directInstallStatus):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return route.fulfill({json:value});
+  }});
+  await prepareDirectInstall(f);await f.page.locator('#direct-install-send').click();await f.settled();
+  assert.ok(await f.page.evaluate(key=>sessionStorage.getItem(key),directInstallKey));
+  await f.page.locator('#power-confirm').check();assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  await f.page.locator('#clear-artifacts').click();await f.settled();
+  assert.equal(await f.page.locator('#direct-install-status').isEnabled(),true);
+  await f.page.locator('#direct-install-status').click();await f.page.waitForFunction(key=>sessionStorage.getItem(key)===null,directInstallKey);await f.settled();
+  assert.equal(f.calls.filter(c=>c.body?.action===directInstallAction).length,1);assert.equal(f.calls.filter(c=>c.body?.action===directInstallStatus).length,1);assert.equal(f.calls.filter(c=>c.body?.action===directUploadAction).length,0);
+  assert.equal((await f.page.locator('#result-json').textContent()).includes('private-install-sentinel'),false);assert.equal(await f.outstanding(),null);
+});
+test('real app lost Direct install can close exact source then recover its terminal cached receipt',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directInstallSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directInstallAction?directInstallReply(body,connection,null,true):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return body.action===directInstallAction?route.abort('failed'):route.fulfill({json:value});
+  }});
+  await prepareDirectInstall(f);await f.page.locator('#direct-install-send').click();await f.settled();
+  const original=await f.page.evaluate(key=>sessionStorage.getItem(key),directInstallKey);assert.ok(original);
+  await f.page.locator('#direct-close-confirm').check();await f.page.locator('#direct-close').click();await f.settled();assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),directInstallKey),original);
+  assert.equal(await f.page.locator('#direct-install-status').isDisabled(),true);await f.page.locator('#direct-install-original').click();await f.page.waitForFunction(key=>sessionStorage.getItem(key)===null,directInstallKey);
+  assert.equal(f.calls.filter(c=>c.body?.action===directInstallAction).length,1);assert.equal(f.calls.some(c=>c.body?.action===directInstallStatus),false);assert.equal(await f.outstanding(),null);
+});
+test('real app restored install and upload from different sources cannot use the Close exception',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directInstallSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directInstallAction?directInstallReply(body,connection,null,true):directTagsConnectionReply(body,connection);if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;retained.set(body.requestId,value);return body.action===directInstallAction?route.abort('failed'):route.fulfill({json:value});
+  }});
+  await prepareDirectInstall(f);await f.page.locator('#direct-install-send').click();await f.settled();
+  const source=JSON.parse(await f.page.evaluate(key=>sessionStorage.getItem(key),directInstallKey)),upload={requestId:'c1234567-1234-4234-8234-123456789abc',action:directUploadAction,sessionId:'fixture-session',sourceConnectionId:'f1234567-1234-4234-8234-123456789abc',connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,channel:'stable',artifactId:source.artifactId,sha256:source.sha256,sizeBytes:source.sizeBytes,stagedName:'old.apk'};
+  await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:directUploadKey,value:upload});await f.page.reload();await f.connect();
+  assert.equal(await f.page.locator('#direct-close-confirm').isDisabled(),true);assert.equal(await f.page.locator('#direct-close').isDisabled(),true);
+  assert.equal(f.calls.filter(c=>c.body?.action===directInstallAction).length,1);assert.equal(f.calls.some(c=>c.body?.action==='kiosk.direct.close'),false);
 });

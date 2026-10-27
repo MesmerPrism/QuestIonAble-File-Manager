@@ -696,7 +696,7 @@ Malformed input fails with a fixed error rather than appearing empty.
 without querying the provider again. It remains a historical snapshot after
 Direct close or expiry within its original host session. References stay in
 tab memory; reconnect does not automatically refresh, replay or reconcile any
-unrelated uncertain operation. Download, delete and install remain
+unrelated uncertain operation. Download, delete and split install remain
 separate CLI workflows. Listing metadata grants none of those operations.
 
 ## Upload to Direct staging
@@ -735,6 +735,54 @@ metadata-only staging inventory cannot establish what happened to the write.
 Close may clean up the same source connection while preserving its unresolved
 upload reference; it cannot bypass an unrelated uncertain operation.
 No remote delete or automatic partial-upload cleanup is added here.
+
+## Attended single-APK Direct installation
+
+Stage and inspect one base APK in Local APK, adopt a Direct connection, then
+review the expected package, version, signer, byte count and target in the
+install card. Explicit approval covers installation/replacement of that APK;
+required permission and Android installer prompts remain wearer decisions.
+The host checks fresh signed installer permission immediately before starting.
+It does not open settings, approve prompts, silently install through ADB or
+launch the resulting app. Supported Windows protected staging and configured
+Android Build Tools are required. Split APKs and unsafe version values use the
+existing typed CLI alternative.
+
+`kiosk.direct.install` accepts exactly `requestId`, `action`, `connectionId`,
+`artifactId`, `sha256`, `sizeBytes`, `inspectionRequestId` and `confirmed:true`.
+Admission joins the existing completed `apk.inspect` ledger entry to the same
+immutable source. The connector leases those bytes through actual Core
+completion and terminal ledger publication. Core's existing install command
+performs its own upload and commits the exact name/size/SHA-256 set; a separate
+staging-upload receipt is not a prerequisite. The logical install ID is fixed
+as `install_` plus the browser request UUID without hyphens before any upload.
+
+The optional `kioskDirectInstall` projection retains that original ID, expected
+inspection identity and source/connection bindings. Its sanitized Core and
+installer receipts omit private paths and messages. `installed` means Android
+reported PackageInstaller success for that committed input. A reported package
+must match the expected package when supplied; null remains “not supplied.”
+This is not a fresh installed-byte/version/signer observation or readiness
+claim. A bound terminal `failed` resolves only that install outcome; it does
+not assert rollback, removed staged files or complete resource cleanup.
+
+`kiosk.direct.install-status` accepts only a new `requestId`, `action`, the
+same `connectionId` and `originalRequestId`. It derives the original logical
+ID and expected identity from the host ledger, with no artifact acquisition,
+upload, install or source-file requirement. Reads are explicit. Pending
+Android/wearer/cleanup states retain the original and block new mutations.
+Synthetic missing-receipt status cannot establish no earlier effect.
+Permission granted after a race-produced `needs-wearer-permission` receipt
+does not resume that used ID; preserve it for the typed owner route rather
+than resubmitting automatically.
+
+Cached original-result GETs never contact the provider and remain available
+after Close within the same host session. Closing only cleans up the Direct
+connection; it neither cancels an installer prompt nor resolves an unknown
+install. Lost credentials or a restarted host cannot be reconstructed from
+saved IDs. Preserve the nonsecret original reference for the typed owner route.
+The browser adds no cancel, forget, automatic poll/retry, uninstall or launch
+action here.
 
 ## Private Kiosk tag backup
 
