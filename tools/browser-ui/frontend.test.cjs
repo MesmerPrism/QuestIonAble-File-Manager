@@ -421,7 +421,8 @@ for(const [command,desired] of [['enable-wifi-adb-after-boot',true],['disable-wi
   const other={requestId:'f1234567-1234-4234-8234-123456789abc',sessionId:'fixture-session',action:'device.keep-awake',serial:'FIXTURE-A'};
   await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:originalKey,value:other});
   const callsBeforeReload=f.calls.length;await f.page.reload();assert.equal(f.calls.length,callsBeforeReload);await f.connect();
-  await f.page.locator('#direct-command-original-status').click();await f.settled();
+  await f.page.locator('#direct-command-original-status').click();
+  await f.page.waitForFunction(key=>sessionStorage.getItem(key)===null,commandKey);
   assert.equal(await f.page.evaluate(key=>sessionStorage.getItem(key),commandKey),null);
   assert.deepEqual(await f.outstanding(),other);assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
   assert.match(await f.page.locator('#direct-command-state').textContent(),/request-after-restart preference observed/i);
