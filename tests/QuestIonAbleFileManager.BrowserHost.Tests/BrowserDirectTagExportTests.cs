@@ -137,6 +137,9 @@ public sealed class BrowserDirectTagExportTests
         await using var fixture = await Fixture.Create();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseClose = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (shutdown) fixture.Native.Base.BeforeClose = async () => { closeEntered.SetResult(); await releaseClose.Task; };
         var held = fixture.Store.CaptureAsync("held.bin", async (_, _) => { entered.SetResult(); await release.Task; });
         await entered.Task;
         try
@@ -149,10 +152,19 @@ public sealed class BrowserDirectTagExportTests
             var close = shutdown ? fixture.Owner.ShutdownAsync() : null;
             if (close is not null) { Assert.False(close.IsCompleted); Assert.Equal(0, fixture.Native.Base.Closes); }
             release.SetResult(); await held; var result = await pending;
-            Assert.Equal(shutdown ? "failed" : "completed", result.State); Assert.False(fixture.Native.LastStream.CanRead); Assert.False(fixture.Gate.IsBusy);
-            if (close is not null) { Assert.True(await close); Assert.Equal(1, fixture.Native.Base.Closes); }
+            Assert.Equal(shutdown ? "failed" : "completed", result.State);
+            Assert.False(fixture.Native.LastStream.CanRead);
+            if (close is not null)
+            {
+                await closeEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                // The tag lease is already closed, but shutdown now legitimately
+                // owns the same gate until its cleanup acknowledgement settles.
+                Assert.True(fixture.Gate.IsBusy); Assert.False(close.IsCompleted); Assert.Equal(1, fixture.Native.Base.Closes);
+                releaseClose.SetResult(); Assert.True(await close);
+            }
+            Assert.False(fixture.Gate.IsBusy);
         }
-        finally { release.TrySetResult(); await held; }
+        finally { release.TrySetResult(); releaseClose.TrySetResult(); await held; }
     }
 
     [Fact]
