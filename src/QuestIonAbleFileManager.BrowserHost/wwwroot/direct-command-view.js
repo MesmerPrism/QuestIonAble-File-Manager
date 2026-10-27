@@ -1,7 +1,10 @@
 const storageKey = 'qfm-browser-direct-command-v1';
 const invokeAction = 'kiosk.direct.invoke', cancelAction = 'kiosk.direct.request-cancel';
-const commands = new Set(['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload','enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
+const commands = new Set(['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload','enable-wifi-adb-after-boot','disable-wifi-adb-after-boot','enable-accessibility','disable-accessibility','passthrough-natural','passthrough-contour']);
 const bootPreferences = new Set(['enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
+const accessibilityCommands = new Set(['enable-accessibility','disable-accessibility']);
+const passthroughCommands = new Set(['passthrough-natural','passthrough-contour']);
+const passthroughStyles = new Set(['natural','contour-lut']);
 const requirements = new Set(['any','wifi-on','wifi-off']);
 const stages = new Set(['sent','pending','confirmed','failed','timedOut','pendingWearerAction','rejected','expired','cancelled','cleanupUnknown']);
 const states = new Set(['pending','pending_wearer_action','confirmed','rejected','expired','cancelled','unknown']);
@@ -30,6 +33,9 @@ function cancelReference(value) {
 }
 function typedResult(value,id,command) {
   if (!value || value.schema !== 'rusty.kiosk.cli_result.v1' || value.requestId !== id || value.command !== command || typeof value.accepted !== 'boolean' || typeof value.completed !== 'boolean' || (bootPreferences.has(command) && typeof value.requestWifiAdbAfterBoot !== 'boolean') ||
+      (accessibilityCommands.has(command) && typeof value.accessibilityEnabled !== 'boolean') ||
+      (passthroughCommands.has(command) && (typeof value.systemPassthroughEnabled !== 'boolean' || !passthroughStyles.has(value.passthroughStyle))) ||
+      (command === 'passthrough-contour' && typeof value.passthroughLutApplied !== 'boolean') ||
       !boolOrNull(value.controlsOpen) || !boolOrNull(value.pendingRequirementLaunch) || (value.selectedKey !== null && !keyValid(value.selectedKey)) ||
       (value.selectedPackage !== null && !packageValid(value.selectedPackage)) || (value.selectedLaunchRequirement !== null && !requirements.has(value.selectedLaunchRequirement)) ||
       !['selectedInstalled','selectedLaunchable','guardArmed','setupHelperInstalled','setupHelperReady'].every(field => typeof value[field] === 'boolean')) throw new Error('typed_result_invalid');
@@ -37,7 +43,7 @@ function typedResult(value,id,command) {
   if (row !== null && (!row || !keyValid(row.key) || !requirements.has(row.launchRequirement) || row.key !== value.selectedKey)) throw new Error('typed_result_invalid');
   return {schema:value.schema,requestId:id,command,accepted:value.accepted,completed:value.completed,controlsOpen:value.controlsOpen,selectedKey:value.selectedKey,selectedPackage:value.selectedPackage,
     selectedInstalled:value.selectedInstalled,selectedLaunchable:value.selectedLaunchable,selectedLaunchRequirement:value.selectedLaunchRequirement,pendingRequirementLaunch:value.pendingRequirementLaunch,
-    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement}};
+    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),...(accessibilityCommands.has(command) ? {accessibilityEnabled:value.accessibilityEnabled} : {}),...(passthroughCommands.has(command) ? {systemPassthroughEnabled:value.systemPassthroughEnabled,passthroughStyle:value.passthroughStyle} : {}),...(command === 'passthrough-contour' ? {passthroughLutApplied:value.passthroughLutApplied} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement}};
 }
 function project(value,ref,requestId,action) {
   const d = value?.kioskDirectCommand, operation = ({[invokeAction]:'invoke','kiosk.direct.request-status':'requestStatus','kiosk.direct.request-result':'requestResult',[cancelAction]:'requestCancel'})[action];
@@ -68,6 +74,10 @@ function confirms(d) {
   const t = d.typedResult;
   if (!t?.accepted || !t.completed || d.originalEffect !== 'confirmed' || !d.reconcilesOriginal || d.coreReceipt?.stage !== 'confirmed') return false;
   switch (d.command) {
+    case 'enable-accessibility': return t.accessibilityEnabled === true;
+    case 'disable-accessibility': return t.accessibilityEnabled === false;
+    case 'passthrough-natural': return t.systemPassthroughEnabled === true && t.passthroughStyle === 'natural';
+    case 'passthrough-contour': return t.systemPassthroughEnabled === true && t.passthroughStyle === 'contour-lut' && t.passthroughLutApplied === true;
     case 'enable-wifi-adb-after-boot': return t.requestWifiAdbAfterBoot === true;
     case 'disable-wifi-adb-after-boot': return t.requestWifiAdbAfterBoot === false;
     case 'show-controls': return t.controlsOpen === true;
@@ -143,7 +153,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     element('save-reference').disabled = !original && !cancellation;
     const displayed = c || original;
     text('scope',displayed ? `${displayed.serial} · ${displayed.productChannel} · ${displayed.connectionId}` : 'No adopted connection. Use the connection card first.');
-    text('boundary',bootPreferences.has(element('command').value) ? 'This changes only the request-after-restart preference. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.' : c && !available ? 'Connection expired. No new native request is available; cached original GET and explicit connection cleanup remain separate.' : 'Requests affect Kiosk’s current selection, which another wearer or client can change. Guard acknowledgement does not establish a named app launch, foreground state, or application/OpenXR readiness. No atomic catalog-row launch is offered.');
+    text('boundary',accessibilityCommands.has(element('command').value) ? 'This observes only Kiosk’s reported accessibility-enabled flag. Protected settings approval and OS permission remain wearer-owned; foreground and app readiness remain unverified.' : passthroughCommands.has(element('command').value) ? 'This observes only Kiosk-reported passthrough mode and LUT state. Visual camera output, protected approval, foreground and app readiness remain unverified.' : bootPreferences.has(element('command').value) ? 'This changes only the request-after-restart preference. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.' : c && !available ? 'Connection expired. No new native request is available; cached original GET and explicit connection cleanup remain separate.' : 'Requests affect Kiosk’s current selection, which another wearer or client can change. Guard acknowledgement does not establish a named app launch, foreground state, or application/OpenXR readiness. No atomic catalog-row launch is offered.');
     text('state',!storageAvailable ? 'Reference storage unavailable; new Invoke and cancel are blocked.' : damaged ? 'Unknown: invalid saved command references. Preserve owner evidence; no automatic recovery.' : message + (hasUnresolved() ? ' Preserve unresolved originals; new mutations stay blocked.' : ''));
     text('facts',facts ? `Observed selected key: ${facts.selectedKey ?? 'unknown'}; package: ${facts.selectedPackage ?? 'unknown'}; controls open: ${facts.controlsOpen ?? 'unknown'}; launch requirement: ${facts.selectedLaunchRequirement ?? 'unknown'}; pending requirement launch: ${facts.pendingRequirementLaunch ?? 'unknown'}; guard armed: ${facts.guardArmed}; helper installed: ${facts.setupHelperInstalled}; helper ready: ${facts.setupHelperReady}. These are observations, not an entry-bound launch promise.` : 'No typed original result observed for this scope.');
     text('lifecycle',lifecycle ? `Original remote record: ${lifecycle.operationState}; accepted ${lifecycle.accepted}; completed ${lifecycle.completed}. Lifecycle facts do not acknowledge typed effects or this cancellation call.` : 'No separate lifecycle facts read.');
@@ -161,7 +171,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const d = project(value,ref,requestId,action);
     if (value.state === 'completed' && confirms(d) && original?.requestId === ref.requestId) {
       original = null; if (!persist()) { original = ref; return; }
-      message = bootPreferences.has(ref.command) ? `Request-after-restart preference observed: ${d.typedResult.requestWifiAdbAfterBoot ? 'on' : 'off'}. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.` : ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
+      message = accessibilityCommands.has(ref.command) ? `Kiosk-reported accessibility-enabled flag observed: ${d.typedResult.accessibilityEnabled ? 'on' : 'off'}. Protected approval, OS permission, foreground and app readiness remain unverified.` : passthroughCommands.has(ref.command) ? `Kiosk-reported passthrough state observed: ${d.typedResult.passthroughStyle}${ref.command === 'passthrough-contour' ? ', LUT reported applied' : ''}. Visual camera output, protected approval, foreground and app readiness remain unverified.` : bootPreferences.has(ref.command) ? `Request-after-restart preference observed: ${d.typedResult.requestWifiAdbAfterBoot ? 'on' : 'off'}. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.` : ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
     } else message = `Original proof remains ${d.originalEffect}; actual Core stage ${d.coreReceipt?.stage ?? 'unavailable'}. Lifecycle, pending requirements and missing evidence do not confirm a typed effect.`;
     show(d,requestId,action);
   }
