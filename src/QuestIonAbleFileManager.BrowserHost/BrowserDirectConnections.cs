@@ -49,7 +49,8 @@ public sealed partial class BrowserDirectConnections
         }
     }
 
-    internal Operation Reserve(BrowserDirectRequest request,string hostSession,BrowserDirectCommandOutcome? original=null)
+    internal Operation Reserve(BrowserDirectRequest request,string hostSession,BrowserDirectCommandOutcome? original=null,
+        BrowserDirectInstallSource? inspection=null,BrowserDirectInstallOutcome? installOriginal=null)
     {
         lock(_sync)
         {
@@ -66,13 +67,16 @@ public sealed partial class BrowserDirectConnections
             {
                 entry=_entry is { } found && found.Id==request.ConnectionId ? found : throw new BrowserRequestException("direct_connection_not_found",404);
                 Expire(entry);
-                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list" or "kiosk.direct.staging-upload";
+                var requiresLive=request.Action=="kiosk.direct.status" || request.IsCommand || request.Action is "kiosk.direct.tags-export" or "kiosk.direct.staging-list" or "kiosk.direct.staging-upload" or "kiosk.direct.install" or "kiosk.direct.install-status";
                 if(requiresLive && entry.State=="expired")throw new BrowserRequestException("direct_connection_expired",409);
                 if(entry.Session is null || requiresLive && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
             }
             var metadata=request.IsCommand ? BrowserDirectCommandProjection.Metadata(request,entry,original) : null;
-            var operation=new Operation(request,entry,metadata);
+            var operation=new Operation(request,entry,metadata)
+            {
+                InstallMetadata=request.Action is "kiosk.direct.install" or "kiosk.direct.install-status" ? InstallMetadata(request,entry,inspection,installOriginal) : null
+            };
             _hostSession=hostSession;
             if(request.Action=="kiosk.direct.connect-usb")_entry=entry;
             return _active=operation;
@@ -89,6 +93,7 @@ public sealed partial class BrowserDirectConnections
             if(request.Action=="kiosk.direct.tags-export")return await ExecuteTagExportAsync(operation,stageTagExport,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.staging-list")return await ExecuteStagingListAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.staging-upload")return await ExecuteUploadAsync(operation,acquireUpload,cancellation).ConfigureAwait(false);
+            if(request.Action is "kiosk.direct.install" or "kiosk.direct.install-status")return await ExecuteInstallAsync(operation,acquireUpload,cancellation).ConfigureAwait(false);
             if(request.IsCommand)return await ExecuteCommandAsync(operation,cancellation).ConfigureAwait(false);
             if(request.Action=="kiosk.direct.connect-usb")
             {
@@ -239,6 +244,7 @@ public sealed partial class BrowserDirectConnections
     {
         internal TaskCompletionSource Completion {get;}=new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal BrowserArtifactLease? UploadSourceLease;
+        internal BrowserDirectInstallOutcome? InstallMetadata {get;init;}
     }
 
     private sealed class NativeSession(RustyKioskUsbDirectLinkSession session):IBrowserDirectSession
