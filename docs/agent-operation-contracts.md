@@ -491,8 +491,10 @@ dotnet run --project src/QuestIonAbleFileManager.App
   `docs/fleet-integration.md`; do not add a WPF projection or broaden it beyond
   one read-only target without a separate authority and UX review.
 - `QuestIonAbleFileManager.App` is the Windows WPF projection.
-- Keep external processes behind `ICommandRunner` and preserve cancellation
-  and bounded timeouts.
+- Keep external processes behind `ICommandRunner`, explicit cancellation and
+  bounded probe/sensitive-command timeouts. Ordinary APK install and package-stop
+  dispatch use `Timeout.InfiniteTimeSpan`: retain the same child and readers,
+  warn on elapsed estimates, and never infer remote cancellation or replay rights.
 - Use `ProcessStartInfo.ArgumentList`; never construct a host shell command.
 - Keep future Android and Apple clients as adapters over explicit contracts,
   not as reasons to put platform UI into the core.

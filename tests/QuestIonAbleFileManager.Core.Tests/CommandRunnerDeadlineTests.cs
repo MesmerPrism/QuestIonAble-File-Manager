@@ -14,6 +14,65 @@ public sealed class CommandRunnerDeadlineCollection;
 [Collection("Command runner deadlines")]
 public sealed class CommandRunnerDeadlineTests
 {
+    [Fact]
+    public async Task RetainedOperation_WarnsWithoutCancellingAndKeepsBothStreams()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var warnings = 0;
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100), _ => Interlocked.Increment(ref warnings));
+        var result = await runner.RunAsync(PowerShell,
+            Arguments("[Console]::Out.Write('before'); Start-Sleep -Milliseconds 700; [Console]::Out.Write('after'); [Console]::Error.Write('note')"),
+            Timeout.InfiniteTimeSpan);
+        Assert.True(warnings > 0);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("beforeafter", result.StandardOutput);
+        Assert.Equal("note", result.StandardError);
+    }
+
+    [Fact]
+    public async Task RetainedOperation_PreservesExplicitCancellation()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var cancellation = new CancellationTokenSource();
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100), _ => cancellation.Cancel());
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(PowerShell,
+            Arguments("Start-Sleep -Seconds 30"), Timeout.InfiniteTimeSpan, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task RetainedOperation_KeepsReadersAfterParentExitUntilActualPipeEof()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new HeldPipeFixture("ordinary");
+        var warnings = 0;
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100), _ => Interlocked.Increment(ref warnings));
+        var invocation = runner.RunAsync(fixture.Executable, fixture.Arguments, Timeout.InfiniteTimeSpan);
+        await fixture.WaitForParentExitAsync(invocation);
+        await Task.Delay(300);
+        Assert.False(invocation.IsCompleted);
+        Assert.True(warnings > 0);
+        fixture.ReleaseChild();
+        var result = await invocation.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
+    public async Task RetainedOperation_WarningObserverFailureDoesNotAbandonOperation()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var warnings = 0;
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100), _ =>
+        {
+            Interlocked.Increment(ref warnings);
+            throw new InvalidOperationException("warning sink unavailable");
+        });
+        var result = await runner.RunAsync(PowerShell,
+            Arguments("Start-Sleep -Milliseconds 700; [Console]::Out.Write('done')"), Timeout.InfiniteTimeSpan);
+        Assert.True(warnings > 0);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("done", result.StandardOutput);
+    }
+
     [Theory]
     [InlineData("ordinary")]
     [InlineData("stream-in")]
@@ -167,10 +226,11 @@ public sealed class CommandRunnerDeadlineTests
             using var child = Process.GetProcessById(int.Parse(identity[0]));
             Assert.Equal(long.Parse(identity[1]), child.StartTime.ToUniversalTime().Ticks);
         }
+        public void ReleaseChild() => File.WriteAllText(Path.Combine(directory, "release.txt"), "release");
         public void Dispose()
         {
             // Release only this child's fixture file; never kill a PID that could be reused.
-            File.WriteAllText(Path.Combine(directory, "release.txt"), "release");
+            ReleaseChild();
             if (File.Exists(ChildReady))
             {
                 var identity = File.ReadAllText(ChildReady).Split('|');

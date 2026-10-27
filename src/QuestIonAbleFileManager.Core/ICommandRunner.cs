@@ -2,6 +2,12 @@ namespace QuestIonAbleFileManager.Core;
 
 public interface ICommandRunner
 {
+    /// <summary>
+    /// A positive timeout bounds a probe. Timeout.InfiniteTimeSpan retains an
+    /// ordinary operation through actual process exit and stream drain, with
+    /// elapsed warnings and explicit caller cancellation. Cancelling a local
+    /// process never proves cancellation of a remote Android effect.
+    /// </summary>
     Task<CommandResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,

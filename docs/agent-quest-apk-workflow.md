@@ -7,6 +7,14 @@ and the choice of build output.
 
 ## Fast iteration loop
 
+APK installation and the fixed package-stop dispatch keep the same local ADB
+process until actual completion, with a diagnostic trace warning each minute
+(or an injected progress observer). CLI JSON and protocol stderr stay clean. Explicit
+cancellation remains available and leaves the remote effect uncertain; inspect
+the exact target before deciding what to do next. Read-only probes and sensitive
+credential operations retain their own bounds. These elapsed warnings do not
+expire an app session, require new enrollment, or authorize repeating a mutation.
+
 1. Read the source repository's tracked agent instructions and use its owned
    build command. Do not make File Manager infer or reproduce that build.
 2. Select one explicit `.apk` output and one explicit Quest serial.

@@ -29,7 +29,7 @@ public sealed partial class AdbClient
             stop = await RunForDeviceAsync(
                 serial,
                 ["shell", "am", "force-stop", "--user", "current", packageName],
-                InspectionTimeout,
+                Timeout.InfiniteTimeSpan,
                 cancellationToken).ConfigureAwait(false);
             stop.EnsureSuccess("Force-stop exact package for current user");
         }

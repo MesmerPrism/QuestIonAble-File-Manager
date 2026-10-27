@@ -31,8 +31,11 @@ release recipe for an unrelated task.
 GUI and CLI invoke the same immutable typed `OperatorCommand` or
 `KioskDirectOperatorCommand` arguments. Classify local-only UI actions honestly.
 Keep business logic in Core, process execution behind `ICommandRunner`,
-cancellation/timeouts bounded, and use `ProcessStartInfo.ArgumentList`
+cancellation explicit and probes bounded, and use `ProcessStartInfo.ArgumentList`
 instead of a host shell. Cover every WPF operation with parity tests.
+Ordinary APK install and package-stop dispatch retain the same local process
+with elapsed warnings until actual exit/drain or explicit cancellation.
+An elapsed estimate never cancels a remote Android effect or authorizes replay.
 Agent automation uses the CLI, not WPF scraping. CLI JSON has one final result;
 WPF progress uses `OperatorProgress` and indeterminate state without an honest
 total. Do not infer percentage from console volume or elapsed time.

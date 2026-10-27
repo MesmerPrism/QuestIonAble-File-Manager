@@ -522,7 +522,7 @@ public sealed partial class AdbClient
         var result = await RunForDeviceAsync(
             serial,
             arguments,
-            TransferTimeout,
+            Timeout.InfiniteTimeSpan,
             cancellationToken).ConfigureAwait(false);
         result.EnsureSuccess($"Install {Path.GetFileName(fullApkPath)}");
         await GetThirdPartyPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
@@ -644,7 +644,7 @@ public sealed partial class AdbClient
         var arguments = CreateInstallArguments("install", options);
         arguments.Add(admittedPath);
         var commandResult = await RunForDeviceAsync(
-            serial, arguments, TransferTimeout, cancellationToken).ConfigureAwait(false);
+            serial, arguments, Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
         commandResult.EnsureSuccess($"Install {Path.GetFileName(reportedPath)}");
         var installed = await ReadInstalledIdentityAsync(
             serial, artifact, cancellationToken).ConfigureAwait(false);
@@ -1499,7 +1499,7 @@ public sealed partial class AdbClient
         var result = await RunForDeviceAsync(
             serial,
             arguments,
-            TransferTimeout,
+            Timeout.InfiniteTimeSpan,
             cancellationToken).ConfigureAwait(false);
         result.EnsureSuccess($"Install APK bundle ({normalizedPaths.Length} parts)");
         await GetThirdPartyPackageNamesAsync(serial, cancellationToken).ConfigureAwait(false);
@@ -2659,7 +2659,7 @@ public sealed partial class AdbClient
                 var result = await RunForDeviceAsync(
                     serial,
                     installArguments,
-                    TransferTimeout,
+                    Timeout.InfiniteTimeSpan,
                     cancellationToken).ConfigureAwait(false);
                 if (result.Succeeded)
                 {
