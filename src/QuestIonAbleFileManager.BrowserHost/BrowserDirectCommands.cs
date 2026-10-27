@@ -16,6 +16,10 @@ public sealed record BrowserDirectRequest(string RequestId, string Action, strin
 
 public sealed partial class BrowserCommands
 {
+    private IReadOnlyList<string> DirectActions => _directConnections is null ? [] :
+        _artifactStore is not null && BrowserArtifactStore.Capability.Supported ? BrowserDirectCommands.Actions :
+        BrowserDirectCommands.Actions.Where(action => action != "kiosk.direct.tags-export").ToArray();
+
     private async Task<BrowserCommandOutcome> ExecuteDirectAsync(BrowserDirectRequest request,CancellationToken stopping)
     {
         IDisposable gate; BrowserDirectConnections.Operation operation;
@@ -24,6 +28,8 @@ public sealed partial class BrowserCommands
             if(_requests.ContainsKey(request.RequestId))throw new BrowserRequestException("request_already_consumed",409);
             if(_running || _operationGate.IsBusy)throw new BrowserRequestException("busy",409);
             if(_requests.Count>=MaximumRequests)throw new BrowserRequestException("session_capacity_reached",409);
+            if(request.Action=="kiosk.direct.tags-export" && (_artifactStore is null || !BrowserArtifactStore.Capability.Supported))
+                throw new BrowserRequestException("artifact_staging_unavailable",503);
             if(_directConnections is null)throw new BrowserRequestException("direct_unavailable",409);
             BrowserDirectCommandOutcome? original=null;
             if(request.Recovery)
@@ -43,7 +49,9 @@ public sealed partial class BrowserCommands
         {
             using var timeout=CancellationTokenSource.CreateLinkedTokenSource(stopping);
             timeout.CancelAfter(TimeSpan.FromSeconds(90));
-            var outcome=await _directConnections.ExecuteAsync(operation,timeout.Token).ConfigureAwait(false);
+            var outcome=await _directConnections.ExecuteAsync(operation,timeout.Token,
+                request.Action=="kiosk.direct.tags-export" ? (lease,token)=>_artifactStore!().StageAsync(
+                    "app-tags.json",lease.Stream,lease.SizeBytes,lease.Sha256,token) : null).ConfigureAwait(false);
             _requests[request.RequestId]=outcome;return outcome;
         }
         finally
@@ -57,7 +65,7 @@ public sealed partial class BrowserCommands
 public static class BrowserDirectCommands
 {
     public static readonly IReadOnlyList<string> Actions = ["kiosk.direct.connect-usb", "kiosk.direct.status", "kiosk.direct.close",
-        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel"];
+        "kiosk.direct.invoke", "kiosk.direct.request-status", "kiosk.direct.request-result", "kiosk.direct.request-cancel", "kiosk.direct.tags-export"];
     public static bool IsDirectAction(ReadOnlyMemory<byte> body)
     {
         if (body.Length is 0 or > BrowserCommands.MaximumRequestBytes) return false;
@@ -92,6 +100,8 @@ public static class BrowserDirectCommands
             var id = Id(Text(root, "requestId"));
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
+            if (action == "kiosk.direct.tags-export")
+                return new(CanonicalId(Text(root,"requestId")),action,ConnectionId:CanonicalId(Text(root,"connectionId")));
             if (action is "kiosk.direct.invoke" or "kiosk.direct.request-status" or "kiosk.direct.request-result" or "kiosk.direct.request-cancel")
             {
                 var connection = CanonicalId(Text(root, "connectionId"));

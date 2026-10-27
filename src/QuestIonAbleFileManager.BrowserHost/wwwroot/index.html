@@ -134,6 +134,17 @@
   <div class="actions"><button id="diagnostics-save" type="button" disabled>Save prepared ZIP copy</button><button id="diagnostics-checksum" type="button" disabled>Save ZIP checksum</button><button id="diagnostics-remove" type="button" disabled>Remove transient ZIP copy</button></div>
   <p class="hint">Save and Remove affect only a separate protected transient copy. Clearing or removing a prepared download copy leaves the retained archive unchanged. Expiry stops new archive reads; an already held save may finish. Unknown capture or preparation is never replayed, cleared by status of another action, or discarded by staging Clear.</p>
 </section>
+    <section class="panel" id="direct-tags-view" aria-labelledby="direct-tags-heading">
+  <h2 id="direct-tags-heading">Private Kiosk tag backup</h2>
+  <p>Read a signed, validated tag document into a separate protected download copy. It can contain private app labels and tags. This action does not write tags, reload Kiosk, install apps or reconcile another operation.</p>
+  <p id="direct-tags-capability" class="hint">Use an adopted Direct connection on a Windows companion with protected staging.</p>
+  <dl class="apk-facts"><div><dt>Source scope</dt><dd id="direct-tags-source">No source connection</dd></div></dl>
+  <div class="actions"><button id="direct-tags-stage" type="button" disabled>Stage private tag backup</button><button id="direct-tags-original" type="button" disabled>Read cached export result</button></div>
+  <p id="direct-tags-state" role="status" aria-live="polite">No tag backup requested.</p>
+  <div id="direct-tags-facts" hidden><dl class="apk-facts"><div><dt>Document</dt><dd>app-tags.json</dd></div><div><dt>Tag schema</dt><dd id="direct-tags-schema"></dd></div><div><dt>Bytes</dt><dd id="direct-tags-size"></dd></div><div><dt>SHA-256</dt><dd id="direct-tags-sha"></dd></div></dl></div>
+  <div class="actions"><button id="direct-tags-save" type="button" disabled>Save prepared tag copy</button><button id="direct-tags-checksum" type="button" disabled>Save tag checksum</button><button id="direct-tags-remove" type="button" disabled>Remove prepared tag copy</button></div>
+  <p class="hint">A prepared copy belongs to the original source shown above; it is historical data, not current tags or app readiness. Under the same host and authentication it can be saved after that connection closes or expires. Removing or clearing this copy leaves headset tags unchanged. A lost reply can leave a bounded local copy; only a new explicit read exports again. Read references stay in tab memory only and disappear on reload.</p>
+</section>
     <section id="fleet-status-view" class="panel" aria-labelledby="fleet-status-title">
       <h2 id="fleet-status-title">Get Fleet</h2>
       <p id="fleet-status-capability" class="hint">A Windows QFM companion is required. Release configuration is unknown until an explicit status read.</p>

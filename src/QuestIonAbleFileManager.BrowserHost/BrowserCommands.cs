@@ -17,7 +17,11 @@ public sealed record BrowserCommandOutcome(
     BrowserDirectConnectionOutcome? KioskDirectConnection = null,
     BrowserProfileOutcome? Profile = null,
     BrowserDirectCommandOutcome? KioskDirectCommand = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BrowserFleetOutcome? Fleet = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] BrowserFleetOutcome? Fleet = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserDirectTagsOutcome? KioskDirectTags { get; init; }
+}
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
 public sealed record BrowserArtifactTransferOutcome(BrowserArtifactReceipt Artifact, string Serial,
@@ -42,7 +46,7 @@ public sealed partial class BrowserCommands
     private readonly BrowserDirectConnections? _directConnections;
     private readonly BrowserProfiles? _profiles;
     private readonly BrowserFleet? _fleetStatus;
-    public IReadOnlyList<string> AvailableActions => [.. ArtifactActions, .. _directConnections is null ? [] : BrowserDirectCommands.Actions,
+    public IReadOnlyList<string> AvailableActions => [.. ArtifactActions, .. DirectActions,
         .. _profiles?.Capability.Supported == true ? BrowserProfileCommands.Actions : [],
         .. _fleetStatus?.Capability.Supported == true ? BrowserFleetCommands.Actions : []];
     private IReadOnlyList<string> ArtifactActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported

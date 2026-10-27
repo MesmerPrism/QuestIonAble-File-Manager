@@ -85,6 +85,9 @@ public sealed record KioskDirectOperatorCommand(
     public static KioskDirectOperatorCommand ExportTags(string outputPath) =>
         New(KioskDirectOperatorAction.ExportTags, LocalPath: Path.GetFullPath(outputPath));
 
+    public static KioskDirectOperatorCommand ExportTags() =>
+        New(KioskDirectOperatorAction.ExportTags);
+
     public static KioskDirectOperatorCommand ImportTags(string inputPath, bool operatorConfirmed) =>
         New(
             KioskDirectOperatorAction.ImportTags,
@@ -191,7 +194,11 @@ public sealed record KioskDirectOperatorResult(
     IReadOnlyList<RustyKioskStagedFile>? StagedFiles = null,
     RustyKioskStagedFile? StagedFile = null,
     string? LocalFileName = null,
-    RustyKioskDirectInstallReceipt? InstallReceipt = null);
+    RustyKioskDirectInstallReceipt? InstallReceipt = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public KioskDirectTagExportLease? TagExport { get; init; }
+}
 
 /// <summary>
 /// The single typed Core projection used by both the CLI and WPF Direct Link surfaces.
@@ -324,6 +331,19 @@ public sealed class KioskDirectOperatorExecutor(RustyKioskDirectClient client)
 
             case KioskDirectOperatorAction.ExportTags:
                 {
+                    if (command.LocalPath is null)
+                    {
+                        var bytes = await _client.ReadTagsAsync(cancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            return Result(command, OperatorMutationStage.Confirmed, "The signed tag document was exported.") with
+                            { TagExport = KioskDirectTagExportLease.Create(bytes) };
+                        }
+                        finally
+                        {
+                            System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+                        }
+                    }
                     var output = Require(command.LocalPath);
                     await File.WriteAllBytesAsync(
                             output,

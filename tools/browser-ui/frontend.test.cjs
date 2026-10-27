@@ -61,7 +61,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       if (url.pathname === '/browser/v1/session') return session ? session(route) : route.fulfill({ json: { sessionId: 'fixture-session', artifactStaging:{supported:true}, actions:['devices','device.status','wifi.enable','wifi.connect','device.keep-awake','device.normal','files.list','apk.list','apk.permissions','device.performance','device.performance-clear','wifi.disconnect','device.actor-observe','device.actor-identity','adb.forwards','apk.inspect'] } });
       const artifact={id:'00000000000040008000000000000003',fileName:'fixture.apk',sizeBytes:3,sha256:createHash('sha256').update(Buffer.from([1,2,3])).digest('hex')};
       if(url.pathname==='/browser/v1/artifacts'&&request.method()==='POST')return route.fulfill({status:201,json:{state:'staged',scope:'localOnly',deviceDispatched:false,artifact}});
-      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='DELETE')return route.fulfill({json:{state:'removed',scope:'localOnly',deviceDispatched:false}});
+      if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='DELETE')return route.fulfill({json:{state:'removed',scope:'localOnly',artifactId:url.pathname.split('/').at(-1),deviceDispatched:false}});
       if(url.pathname.startsWith('/browser/v1/artifacts/')&&request.method()==='GET')return route.fulfill({contentType:'application/octet-stream',headers:{'Content-Length':'3','X-Qfm-Artifact-Sha256':artifact.sha256,'X-Qfm-Artifact-Size-Bytes':'3'},body:Buffer.from([1,2,3])});
       if(url.pathname==='/browser/v1/artifacts/cleanup')return route.fulfill({json:{state:'cleaned',count:1,scope:'localOnly',deviceDispatched:false}});
       if (url.pathname.startsWith('/browser/v1/requests/')) return route.fulfill({ json: reconcile(url.pathname.split('/').at(-1)) || { error: 'request_not_found' } });
@@ -80,7 +80,7 @@ async function fixture(t, { origin = 'http://127.0.0.1:18127', mutation, session
       }
       return route.abort('blockedbyclient');
     }
-    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
+    const allowed = new Set(['index.html', 'app.js', 'pwa.js', 'retained-view.js', 'transfer-view.js', 'verified-download.js', 'apk-read-view.js','file-push-view.js','kiosk-view.js','direct-connection-view.js','direct-command-view.js','profile-view.js','fleet-status-view.js','diagnostics-view.js','direct-tags-view.js', 'vendor/noble-sha256.js', 'styles.css', 'usb-proof.js', 'usb-proof-core.js', 'vendor/tango-adb.js', 'manifest.webmanifest']);
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
     if (!allowed.has(relative)) return route.fulfill({ status: 404, body: '' });
     const contentType = relative.endsWith('.js') ? 'text/javascript' : relative.endsWith('.css') ? 'text/css' : 'text/html';
@@ -478,4 +478,59 @@ test('real app uncertain diagnostic preparation blocks mutations but sends no au
   await f.page.evaluate(({key,value})=>sessionStorage.setItem(key,JSON.stringify(value)),{key:diagnosticsKey,value:original});await f.page.reload();await f.connect();await f.selectA();await f.page.locator('#power-confirm').check();
   assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);assert.equal(await f.page.locator('#diagnostics-capture').isDisabled(),true);assert.equal(await f.page.locator('#diagnostics-status').isDisabled(),true);assert.equal(f.calls.filter(call=>call.path.startsWith('/browser/v3/retained/')).length,0);
   assert.deepEqual(await f.page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),diagnosticsKey),original);
+});
+
+const directTagsAction='kiosk.direct.tags-export';
+function directTagsSession(){return {sessionId:'fixture-session',actions:['devices','device.status','device.keep-awake','device.normal','kiosk.direct.connect-usb','kiosk.direct.status','kiosk.direct.close',directTagsAction],artifactStaging:{supported:true,maximumFileBytes:1073741824,maximumTotalBytes:2147483648,maximumFiles:8,transferTimeoutSeconds:300}};}
+function directTagsConnectionReply(body,known){
+  const connection=body.action==='kiosk.direct.connect-usb'?{connectionId:'d1234567-1234-4234-8234-123456789abc',connectRequestId:body.requestId,usbOperationId:'usb_'+body.requestId.replaceAll('-',''),serial:body.serial,productChannel:body.productChannel,expiresAtUtc:new Date(Date.now()+300000).toISOString(),enabledByRequest:true,bootstrap:{schema:'questionable.file_manager.kiosk_direct_usb.v1',operationId:'usb_'+body.requestId.replaceAll('-',''),stage:'confirmed'},adoption:{stage:'confirmed',signedStatusRead:true,typedKioskStatusRead:true,stagingInventoryRead:true}}:{...known};
+  connection.state=body.action==='kiosk.direct.close'?'closed':'connected';
+  if(connection.state==='closed'){delete connection.bootstrap;delete connection.adoption;connection.cleanup={schema:'questionable.file_manager.kiosk_direct_usb_cleanup.v1',operationId:connection.usbOperationId,stage:'confirmed',listenerDisposition:'owned-stopped'};}
+  return {requestId:body.requestId,action:body.action,state:'completed',result:null,mutation:null,kioskDirectConnection:connection};
+}
+function directTagsExportReply(body,connection){
+  const bytes=Buffer.from('{"schema":"rusty.kiosk.app_tags.v1","apps":[{"name":"private-tag-document","tags":["fixture"]}]}');
+  const artifact={id:'e'.repeat(32),fileName:'app-tags.json',sizeBytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+  return {requestId:body.requestId,action:directTagsAction,state:'completed',result:null,mutation:null,rawDocument:'private-tag-document',kioskDirectTags:{connectionId:connection.connectionId,connectRequestId:connection.connectRequestId,usbOperationId:connection.usbOperationId,serial:connection.serial,productChannel:connection.productChannel,schema:'rusty.kiosk.app_tags.v1',sizeBytes:artifact.sizeBytes,sha256:artifact.sha256,artifact,coreReceipt:{actionId:'action_'+'c'.repeat(32),action:'exportTags',stage:'confirmed'}}};
+}
+async function adoptDirectForTags(f){await f.connect();await f.selectA();await f.page.locator('#direct-connect-confirm').check();await f.page.locator('#direct-connect').click();await f.settled();await f.page.waitForFunction(()=>!document.querySelector('#direct-tags-stage').disabled);}
+
+test('real app tag backup recovers its cached copy while preserving an unrelated unknown effect',async t=>{
+  let connection;
+  const f=await fixture(t,{expectedLostResponse:true,session:route=>route.fulfill({json:directTagsSession()}),mutation:({route,body,retained})=>{
+    if(body.action==='kiosk.direct.connect-usb'){const value=directTagsConnectionReply(body);connection=value.kioskDirectConnection;retained.set(body.requestId,value);return route.fulfill({json:value});}
+    if(body.action==='device.keep-awake')return route.abort('failed');
+    if(body.action===directTagsAction){retained.set(body.requestId,directTagsExportReply(body,connection));return route.abort('failed');}
+    return route.abort('blockedbyclient');
+  }});
+  await adoptDirectForTags(f);await f.page.locator('#power-confirm').check();await f.page.locator('#apply-hold').click();await f.settled();
+  const original=await f.outstanding();assert.equal(original.action,'device.keep-awake');
+  const before=await f.page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage)));
+  await f.page.locator('#direct-tags-stage').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-facts').isHidden(),true);
+  await f.page.locator('#direct-tags-original').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-facts').isVisible(),true);
+  assert.equal(await f.page.locator('#direct-tags-save').isEnabled(),true);assert.deepEqual(await f.outstanding(),original);
+  assert.deepEqual(await f.page.evaluate(()=>Object.fromEntries(Object.entries(sessionStorage))),before);
+  assert.equal(f.calls.filter(c=>c.body?.action===directTagsAction).length,1);
+  assert.equal(f.calls.filter(c=>c.method==='GET'&&c.path.startsWith('/browser/v1/requests/')).length,1);
+  assert.equal(f.calls.some(c=>c.path.endsWith('/'+original.requestId)),false);
+  assert.equal((await f.page.locator('#result-json').textContent()).includes('private-tag-document'),false);
+  assert.equal(await f.page.locator('#apply-hold').isDisabled(),true);
+  await f.page.locator('#direct-tags-remove').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-facts').isHidden(),true);assert.deepEqual(await f.outstanding(),original);
+});
+
+test('real app tag copy survives Direct close and retires on the shared staging Clear',async t=>{
+  let connection;
+  const f=await fixture(t,{session:route=>route.fulfill({json:directTagsSession()}),mutation:({route,body,retained})=>{
+    const value=body.action===directTagsAction?directTagsExportReply(body,connection):directTagsConnectionReply(body,connection);
+    if(body.action==='kiosk.direct.connect-usb')connection=value.kioskDirectConnection;
+    retained.set(body.requestId,value);return route.fulfill({json:value});
+  }});
+  await adoptDirectForTags(f);await f.page.locator('#direct-tags-stage').click();await f.settled();
+  await f.page.locator('#direct-close-confirm').check();await f.page.locator('#direct-close').click();await f.settled();
+  assert.equal(await f.page.locator('#direct-tags-stage').isDisabled(),true);assert.equal(await f.page.locator('#direct-tags-save').isEnabled(),true);
+  await f.page.locator('#direct-tags-original').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-save').isEnabled(),true);
+  assert.equal(f.calls.filter(c=>c.body?.action===directTagsAction).length,1);
+  assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.close').length,1);
+  await f.page.locator('#clear-artifacts').click();await f.settled();assert.equal(await f.page.locator('#direct-tags-save').isDisabled(),true);assert.equal(await f.page.locator('#direct-tags-original').isDisabled(),true);
+  assert.equal(await f.outstanding(),null);
 });
