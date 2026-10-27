@@ -191,6 +191,7 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
             throw;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         stopwatch.Stop();
 
         return new CommandResult(

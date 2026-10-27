@@ -40,6 +40,23 @@ public sealed class CommandRunnerDeadlineTests
     }
 
     [Fact]
+    public async Task RetainedOperation_KeepsReadersAfterParentExitUntilActualPipeEof()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new HeldPipeFixture("ordinary");
+        var warnings = 0;
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100), _ => Interlocked.Increment(ref warnings));
+        var invocation = runner.RunAsync(fixture.Executable, fixture.Arguments, Timeout.InfiniteTimeSpan);
+        await fixture.WaitForParentExitAsync(invocation);
+        await Task.Delay(300);
+        Assert.False(invocation.IsCompleted);
+        Assert.True(warnings > 0);
+        fixture.ReleaseChild();
+        var result = await invocation.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Fact]
     public async Task RetainedOperation_WarningObserverFailureDoesNotAbandonOperation()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -209,10 +226,11 @@ public sealed class CommandRunnerDeadlineTests
             using var child = Process.GetProcessById(int.Parse(identity[0]));
             Assert.Equal(long.Parse(identity[1]), child.StartTime.ToUniversalTime().Ticks);
         }
+        public void ReleaseChild() => File.WriteAllText(Path.Combine(directory, "release.txt"), "release");
         public void Dispose()
         {
             // Release only this child's fixture file; never kill a PID that could be reused.
-            File.WriteAllText(Path.Combine(directory, "release.txt"), "release");
+            ReleaseChild();
             if (File.Exists(ChildReady))
             {
                 var identity = File.ReadAllText(ChildReady).Split('|');
