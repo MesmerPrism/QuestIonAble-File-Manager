@@ -58,6 +58,10 @@ no-ops, original request custody and separate provider facts without reconciliat
 Direct Meta Home fixtures retain the existing null-valued Invoke and original
 recovery flow. They verify Kiosk acknowledgement only, never physical Meta Home
 foreground or wearer visibility.
+Direct text fixtures cover Core-compatible trimming and UTF-16 bounds,
+search/filter clears, server-derived comparison and selected-row tag proof,
+missing/duplicate-row uncertainty, old command shapes and recovery without
+another Invoke. They do not modify a headset's real search, selection or tags.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,

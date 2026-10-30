@@ -23,6 +23,14 @@ public sealed record BrowserDirectTypedResult(string Schema,string RequestId,str
     public bool? PassthroughLutApplied { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WifiAdbEnabled { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Search { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TagFilter { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ValueMatches { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? RequestedTagPresent { get; init; }
 }
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
@@ -63,9 +71,11 @@ internal static class BrowserDirectCommandProjection
                 throw new InvalidDataException("direct_typed_binding_invalid");
             var shared=RustyKioskReadback.Confirms(expected,source.Value,typed);
             if(result.Mutation.Stage!=(shared?OperatorMutationStage.Confirmed:OperatorMutationStage.PendingWearerAction))throw new InvalidDataException("direct_typed_receipt_invalid");
-            var snapshot=Typed(typed);
+            var snapshot=Typed(typed,source.Value,shared);
             var launch=expected is RustyKioskCommand.LaunchNormal or RustyKioskCommand.LaunchKiosk;
-            var missing=launch && snapshot.PendingRequirementLaunch is null || expected==RustyKioskCommand.SetLaunchRequirement && shared && snapshot.SelectedEntry is null;
+            var tags=expected is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag;
+            var missing=launch && snapshot.PendingRequirementLaunch is null || expected==RustyKioskCommand.SetLaunchRequirement && shared && snapshot.SelectedEntry is null ||
+                tags && (snapshot.SelectedEntry is null || snapshot.RequestedTagPresent is null);
             var confirmed=shared && !missing && (!launch || snapshot.PendingRequirementLaunch==false);
             var effect=confirmed?"confirmed":missing?"unknown":"pendingWearerAction";
             var state=request.Action=="kiosk.direct.request-result"?"completed":confirmed?"completed":missing?"outcomeUnknown":"pending";
@@ -83,7 +93,7 @@ internal static class BrowserDirectCommandProjection
         return new(request.RequestId,request.Action,top,KioskDirectCommand:source with
         { CoreReceipt=receipt,Lifecycle=raw,OriginalEffect=originalEffect,CancellationAcknowledged=cancelled });
     }
-    private static BrowserDirectTypedResult Typed(RustyKioskOperatorResult typed)
+    private static BrowserDirectTypedResult Typed(RustyKioskOperatorResult typed,string? value,bool matches)
     {
         var state=typed.State;var key=state.SelectedKey;
         if(key is not null && (key.Length is < 1 or > 160 || key.Trim()!=key || key.Any(char.IsControl)))throw new InvalidDataException("direct_selected_key_invalid");
@@ -92,6 +102,10 @@ internal static class BrowserDirectCommandProjection
         var requirement=state.SelectedLaunchRequirement?.ToWireName();
         var selected=key is null?[]:state.Entries.Where(entry=>entry.Key==key).Take(2).ToArray();
         var entry=selected.Length==1?new BrowserDirectSelectedEntry(key!,selected[0].LaunchRequirement.ToWireName()):null;
+        var tags=typed.Command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag;
+        if(tags && key is not null && !BrowserDirectCommands.IsWellFormedUtf16(key))throw new InvalidDataException("direct_selected_key_invalid");
+        var search=typed.Command==RustyKioskCommand.SetSearch?BoundedText(state.Search):null;
+        var filter=typed.Command==RustyKioskCommand.FilterTag?BoundedText(state.TagFilter ?? string.Empty):null;
         return new(typed.Schema,typed.RequestId,typed.Command.ToWireName(),typed.Accepted,typed.Completed,state.ControlsOpen,key,package,
             state.SelectedInstalled,state.SelectedLaunchable,requirement,state.PendingRequirementLaunch,state.GuardArmed,state.SetupHelperInstalled,state.SetupHelperReady,entry)
         {
@@ -100,7 +114,13 @@ internal static class BrowserDirectCommandProjection
             SystemPassthroughEnabled=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.SystemPassthroughEnabled : null,
             PassthroughStyle=typed.Command is RustyKioskCommand.PassthroughNatural or RustyKioskCommand.PassthroughContour ? state.PassthroughStyle?.ToWireName() : null,
             PassthroughLutApplied=typed.Command==RustyKioskCommand.PassthroughContour ? state.PassthroughLutApplied : null,
-            WifiAdbEnabled=typed.Command is RustyKioskCommand.RequestWifiAdb or RustyKioskCommand.DisableWifiAdb ? state.WifiAdbEnabled : null
+            WifiAdbEnabled=typed.Command is RustyKioskCommand.RequestWifiAdb or RustyKioskCommand.DisableWifiAdb ? state.WifiAdbEnabled : null,
+            Search=search,
+            TagFilter=filter,
+            ValueMatches=typed.Command is RustyKioskCommand.SetSearch or RustyKioskCommand.FilterTag ? matches : null,
+            RequestedTagPresent=tags && entry is not null ? selected[0].Tags.Contains(value!,StringComparer.OrdinalIgnoreCase) : null
         };
     }
+    private static string BoundedText(string? value) => value is not null && value.Length<=RustyKioskContract.MaxCommandValueLength && BrowserDirectCommands.IsWellFormedUtf16(value)
+        ? value : throw new InvalidDataException("direct_text_proof_invalid");
 }

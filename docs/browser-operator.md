@@ -672,13 +672,15 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its eighteen commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
+connection above. Its twenty-two commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
 `disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
 `passthrough-natural`, `passthrough-contour`, `request-wifi-adb` and
-`disable-wifi-adb`. Only `set-launch-requirement` accepts a
-value: exactly `any`, `wifi-on` or `wifi-off`. All require explicit confirmation
+`disable-wifi-adb`, `set-search`, `filter-tag`, `add-tag` and `remove-tag`.
+`set-launch-requirement` accepts exactly `any`, `wifi-on` or `wifi-off`.
+The four search/tag controls accept the text described below; other commands
+use literal `value:null`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
 Reload accepts no value and requires the same explicit confirmation. Only the
@@ -694,6 +696,42 @@ the request. This is Kiosk acknowledgement, not independent observation of
 Meta Home foreground, leaving an app, wearer visibility or application/OpenXR
 readiness. Original lookup and signed result recovery never send the command
 again. This request does not add a QFM connection-close or ADB bootstrap step.
+
+**Headset search, filtering and current-selection tags.** `set-search` and
+`filter-tag` change Kiosk's headset UI state, separately from the browser's
+local catalog filter. Blank editor text clears them. `add-tag` and `remove-tag`
+require nonblank text and address Kiosk's selection when the request executes.
+Another wearer or client can change that selection; no atomic named-entry
+binding is provided. The original result displays the selection it reports.
+
+Editor text is trimmed using Core's .NET whitespace rules before review and
+limited to 160 UTF-16 code units. Internal whitespace/control characters remain
+data. The API requires that exact canonical string, or literal null to clear
+search/filter. Empty, padded, oversized, non-string or malformed UTF-16 wire
+values are rejected before native access; the saved original value is never
+silently rewritten. Exported references include the operator text.
+
+Only `set-search` returns bounded `search` and `valueMatches`; only `filter-tag`
+returns bounded `tagFilter` and `valueMatches`. A valid cleared search is the
+literal empty string. Core treats a null or empty filter as clear; the server
+projects that as the literal empty string. Search comparison is ordinal; filter
+comparison uses Core's ordinal case-insensitive rule. The client does not fold
+case or turn missing/null proof into a successful clear.
+
+Only tag commands return `requestedTagPresent`, derived using Core's ordinal
+case-insensitive comparison from the one row matching the returned selected
+key. Add reports presence; Remove reports absence without claiming prior
+presence. No full tag list/document or path is exposed. Missing or duplicate
+selected rows preserve an unknown outcome, even if the actual Core receipt is
+confirmed. These optional fields are absent from the preceding eighteen command
+projections.
+
+Confirmation still requires the exact accepted/completed typed original,
+actual Core receipt, logical ID, command/value and connection/target bindings.
+Missing or contrary proof keeps custody for explicit recovery without another
+Invoke. Status, expiry and cancellation cannot reconcile text/tag effects.
+These controls need no APK, installed/launchable-state check, tag backup or
+file snapshot and infer no application readiness.
 
 **Ask about Wi-Fi ADB after restart** and **Stop asking about Wi-Fi ADB after
 restart** use the existing Core preference commands with literal `value:null`
@@ -750,7 +788,7 @@ The existing execute route adds these closed actions:
 
 | Action | Fields beyond `requestId` and `action` |
 | --- | --- |
-| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (literal null except the requirement), `confirmed:true` |
+| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (canonical text for search/tags, requirement enum, or literal null), `confirmed:true` |
 | `kiosk.direct.request-status` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-result` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-cancel` | `connectionId`, `originalRequestId`, `confirmed:true` |
