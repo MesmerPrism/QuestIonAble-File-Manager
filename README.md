@@ -76,6 +76,9 @@ An explicitly supported launch mode requires separate launch approval and
 captures the exact installed APK once. Launch outcome and archive availability
 are shown separately; neither establishes app readiness, and unresolved work
 never replays.
+The Installed apps section offers a separately approved current-user package
+stop. It reports the shared Core's package/process/activity quiescence proof,
+retains the original request after a lost reply, and never retries a stop.
 Other hosts show explicit protected-staging/owner limitations. The current CLI/WPF remains available for
 the remaining operations while browser parity continues.
 
