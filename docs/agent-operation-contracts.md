@@ -93,16 +93,21 @@ documented.
   confirm only exact manifest readback while the same APK bytes remain installed.
   They are AgentRoutes-only: no WPF, Local API, arbitrary shell,
   generic property, retry, or overwrite surface is admitted.
-- The reviewed agent-only `apk launch-diagnose` exception accepts only one
+- The reviewed `apk launch-diagnose` exception accepts only one
   immutable inspected standalone APK with no installed splits, one exact ready
-  serial, and one new private
-  output directory. It derives package, launcher, a non-shared current-user UID,
+  serial, and one new private output directory or the existing retained v3
+  owner's generated diagnostic reservation. It derives package, launcher, a non-shared current-user UID,
   and UID-bound package/process PIDs;
   arms one fixed UID-filtered logcat process at a device-time fence before one
   resolved launch; then stops and drains that process tree. It exposes no
   caller package, UID, PID, tag, duration, command, shell, or raw-ADB surface,
-  and it does not appear in WPF or the local API. Capture or readback ambiguity
-  remains `outcome_unknown`; never retry the launch automatically.
+  and it does not appear in WPF or the dedicated Local API HTTP executable.
+  The named retained-Core extension admits only `apk.launch-diagnose` through
+  the same immutable input, owner, key, journal and output reservation. A durable
+  conservative launch-intent marker precedes Core invocation; it is not proof of
+  actual dispatch. Actual mutation evidence and archive availability remain
+  separate. Capture or readback ambiguity remains unknown; never retry the
+  launch automatically or infer rollback from local cancellation or cleanup.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes

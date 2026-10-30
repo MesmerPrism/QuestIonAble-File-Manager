@@ -30,6 +30,16 @@ public sealed partial class LocalApiCommandRegistry
         var metadata = entry.Diagnostic ?? throw Input("journal_damaged", "Diagnostic resource metadata is missing.");
         LocalApiV3OperationRequest.RequireBinding(LocalApiV3Contract.Version, entry.OperationId, entry.CommandDigest);
         new LocalApiV3PreflightRequest(LocalApiV3Contract.Version, entry.CommandName, entry.StagedPath, entry.Serial!).Validate();
+        var launch = entry.CommandName == "apk.launch-diagnose";
+        if (launch)
+        {
+            if (metadata.OutputPolicy != LocalApiDiagnosticOutputIntent.LaunchPolicyVersion || metadata.LaunchMayHaveDispatched is null ||
+                metadata.Summary is not null || (metadata.LaunchSummary is null) != (metadata.LaunchMutation is null))
+                throw Input("journal_damaged", "The launch diagnostic policy binding is invalid.");
+        }
+        else if (metadata.OutputPolicy is not null || metadata.LaunchMayHaveDispatched is not null ||
+            metadata.LaunchSummary is not null || metadata.LaunchMutation is not null)
+            throw Input("journal_damaged", "Read-only diagnostic metadata cannot contain launch authority.");
         var snapshot = metadata.Snapshot(entry.OperationId);
         LocalApiDiagnosticOutputReservation.ValidateRecovery(snapshot);
         LocalApiJournal.EnsureV3FutureRowFits(entry);
@@ -54,6 +64,9 @@ public sealed partial class LocalApiCommandRegistry
             (!metadata.Ready && entry.Stage is not (LocalApiOperationStage.Preparing or LocalApiOperationStage.OutcomeUnknownRecoveryRequired)) ||
             (entry.Stage == LocalApiOperationStage.Preparing && (entry.Consumed || entry.Dispatched || metadata.OutputStarted)) ||
             (entry.Stage == LocalApiOperationStage.Preflighted && (entry.Consumed || entry.Dispatched || metadata.OutputStarted)) ||
+            (metadata.LaunchMayHaveDispatched == true && (!entry.Consumed || !metadata.Ready || !metadata.OutputStarted ||
+                !entry.Dispatched || entry.Stage is not (LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested or
+                    LocalApiOperationStage.Completed or LocalApiOperationStage.Failed or LocalApiOperationStage.OutcomeUnknownRecoveryRequired))) ||
             (metadata.OutputStarted && !entry.Consumed) ||
             (entry.Dispatched && !entry.Consumed) ||
             (!metadata.Ready && (entry.Consumed || metadata.OutputStarted)) ||
@@ -62,8 +75,13 @@ public sealed partial class LocalApiCommandRegistry
             (!metadata.OutputStarted && snapshot.Resources.Any(resource => resource.Role != "input" && resource.State != "planned")) ||
             (!metadata.OutputStarted && snapshot.Phase != "reserved" && !(metadata.CleanupStarted && snapshot.Phase == "removed")) ||
             (entry.Stage is LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested && !entry.Consumed) ||
-            (entry.Stage == LocalApiOperationStage.Completed && (!entry.Consumed || !metadata.OutputStarted || metadata.Archive is null || metadata.Summary is null)) ||
-            (metadata.Archive is not null && entry.Stage != LocalApiOperationStage.Completed))
+            (entry.Stage == LocalApiOperationStage.Completed && (!entry.Consumed || !metadata.OutputStarted || metadata.Archive is null ||
+                (launch ? metadata.LaunchSummary is null : metadata.Summary is null))) ||
+            (launch && metadata.LaunchMayHaveDispatched == true && entry.Stage == LocalApiOperationStage.Failed && metadata.LaunchSummary is null) ||
+            (metadata.Archive is not null && (launch
+                ? entry.Stage is not (LocalApiOperationStage.Completed or LocalApiOperationStage.Failed or LocalApiOperationStage.OutcomeUnknownRecoveryRequired) ||
+                    metadata.LaunchSummary is null || metadata.LaunchMutation is null
+                : entry.Stage != LocalApiOperationStage.Completed)))
             throw Input("journal_damaged", "The diagnostic lifecycle binding is invalid.");
         _ = LocalApiV3ApkFacts.FromArtifact(entry.Artifact);
         if (entry.Artifact.Identity.VersionCode <= 0 || entry.Artifact.Identity.SignerSha256 is not { Length: 64 } signer ||
@@ -71,7 +89,18 @@ public sealed partial class LocalApiCommandRegistry
             throw Input("journal_damaged", "The diagnostic APK facts are invalid.");
         if (metadata.Archive is { } descriptor)
         {
-            descriptor.Validate(); metadata.Summary!.Validate();
+            descriptor.Validate();
+            if (launch)
+            {
+                LocalApiV3LaunchProof.Validate(metadata.LaunchSummary!, metadata.LaunchMutation!, entry.Serial!,
+                    metadata.LaunchMayHaveDispatched == true, entry.Stage);
+                // An archive cannot promote custody-loss downgrades of a known
+                // terminal launch proof into a newly available publication.
+                if (entry.Stage == LocalApiOperationStage.OutcomeUnknownRecoveryRequired &&
+                    metadata.LaunchSummary!.Disposition is not ("launchPending" or "outcomeUnknown"))
+                    throw Input("journal_damaged", "The launch archive outcome binding is invalid.");
+            }
+            else metadata.Summary!.Validate();
             var archive = snapshot.Resources.Single(resource => resource.Role == "archive");
             if (descriptor.OutputId != metadata.OutputId || descriptor.SizeBytes != archive.SizeBytes || descriptor.Sha256 != archive.Sha256 ||
                 (!metadata.CleanupStarted && (snapshot.Phase != "sealed" || archive.State != "sealed")) || descriptor.PublishedAt != entry.TerminalAt)
@@ -79,7 +108,10 @@ public sealed partial class LocalApiCommandRegistry
         }
         if (metadata.Summary is not null && metadata.Archive is null)
             throw Input("journal_damaged", "An unpublished diagnostic summary cannot grant availability.");
-        var command = OperatorCommands.DiagnoseInspectedApp(entry.Serial!, entry.StagedPath, Path.Combine(stagedRoot, "d-" + metadata.OutputId[5..]));
+        if (metadata.LaunchSummary is not null)
+            LocalApiV3LaunchProof.Validate(metadata.LaunchSummary, metadata.LaunchMutation!, entry.Serial!,
+                metadata.LaunchMayHaveDispatched == true, entry.Stage);
+        var command = BuildV3Command(launch, entry.Serial!, entry.StagedPath, Path.Combine(stagedRoot, "d-" + metadata.OutputId[5..]));
         if (!FixedDigestEquals(entry.CommandDigest, LocalApiV3Contract.ComputeV3CommandDigest(command, entry.Artifact, snapshot.Intent)))
             throw Input("journal_damaged", "The diagnostic command digest does not match.");
         return command;
@@ -95,7 +127,7 @@ public sealed partial class LocalApiCommandRegistry
             if (row.Stage is LocalApiOperationStage.Preparing or LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested)
                 MarkV3UnknownLocked(operation, "diagnostic_restart_recovery_required");
             else if (row.Stage == LocalApiOperationStage.Preflighted &&
-                (!row.Diagnostic!.Ready || row.Consumed || row.Diagnostic.OutputStarted || row.Diagnostic.CleanupStarted ||
+                (!row.Diagnostic!.Ready || row.Consumed || row.Diagnostic.OutputStarted || row.Diagnostic.LaunchMayHaveDispatched == true || row.Diagnostic.CleanupStarted ||
                     row.Diagnostic.ResourcePhase != "reserved" || row.Diagnostic.Resources.Any(resource => resource.DebtCode is not null ||
                         (resource.Role != "input" && resource.State != "planned"))))
                 throw Input("journal_damaged", "A never-started diagnostic approval contains output allocation.");

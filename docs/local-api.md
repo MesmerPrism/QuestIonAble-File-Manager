@@ -178,7 +178,8 @@ become unknown. Terminal and unknown records retain the existing bounded
 ## V3 retained diagnostics in Core
 
 Core also provides the closed
-`questionable.file_manager.local_api.v3` contract for `apk.diagnose`.
+`questionable.file_manager.local_api.v3` contract for `apk.diagnose` and the
+explicit `apk.launch-diagnose` extension.
 The browser host projects this in-process registry through its closed v3
 routes and private diagnostic controls; see [browser operations](browser-operator.md#retained-private-apk-diagnostics).
 The dedicated Local API HTTP executable does not expose v3 routes. The existing
@@ -192,7 +193,7 @@ The diagnostic path requires Windows NTFS staging and SDK Build Tools. Its
 capabilities describe implementation limits; preparation validates the actual
 source, target and storage.
 
-Preflight accepts only the exact v3 version, `apk.diagnose`, one local base APK,
+Preflight accepts only the exact v3 version, one of these two command literals, one local base APK,
 one ready serial and optional expiry. The default approval lifetime is
 120 seconds, with a 300-second maximum. Source inspection precedes a durable,
 non-executable `preparing` row; copying and staged reinspection must finish
@@ -215,6 +216,40 @@ explicit partial evidence. The 64 KiB encoded-row reservation and 4 MiB
 journal-envelope limit include future metadata growth and Base64 escaping.
 Existing default disk and file limits are unchanged.
 
+Launch diagnostics reuse that conservative reservation but materialize exactly
+`logcat-uid-post-fence.txt` and `launch-diagnostic-manifest.json`. Their separate
+`exact-installed-launch-diagnostic-output.v1` policy binds the same limits plus
+the fixed 262144-byte armed capture, 10000-millisecond post-action window and
+300-second operation deadline. It uses the shared Core launch algorithm and
+actual mutation tracker. Preparation rejects an unsupported armed runner before
+allocating retained resources. No package, component, UID, PID, filter, duration
+or additional command argument is accepted from the caller.
+
+Before Core can arm or launch, journal and anchor acknowledgement must record
+`launchMayHaveDispatched`. This conservative marker is not `sent`: the actual
+Core callback records that only at its fixed launcher boundary. The existing
+`dispatched`/`outputStarted` facts retain their local output-allocation meaning.
+An interrupted or ambiguous marker save cannot authorize a second attempt.
+
+Launch status adds null-omitted `launchSummary`, `mutation` and
+`launchMayHaveDispatched` fields. The safe receipt preserves the actual Core
+operation ID, target, stages, transitions and times, with closed pathless text.
+It exposes no raw command output, UID, PID list, fence, component or filesystem
+path. The read-only action's public shape and canonical digest stay unchanged.
+
+| Acknowledged Core evidence | Original state | Archive |
+| --- | --- | --- |
+| Completed and confirmed actual launch receipt | Completed | Available after publication |
+| Pending or unknown launch/capture evidence | Unknown recovery required | May be available; original remains unresolved |
+| Rejected before dispatch with actual rejected receipt | Failed | May contain the rejected-attempt evidence |
+| Exception or uncertain persistence after possible-launch intent | Unknown recovery required | No new availability inferred |
+
+Cancellation after possible-launch intent and successful deletion of local
+files do not prove that Android did not receive the launch. Status, restart and
+archive reads perform no launch, recapture or automatic sealing. If later
+archive verification fails, the owner preserves an already acknowledged launch
+receipt while reporting the archive unavailable; it never repeats the launch.
+
 A sealed ZIP becomes available only after the terminal journal and anchor
 commit succeeds. Safe status contains bounded intent, capture counts, fixed
 errors and the published descriptor, with no physical paths, native identities,
@@ -226,7 +261,7 @@ identity, size and hash before returning bytes.
 Read acquisition binds the original operation/digest, output ID, expected size
 and SHA-256. Its sealed disposable lease exposes a read-only stream and the
 constant `apk-diagnostics.zip` descriptor. New reads stop at the configured
-terminal-retention boundary, normally 24 hours, while existing leases may
+known-terminal retention boundary, normally 24 hours, while existing leases may
 finish. Physical cleanup of known terminal diagnostics is lazy, on a later v3
 preflight, and uses journaled identity-bound deletion; legacy preflight does
 not initiate that asynchronous cleanup.

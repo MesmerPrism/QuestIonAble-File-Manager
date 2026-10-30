@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace QuestIonAbleFileManager.Core;
 
@@ -10,8 +11,18 @@ internal sealed record LocalApiV3JournalState(
     bool Ready = false, bool OutputStarted = false, bool CleanupStarted = false,
     LocalApiV3DiagnosticSummary? Summary = null, LocalApiV3ArchiveDescriptor? Archive = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OutputPolicy { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LaunchMayHaveDispatched { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LocalApiV3LaunchSummary? LaunchSummary { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OperatorMutationReceipt? LaunchMutation { get; init; }
+
     internal LocalApiDiagnosticOutputSnapshot Snapshot(string operationId) => new(
-        LocalApiDiagnosticOutputIntent.Restore(operationId, OutputId, PlannedLeafDigest), ResourcePhase, Resources);
+        LocalApiV3Contract.RestoreIntent(operationId, OutputId, PlannedLeafDigest,
+            OutputPolicy ?? LocalApiDiagnosticOutputIntent.PolicyVersion), ResourcePhase, Resources);
 
     internal LocalApiV3JournalState WithSnapshot(LocalApiDiagnosticOutputSnapshot snapshot) => this with
     { ResourcePhase = snapshot.Phase, Resources = snapshot.Resources };
@@ -37,11 +48,24 @@ internal sealed partial class LocalApiJournal
         }).ToArray();
         var artifactPath = JsonSerializer.SerializeToUtf8Bytes(row.Artifact.Path, Json).Length >= JsonSerializer.SerializeToUtf8Bytes(row.StagedPath, Json).Length
             ? row.Artifact.Path : row.StagedPath;
+        var launch = row.CommandName == "apk.launch-diagnose";
+        var launchSummary = launch ? new LocalApiV3LaunchSummary("questionable.file_manager.apk_launch_diagnostic_bundle.v1",
+            time, "rejectedBeforeDispatch", true, false, false, false, false, false, int.MinValue,
+            LocalApiDiagnosticOutputIntent.MaximumArmedCaptureBytes, LocalApiDiagnosticOutputIntent.MaximumRequiredStandardOutputBytes) : null;
+        var launchMutation = launch ? new OperatorMutationReceipt("pc-" + new string('f', 32),
+            OperatorCommandKind.LaunchDiagnoseInspectedApp, row.Serial!, "launch-diagnose", OperatorMutationStage.Pending,
+            "launch-confirmed", false, Enumerable.Range(0, 3).Select(_ =>
+                new OperatorMutationTransition(OperatorMutationStage.Confirmed, time, "launch-confirmed")).ToArray()) : null;
+        // The synthetic tuple reserves every future field before the first native
+        // resource acknowledgement. It never becomes executable or effect proof.
+        if (launchMutation is not null && JsonSerializer.SerializeToUtf8Bytes(launchMutation, Json).Length > 4096)
+            throw new LocalApiException("diagnostic_metadata_capacity", "The diagnostic target leaves insufficient bounded launch receipt capacity.");
         var estimate = row with
         {
             Artifact = row.Artifact with { Path = artifactPath }, TerminalAt = time, ErrorCode = new string('e', 64),
             Diagnostic = metadata with { ResourcePhase = "outcomeUnknown", Resources = resources,
-                Summary = new("questionable.file_manager.apk_diagnostic_bundle.v3", time, "complete", 14, 14, 14),
+                Summary = launch ? null : new("questionable.file_manager.apk_diagnostic_bundle.v3", time, "complete", 14, 14, 14),
+                LaunchMayHaveDispatched = launch ? false : null, LaunchSummary = launchSummary, LaunchMutation = launchMutation,
                 Archive = new(metadata.OutputId, "apk-diagnostics.zip", LocalApiDiagnosticOutputIntent.MaximumArchiveBytes, new string('f', 64), time) }
         };
         if (JsonSerializer.SerializeToUtf8Bytes(estimate, Json).Length > MaximumV3RowBytes)

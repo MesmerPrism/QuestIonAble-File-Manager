@@ -191,13 +191,23 @@ public sealed class LocalApiV3ContractTests
     {
         var limits = LocalApiV3OutputIntent.FromIntent(Intent()).Limits;
         limits.Validate();
-        foreach (var property in typeof(LocalApiV3OutputLimits).GetProperties())
+        var properties = typeof(LocalApiV3OutputLimits).GetProperties();
+        Assert.Equal(15, properties.Count(property => Nullable.GetUnderlyingType(property.PropertyType) is null));
+        Assert.Equal(new[] { "MaximumArmedCaptureBytes", "PostActionWindowMilliseconds", "MaximumLaunchOperationSeconds" },
+            properties.Where(property => Nullable.GetUnderlyingType(property.PropertyType) is not null).Select(property => property.Name));
+        foreach (var property in properties)
         {
             var changed = limits with { };
-            var value = property.GetValue(changed)!;
-            property.SetValue(changed, value is int integer ? (object)(integer + 1) : (long)value + 1);
+            var value = property.GetValue(changed);
+            if (Nullable.GetUnderlyingType(property.PropertyType) is not null)
+            {
+                Assert.Null(value);
+                property.SetValue(changed, 1);
+            }
+            else property.SetValue(changed, value is int integer ? (object)(integer + 1) : (long)value! + 1);
             Assert.Throws<LocalApiException>(changed.Validate);
         }
+        Assert.Equal(15, JsonSerializer.SerializeToElement(limits, JsonSerializerOptions.Web).EnumerateObject().Count());
     }
 
     [Theory]
