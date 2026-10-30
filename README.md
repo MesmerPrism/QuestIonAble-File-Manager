@@ -31,7 +31,7 @@ card reads installation facts, explicitly opens its catalog, and selects a revie
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 An explicit USB Direct card adopts one short-lived Kiosk operator connection,
 reads signed status and closes its opaque handle with separate listener cleanup.
-Its Direct controls card provides twenty-three typed Kiosk actions and
+Its Direct controls card provides twenty-four typed Kiosk actions and
 explicit original-result recovery, including the stored preference to ask about
 Wi-Fi ADB after restart. That preference does not establish current connectivity
 or approval of a protected prompt. Separate Wi-Fi ADB request/disable controls
@@ -47,7 +47,10 @@ checks its package and exact connection scope, and retains that review for
 original-result recovery. Selection and later launch or tag edits are separate requests.
 App-provided options returned with that same Select result appear as historical
 observations. Reading the result sends no extra selection or option-discovery
-request; dispatching an option remains a separate CLI/WPF workflow.
+request. Choosing a returned option prepares a separate launch review and
+confirmation. Dispatch still addresses Kiosk's selection at execution time;
+the result must report the reviewed package and exact option ID, without
+claiming atomic app binding, foreground or readiness.
 Accessibility and natural/contour passthrough
 controls confirm only Kiosk's reported flag, mode and applicable LUT state;
 protected prompts remain wearer decisions. Guard-mode acknowledgement does not prove

@@ -130,8 +130,8 @@ for(const [name,state] of Object.entries({disconnected:{connected:false},noConne
   const f=await fixture(t,{state});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isDisabled(),true);await f.page.locator('#direct-command-invoke').evaluate(button=>{button.disabled=false;button.click();});assert.equal(f.calls.length,0);assert.equal(await f.stored(),null);
 });
 
-test('only twenty-three closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
-  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[commands[0],'select',...commands.slice(1),'exit-meta-home',...bootPreferences,...controlCommands,...wifiAdbCommands,'set-search','filter-tag','add-tag','remove-tag']);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
+test('only twenty-four closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
+  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[commands[0],'select','launch-option',...commands.slice(1),'exit-meta-home',...bootPreferences,...controlCommands,...wifiAdbCommands,'set-search','filter-tag','add-tag','remove-tag']);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
   assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-command').selectOption('check-setup-helper');assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.update({authGeneration:2});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(f.calls.length,0);
 });

@@ -39,6 +39,16 @@ internal static class BrowserDirectLaunchOptionsProjection
     private static bool Text(string? value,int maximum,bool nonblank) => value is not null && value.Length<=maximum &&
         (!nonblank || !string.IsNullOrWhiteSpace(value)) && BrowserDirectCommands.IsWellFormedUtf16(value);
 
+    internal static bool ReadyObservation(BrowserDirectLaunchOptions? value,string package)
+    {
+        if(value is not { State:"ready" } || value.PackageName!=package || !BrowserDirectLaunchReviewValidation.Digest(value.BindingSha256) ||
+            value.Options is null || value.Options.Count>RustyKioskContract.MaxLaunchOptions)return false;
+        var ids=new HashSet<string>(StringComparer.Ordinal);
+        return value.Options.All(row=>row is not null && row.SchemaVersion==RustyKioskContract.LaunchOptionSchemaVersion &&
+            Text(row.OptionId,RustyKioskContract.MaxCommandValueLength,true) && ids.Add(row.OptionId) &&
+            Text(row.DisplayLabel,RustyKioskContract.MaxLaunchOptionLabelLength,true) && Text(row.Description,RustyKioskContract.MaxLaunchOptionDescriptionLength,false));
+    }
+
     private static bool BindingValid(RustyKioskLaunchOptionsBinding? value,string? selectedPackage,string expectedPackage)
     {
         if(value is null || value.PackageName!=selectedPackage || value.PackageName!=expectedPackage || value.Uid<=0 || value.VersionCode<0 ||
