@@ -37,6 +37,14 @@ public sealed partial class BrowserRetainedOperations
             throw new BrowserRetainedException("retained_contract_unavailable", 501);
     }
 
+    private void EnsureDiagnosticCommandSupported(string command, BrowserRetainedOwnerCalls? owner = null, bool preflight = false)
+    {
+        if (command == "apk.launch-diagnose" &&
+            (Capability.DiagnosticCommands?.Contains(command, StringComparer.Ordinal) != true ||
+             (owner is not null && owner.DiagnosticCommands?.Contains(command, StringComparer.Ordinal) != true)))
+            throw new BrowserRetainedException("retained_command_unavailable", 501, preflight ? false : null);
+    }
+
     public static BrowserRetainedPreflightRequest ParseV3Preflight(ReadOnlyMemory<byte> body)
     {
         try
@@ -46,7 +54,8 @@ public sealed partial class BrowserRetainedOperations
             if (root.TryGetProperty("expiresInSeconds", out _)) fields.Add("expiresInSeconds");
             RequireFields(root, fields);
             if (Text(root, "contractVersion") != LocalApiV3Contract.Version) throw new BrowserRetainedException("contract_unsupported");
-            if (Text(root, "command") != "apk.diagnose") throw new BrowserRetainedException("command_not_allowed");
+            var command = Text(root, "command");
+            if (command is not ("apk.diagnose" or "apk.launch-diagnose")) throw new BrowserRetainedException("command_not_allowed");
             var artifact = BrowserArtifactCommands.RequireArtifactId(Text(root, "artifactId"));
             var hash = BrowserArtifactCommands.RequireHash(Text(root, "sha256"));
             var size = Size(root, "sizeBytes", BrowserArtifactStore.MaximumFileBytes);
@@ -57,8 +66,8 @@ public sealed partial class BrowserRetainedOperations
                 if (!expiry.TryGetInt32(out var value) || value is < 1 or > 300) throw new BrowserRetainedException("expiry_invalid");
                 expires = value;
             }
-            new LocalApiV3PreflightRequest(LocalApiV3Contract.Version, "apk.diagnose", "base.apk", serial, expires).Validate();
-            return new(artifact, hash, size, "apk.diagnose", serial, null, expires, LocalApiV3Contract.Version);
+            new LocalApiV3PreflightRequest(LocalApiV3Contract.Version, command, "base.apk", serial, expires).Validate();
+            return new(artifact, hash, size, command, serial, null, expires, LocalApiV3Contract.Version);
         }
         catch (Exception exception) { throw BeforeV3Admission(exception); }
     }
@@ -98,6 +107,7 @@ public sealed partial class BrowserRetainedOperations
         try
         {
             using var call = EnterCall(); EnsureV3Supported();
+            EnsureDiagnosticCommandSupported(request.Command, preflight: true);
             using var gate = _tryAcquireOperation() ?? throw new BrowserRetainedException("operation_busy", 409);
             await using var source = await _artifacts().AcquireAsync(request.ArtifactId, request.Sha256, request.SizeBytes, cancellation).ConfigureAwait(false);
             if (source.Receipt.Id != request.ArtifactId || source.Receipt.Sha256 != request.Sha256 || source.Receipt.SizeBytes != request.SizeBytes)
@@ -105,12 +115,13 @@ public sealed partial class BrowserRetainedOperations
             if (!source.Receipt.FileName.EndsWith(".apk", StringComparison.OrdinalIgnoreCase))
                 throw new BrowserRetainedException("artifact_filename_invalid", 400, false);
             var owner = OwnerV3();
+            EnsureDiagnosticCommandSupported(request.Command, owner, preflight: true);
             var nativeRequest = JsonSerializer.SerializeToUtf8Bytes(new LocalApiV3PreflightRequest(LocalApiV3Contract.Version,
-                "apk.diagnose", source.Path, request.Serial!, request.ExpiresInSeconds), Json);
+                request.Command, source.Path, request.Serial!, request.ExpiresInSeconds), Json);
             var value = await owner.PreflightV3!(nativeRequest, cancellation).ConfigureAwait(false);
             try { value.Validate(); }
             catch { throw new BrowserRetainedException("retained_operation_binding_invalid", 409); }
-            if (value.ContractVersion != LocalApiV3Contract.Version || value.Command != "apk.diagnose" || value.Serial != request.Serial ||
+            if (value.ContractVersion != LocalApiV3Contract.Version || value.Command != request.Command || value.Serial != request.Serial ||
                 value.Artifact.SizeBytes != request.SizeBytes || value.Artifact.Sha256 != request.Sha256)
                 throw new BrowserRetainedException("artifact_binding_mismatch", 409);
             return value;
@@ -127,6 +138,7 @@ public sealed partial class BrowserRetainedOperations
             var owner = OwnerV3();
             var nativeBody = V3Body(binding);
             var current = VerifyV3(owner.StatusV3!(nativeBody), binding);
+            EnsureDiagnosticCommandSupported(current.Command, owner);
             IDisposable gate;
             lock (_sync)
             {
@@ -156,7 +168,10 @@ public sealed partial class BrowserRetainedOperations
         try
         {
             using var call = EnterCall(); EnsureV3Supported();
-            return VerifyV3(OwnerV3().StatusV3!(V3Body(binding)), binding);
+            var owner = OwnerV3();
+            var value = VerifyV3(owner.StatusV3!(V3Body(binding)), binding);
+            EnsureDiagnosticCommandSupported(value.Command, owner);
+            return value;
         }
         catch (Exception exception) { throw V3Error(exception); }
     }
@@ -168,6 +183,7 @@ public sealed partial class BrowserRetainedOperations
             using var call = EnterCall(); EnsureV3Supported();
             var owner = OwnerV3(); var nativeBody = V3Body(binding);
             var current = VerifyV3(owner.StatusV3!(nativeBody), binding);
+            EnsureDiagnosticCommandSupported(current.Command, owner);
             return VerifyV3(owner.CancelV3!(nativeBody), binding, current);
         }
         catch (Exception exception) { throw V3Error(exception); }
@@ -178,10 +194,10 @@ public sealed partial class BrowserRetainedOperations
         try { value.Validate(); }
         catch { throw new BrowserRetainedException("retained_operation_binding_invalid", 409); }
         if (value.ContractVersion != LocalApiV3Contract.Version || value.OperationId != binding.OperationId || value.CommandDigest != binding.CommandDigest ||
-            value.Command != "apk.diagnose" || value.Stage == LocalApiOperationStage.CleanupDebt ||
+            value.Command is not ("apk.diagnose" or "apk.launch-diagnose") || value.Stage == LocalApiOperationStage.CleanupDebt ||
             (value.Stage is LocalApiOperationStage.Preparing or LocalApiOperationStage.Preflighted && value.Consumed) ||
             (value.Stage is LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested or LocalApiOperationStage.Completed or LocalApiOperationStage.Expired && !value.Consumed) ||
-            (original is not null && (value.Serial != original.Serial || value.ExpiresAt != original.ExpiresAt || value.Output.Intent != original.Output.Intent)))
+            (original is not null && (value.Command != original.Command || value.Serial != original.Serial || value.ExpiresAt != original.ExpiresAt || value.Output.Intent != original.Output.Intent)))
             throw new BrowserRetainedException("retained_operation_binding_invalid", 409);
         return value;
     }
@@ -195,6 +211,7 @@ public sealed partial class BrowserRetainedOperations
             using var call = EnterCall(); EnsureV3Supported();
             using var gate = _tryAcquireOperation() ?? throw new BrowserRetainedException("operation_busy", 409);
             var owner = OwnerV3(); var status = VerifyV3(owner.StatusV3!(V3Body(binding)), binding);
+            EnsureDiagnosticCommandSupported(status.Command, owner);
             var descriptor = status.Output.Archive;
             if (!status.Output.Available || descriptor is null)
                 throw new BrowserRetainedException("diagnostic_output_unavailable", 409);

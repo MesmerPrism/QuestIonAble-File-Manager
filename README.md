@@ -71,8 +71,11 @@ durable owner supports reviewed inspected install, resolved launch, exact
 single-target deployment and runtime observation without replay after reconnect.
 Its private diagnostics control captures bounded evidence for an exact installed
 APK, preserves the original operation for explicit status recovery, and prepares
-a separate verified ZIP download copy. Capture neither launches an app nor
-establishes app readiness; unresolved captures never replay.
+a separate verified ZIP download copy. Read-only mode never launches an app.
+An explicitly supported launch mode requires separate launch approval and
+captures the exact installed APK once. Launch outcome and archive availability
+are shown separately; neither establishes app readiness, and unresolved work
+never replays.
 Other hosts show explicit protected-staging/owner limitations. The current CLI/WPF remains available for
 the remaining operations while browser parity continues.
 

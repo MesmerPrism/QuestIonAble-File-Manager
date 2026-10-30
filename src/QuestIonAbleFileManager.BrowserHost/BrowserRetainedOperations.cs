@@ -1,11 +1,21 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using QuestIonAbleFileManager.Core;
 
 namespace QuestIonAbleFileManager.BrowserHost;
 
 public sealed record BrowserRetainedCapability(bool Supported, string Code, string Reason, string Alternative,
-    IReadOnlyList<string>? ContractVersions = null);
+    IReadOnlyList<string>? ContractVersions = null)
+{
+    private readonly IReadOnlyList<string>? _diagnosticCommands;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? DiagnosticCommands
+    {
+        get => _diagnosticCommands;
+        init => _diagnosticCommands = BrowserRetainedOperations.CopyDiagnosticCommands(value);
+    }
+}
 public sealed class BrowserRetainedException(string code, int statusCode = 400, bool? dispatched = null) : Exception(code)
 {
     public string Code { get; } = code;
@@ -36,7 +46,15 @@ internal sealed record BrowserRetainedOwnerCalls(
     Func<ReadOnlyMemory<byte>, CancellationToken, Task<LocalApiV3OperationStatus>>? ExecuteV3 = null,
     Func<ReadOnlyMemory<byte>, LocalApiV3OperationStatus>? StatusV3 = null,
     Func<ReadOnlyMemory<byte>, LocalApiV3OperationStatus>? CancelV3 = null,
-    Func<string, string, string, long, string, CancellationToken, Task<BrowserRetainedOutputLease>>? AcquireDiagnosticOutput = null);
+    Func<string, string, string, long, string, CancellationToken, Task<BrowserRetainedOutputLease>>? AcquireDiagnosticOutput = null)
+{
+    private readonly IReadOnlyList<string>? _diagnosticCommands;
+    internal IReadOnlyList<string>? DiagnosticCommands
+    {
+        get => _diagnosticCommands;
+        init => _diagnosticCommands = BrowserRetainedOperations.CopyDiagnosticCommands(value);
+    }
+}
 
 /// <summary>In-process adapter to the existing explicitly configured, versioned retained owner.</summary>
 public sealed partial class BrowserRetainedOperations : IDisposable
@@ -64,7 +82,11 @@ public sealed partial class BrowserRetainedOperations : IDisposable
     {
         _artifacts = artifacts;
         _tryAcquireOperation = tryAcquireOperation ?? TryAcquireLocal;
-        _configuredCapability = () => ConfigurationCapability(readEnvironment, platformSupported, v3: true);
+        _configuredCapability = () =>
+        {
+            var capability = ConfigurationCapability(readEnvironment, platformSupported, v3: true);
+            return capability.Supported ? capability with { DiagnosticCommands = ["apk.diagnose", "apk.launch-diagnose"] } : capability;
+        };
         _owner = new(() =>
         {
             // Settings and integrity key come from the configured existing owner, once.
@@ -77,26 +99,40 @@ public sealed partial class BrowserRetainedOperations : IDisposable
                 {
                     var lease = await registry.AcquireDiagnosticOutputAsync(id, digest, output, size, hash, token).ConfigureAwait(false);
                     return new(lease.Descriptor, lease.Stream, lease);
-                });
+                }) { DiagnosticCommands = ["apk.diagnose", "apk.launch-diagnose"] };
         }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     internal BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, BrowserRetainedOwnerCalls owner,
-        Func<IDisposable?>? tryAcquireOperation = null) : this(artifacts, () => owner, tryAcquireOperation, HasV3(owner)) { }
+        Func<IDisposable?>? tryAcquireOperation = null) : this(artifacts, () => owner, tryAcquireOperation, HasV3(owner), owner.DiagnosticCommands) { }
 
     internal BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, Func<BrowserRetainedOwnerCalls> ownerFactory,
         Func<IDisposable?>? tryAcquireOperation = null, bool supportsV3 = false)
+        : this(artifacts, ownerFactory, tryAcquireOperation, supportsV3, null) { }
+
+    internal BrowserRetainedOperations(Func<BrowserArtifactStore> artifacts, Func<BrowserRetainedOwnerCalls> ownerFactory,
+        Func<IDisposable?>? tryAcquireOperation, bool supportsV3, IReadOnlyList<string>? diagnosticCommands)
     {
         _artifacts = artifacts;
         _tryAcquireOperation = tryAcquireOperation ?? TryAcquireLocal;
-        _configuredCapability = () => Configured(supportsV3);
+        var capability = Configured(supportsV3) with { DiagnosticCommands = diagnosticCommands };
+        _configuredCapability = () => capability;
         _owner = new(ownerFactory);
     }
 
     public BrowserRetainedCapability Capability => _closing ? new(false, "retained_owner_closed", "The retained owner is closing.", "Wait for the current owner to finish safely.") : _ownerFailure ?? (_owner.IsValueCreated
         ? new(true, "available", "The configured retained owner is open in this process.", "Preserve its state and key; reconcile original operation IDs before any new recovery action.",
-            OwnerVersions(_owner.Value))
+            OwnerVersions(_owner.Value)) { DiagnosticCommands = HasV3(_owner.Value) ? _owner.Value.DiagnosticCommands : null }
         : _configuredCapability());
+
+    internal static IReadOnlyList<string>? CopyDiagnosticCommands(IReadOnlyList<string>? commands)
+    {
+        if (commands is null) return null;
+        var copy = commands.ToArray();
+        if (copy.Any(command => command is not ("apk.diagnose" or "apk.launch-diagnose")) ||
+            copy.Distinct(StringComparer.Ordinal).Count() != copy.Length) return null;
+        return Array.AsReadOnly(copy);
+    }
 
     public async Task<LocalApiPreflightResult> PreflightAsync(ReadOnlyMemory<byte> body, CancellationToken cancellation = default)
     {
