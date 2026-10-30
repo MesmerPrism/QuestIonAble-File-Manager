@@ -123,6 +123,7 @@ fields reject, and each action requires exactly its listed fields:
 | `device.actor-identity` | `serial`, `pid` (positive process ID) |
 | `adb.forwards` | `serial` |
 | `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
+| `apk.install-set` | `serial`, 2–8 exact `sources` receipts, four explicit boolean `options`, `confirmed:true`; protected-staging support required; see ordinary APK-set installation below |
 | `apk.preflight` | `serial`, `artifactId`, `sha256`, `sizeBytes` |
 | `runtime.observe` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `verification` exactly `exact` or `development-metadata` |
 | `files.push` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `remotePath` (full absolute destination filename), `confirmOverwrite` exactly `true` |
@@ -183,7 +184,7 @@ running ID is classified as consumed before the busy check.
 Body reads have a five-second deadline. Ordinary admitted ADB commands have a
 90-second cancellation deadline; staged APK inspection/lease acquisition and
 read captures instead share a five-minute lifetime with their bounded runners.
-The explicit package-stop path retains its same native operation through actual
+The explicit package-stop and ordinary APK-set install paths retain their same native operation through actual
 exit and stream drain without that elapsed deadline; connector shutdown requests
 cancellation but still joins its real completion.
 Local profile writes below retain their synchronous owner's real completion
@@ -249,6 +250,56 @@ Transient staging performs local transport and inspection. The separate retained
 workflow below owns inspected single-APK install, launch and runtime observation.
 Remaining advanced deployment options use the existing typed CLI/WPF during
 migration.
+
+## Ordinary APK-set installation
+
+On a Windows host with protected artifact staging, use **Install APK package set** to stage and
+review 2–8 APK parts for one selected ready target. Review each original filename,
+byte length and full SHA-256, select the intended subset, and approve the four
+explicit install options: replace existing, allow downgrade, grant runtime
+permissions and allow test packages. Staging or selecting parts sends no device
+command. The existing single-APK selection remains independent; adding it to the
+set is an explicit local action.
+
+`POST /browser/v1/execute` accepts `action:"apk.install-set"`, `requestId`,
+`serial`, `sources`, `options` and literal `confirmed:true`. Each source contains
+exactly `id`, `fileName`, `sizeBytes`, `sha256` from an upload receipt; options
+contain exactly the booleans `replaceExisting`, `allowDowngrade`,
+`grantRuntimePermissions`, `allowTestPackages`. The 4096-byte request bound still
+applies. No host folder or command arguments are accepted.
+
+The host leases every selected source and creates verified protected copies in
+one private directory containing only that set. Unchanged Core performs one
+ordinary atomic `install-multiple` followed by package inventory refresh. Android
+validates package, version, signer and required-split compatibility. This path
+does not provide inspected retained deployment, installed-byte/signer equality,
+split backup, rollback or app readiness evidence.
+
+The session's `apkSetInstall` capability and the card disclose the limits: eight
+parts, 1 GiB per file, the existing 2 GiB source pool plus a separate 2 GiB work
+copy budget, for 4 GiB of APK payload in the current host process. Cleanup debt
+remains charged. These limits do not bound orphaned data across crashes or
+processes; this feature does not adopt or delete old roots.
+
+The original reference is saved before the sole install request. Keep it after
+a lost reply and explicitly read its cached result with the original request ID.
+Reload and reconnect never replay or automatically recover it. The host retains
+source/copy custody through real process exit and output drain, without a
+90-second install deadline. Only a bound result proving package-manager
+completion and successful inventory refresh acknowledges completion. Any failure
+after Core could start stays unknown, including inventory failure after a
+successful package-manager call. New-session inventory cannot resolve an old
+unknown original.
+
+Work-copy cleanup is separate from Android evidence. A completed installation or
+bound failure before Core entry may release device-original custody while
+reporting cleanup pending. That local debt blocks another APK-set install;
+unrelated separately approved operations remain available after the actual task
+settles. An unknown device outcome retains the existing global mutation block.
+Host shutdown retries exact owned cleanup; no uninstall or general cleanup route
+is added. Acceptance covers real Core with synthetic native transport and the
+shipped browser with intercepted responses; no physical split installation is
+claimed by those checks.
 
 ## APK readiness and runtime reads
 

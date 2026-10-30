@@ -29,6 +29,8 @@ public sealed record BrowserCommandOutcome(
     public BrowserDirectInstallOutcome? KioskDirectInstall { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BrowserPackageStopOutcome? PackageStop { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserApkSetOutcome? ApkSet { get; init; }
 }
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
@@ -54,7 +56,7 @@ public sealed partial class BrowserCommands
     private readonly BrowserDirectConnections? _directConnections;
     private readonly BrowserProfiles? _profiles;
     private readonly BrowserFleet? _fleetStatus;
-    public IReadOnlyList<string> AvailableActions => [.. ArtifactActions, .. DirectActions,
+    public IReadOnlyList<string> AvailableActions => [.. ArtifactActions, .. ApkSetCapability.Supported ? new[] { "apk.install-set" } : [], .. DirectActions,
         .. _profiles?.Capability.Supported == true ? BrowserProfileCommands.Actions : [],
         .. _fleetStatus?.Capability.Supported == true ? BrowserFleetCommands.Actions : []];
     private IReadOnlyList<string> ArtifactActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
@@ -106,6 +108,8 @@ public sealed partial class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
+        if (BrowserApkSetCommands.IsAction(body))
+            return await ExecuteApkSetAsync(BrowserApkSetCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserFleetCommands.IsFleetAction(body))
             return await ExecuteFleetStatusAsync(BrowserFleetCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserProfileCommands.IsProfileAction(body))

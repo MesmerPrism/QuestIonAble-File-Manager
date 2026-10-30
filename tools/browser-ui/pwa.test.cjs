@@ -31,6 +31,8 @@ test('worker verifies every exact shell byte before publishing a versioned cache
 test('all shell bytes and worker logic determine revision; unrendered template fails closed', async () => {
   const old=await renderShell(),next=await renderShell({'/app.js':Buffer.from('upgraded shell')}),fixed=await renderShell({},'\n// worker fix');
   assert.notEqual(old.revision,next.revision);assert.notEqual(old.revision,fixed.revision);
+  const changedSet=await renderShell({'/apk-set-view.js':Buffer.from('changed APK-set module')});
+  assert.notEqual(old.revision,changedSet.revision);
   assert.throws(()=>vm.runInNewContext(old.template,{self:{addEventListener(){}}}),/rendered|manifest/i);
 });
 
@@ -38,9 +40,13 @@ test('offline worker serves only shipped static assets and never handles private
   const { handlers, entries, writes, requests } = await worker();
   const count = writes.length, networkCount = requests.length;
   assert.ok(entries.has('/index.html')); assert.ok(entries.has('/agent.html'));
+  assert.equal(await entries.get('/apk-set-view.js').clone().text(),await fs.readFile(path.join(root,'apk-set-view.js'),'utf8'));
+  assert.match(await entries.get('/index.html').clone().text(),/id="apk-set-view"/);
   for (const input of [
     ['http://127.0.0.1:18129/browser/v1/session', {}],
     ['http://127.0.0.1:18129/browser/v1/execute', { method: 'POST', body: '{}' }],
+    ['http://127.0.0.1:18129/browser/v1/artifacts/receipt-id', {}],
+    ['http://127.0.0.1:18129/browser/v1/requests/original-id', {}],
     ['http://127.0.0.1:18129/index.html?token=secret', {}],
     ['http://127.0.0.1:18129/app.js', { headers: { Authorization: 'Bearer private' } }],
     ['http://elsewhere.example/app.js', {}], ['http://127.0.0.1:18129/private.apk', {}],
