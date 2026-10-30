@@ -44,6 +44,11 @@ async function fixture(t,{respond,status,state={},saved,width=1280,storageFailur
   t.after(()=>assert.deepEqual(errors,[],'No uncaught command UI errors'));return {page,calls,records,scope,update,invoke,recovery,cancel,stored};
 }
 
+test('shipped Direct menu exposes one explicitly named Request Meta Home option',async t=>{
+  const f=await fixture(t),option=f.page.locator('#direct-command-command option[value="exit-meta-home"]');
+  assert.equal(await option.count(),1);assert.equal(await option.textContent(),'Request Meta Home');assert.equal(f.calls.length,0);
+});
+
 for(const command of commands)test('explicit closed command '+command+' saves logical identity before its single POST',async t=>{
   const f=await fixture(t);assert.equal(f.calls.length,0);await f.invoke(command,'wifi-off');const call=f.calls[0],ref=call.saved.original;
   assert.equal(call.body.action,'kiosk.direct.invoke');assert.equal(call.body.confirmed,true);assert.equal(call.body.value,command==='set-launch-requirement'?'wifi-off':null);
@@ -125,8 +130,8 @@ for(const [name,state] of Object.entries({disconnected:{connected:false},noConne
   const f=await fixture(t,{state});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isDisabled(),true);await f.page.locator('#direct-command-invoke').evaluate(button=>{button.disabled=false;button.click();});assert.equal(f.calls.length,0);assert.equal(await f.stored(),null);
 });
 
-test('only seventeen closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
-  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[...commands,...bootPreferences,...controlCommands,...wifiAdbCommands]);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
+test('only eighteen closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
+  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[...commands,'exit-meta-home',...bootPreferences,...controlCommands,...wifiAdbCommands]);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
   assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-command').selectOption('check-setup-helper');assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.update({authGeneration:2});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(f.calls.length,0);
 });
@@ -361,3 +366,70 @@ for(const command of wifiAdbCommands){
 test('old fifteen result shapes omit Wi-Fi ADB flag even when unrelated typed data contains it',async t=>{for(const command of [...commands,...bootPreferences,...controlCommands]){const f=await fixture(t,{respond:(route,body,v)=>{v.kioskDirectCommand.typedResult.wifiAdbEnabled=true;return route.fulfill({json:v});}});await f.invoke(command);assert.equal(await f.stored(),null);assert.equal(await f.page.evaluate(()=>Object.hasOwn(window.latest.value.typedResult,'wifiAdbEnabled')),false);}});
 test('Wi-Fi ADB typed recovery leaves separate uncertain cancellation and cleanup custody intact',async t=>{const f=await fixture(t,{respond:(route,body,v)=>['kiosk.direct.invoke','kiosk.direct.request-cancel'].includes(body.action)?route.abort('failed'):route.fulfill({json:v})});await f.invoke('request-wifi-adb');await f.cancel();const before=await f.stored();await f.recovery('request-result');const after=await f.stored();assert.equal(after.original,null);assert.deepEqual(after.cancellation,before.cancellation);assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);assert.deepEqual(await f.page.evaluate(()=>window.view.getCleanupReference()),{sessionId:before.cancellation.sessionId,connectionId:before.cancellation.connectionId});});
 test('wireless-disable warning is visible on selection before existing approval and sends nothing',async t=>{const f=await fixture(t);await f.page.locator('#direct-command-command').selectOption('disable-wifi-adb');assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(await f.page.locator('#direct-command-boundary').isVisible(),true);assert.match(await f.page.locator('#direct-command-boundary').textContent(),/Disabling Wi-Fi ADB may immediately close an existing wireless ADB connection\./);assert.equal(f.calls.length,0);await f.page.locator('#direct-command-command').selectOption('request-wifi-adb');assert.doesNotMatch(await f.page.locator('#direct-command-boundary').textContent(),/immediately close/);assert.equal(f.calls.length,0);});
+
+test('Meta Home selection is inert and requires fresh approval before one literal null request',async t=>{
+  const f=await fixture(t);await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-command').selectOption('exit-meta-home');
+  assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);
+  assert.match(await f.page.locator('#direct-command-boundary').textContent(),/Only Kiosk.s acceptance and completion.*Meta Home foreground, leaving an app, wearer visibility and application\/OpenXR readiness remain unverified/);
+  assert.equal(f.calls.length,0);await f.update({authGeneration:2});assert.equal(f.calls.length,0);
+  await f.invoke('exit-meta-home');const call=f.calls[0],ref=call.saved.original;
+  assert.deepEqual(Object.keys(call.body).sort(),['requestId','action','connectionId','command','value','confirmed'].sort());
+  assert.equal(call.body.command,'exit-meta-home');assert.equal(call.body.value,null);assert.equal(call.body.confirmed,true);
+  assert.equal(ref.requestId,call.body.requestId);assert.equal(ref.logicalRequestId,logical(call.body.requestId));assert.equal(ref.connectionId,f.scope.connectionId);
+  assert.equal(ref.serial,f.scope.serial);assert.equal(ref.productChannel,f.scope.productChannel);assert.equal(ref.command,'exit-meta-home');assert.equal(ref.value,null);
+  assert.equal(await f.stored(),null);assert.equal(f.calls.length,1);
+  const latest=await f.page.evaluate(()=>window.latest);assert.match(latest.summary,/Kiosk acknowledged the Meta Home request as accepted and completed/);
+  assert.match(latest.summary,/Meta Home foreground, leaving an app, wearer visibility and application\/OpenXR readiness remain unverified/);
+  assert.deepEqual(Object.keys(latest.value.typedResult).sort(),Object.keys(typed('exit-meta-home',ref.logicalRequestId,null)).sort());
+});
+
+for(const [field,change] of Object.entries(crossed))test('Meta Home crossed '+field+' cannot acknowledge or replace its original',async t=>{
+  const f=await fixture(t,{respond:(route,body,v)=>{change(v);return route.fulfill({json:v});}});await f.invoke('exit-meta-home');
+  assert.equal((await f.stored()).original.command,'exit-meta-home');assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);
+  assert.equal(await f.page.evaluate(()=>window.siblingBlocked),true);assert.equal(await f.page.evaluate(()=>window.latest),undefined);assert.equal(f.calls.length,1);
+});
+
+for(const [name,change] of [
+  ['not accepted',v=>v.kioskDirectCommand.typedResult.accepted=false],['not completed',v=>v.kioskDirectCommand.typedResult.completed=false],
+  ['missing typed result',v=>v.kioskDirectCommand.typedResult=null],['missing receipt',v=>v.kioskDirectCommand.coreReceipt=null],
+  ['pending receipt',v=>v.kioskDirectCommand.coreReceipt.stage='pendingWearerAction'],['unknown effect',v=>v.kioskDirectCommand.originalEffect='unknown'],
+  ['no reconciliation',v=>v.kioskDirectCommand.reconcilesOriginal=false],['pending envelope',v=>v.state='pending'],
+  ['lifecycle alone',v=>{const d=v.kioskDirectCommand;d.typedResult=null;d.lifecycle={requestId:d.logicalRequestId,operationState:'confirmed',accepted:true,completed:true,enqueuedAtMs:1000,expiresAtMs:2000};}]
+])test('Meta Home '+name+' keeps its exact original unresolved',async t=>{
+  const f=await fixture(t,{respond:(route,body,v)=>{change(v);return route.fulfill({json:v});}});await f.invoke('exit-meta-home');
+  assert.equal((await f.stored()).original.command,'exit-meta-home');assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);
+  assert.doesNotMatch(await f.page.locator('#direct-command-state').textContent(),/acknowledged the Meta Home request/i);assert.equal(f.calls.length,1);
+});
+
+for(const pending of [true,null])test('Meta Home acknowledges only the request despite unrelated pending launch '+pending,async t=>{
+  const f=await fixture(t,{respond:(route,body,v)=>{v.kioskDirectCommand.typedResult.pendingRequirementLaunch=pending;return route.fulfill({json:v});}});await f.invoke('exit-meta-home');
+  assert.equal(await f.stored(),null);assert.match(await f.page.locator('#direct-command-state').textContent(),/acknowledged the Meta Home request.*foreground.*leaving an app.*wearer visibility.*readiness remain unverified/i);
+});
+
+test('Meta Home lost acknowledgement survives reload and lifecycle; exact provider result recovers without replay',async t=>{
+  const f=await fixture(t,{respond:(route,body,v)=>body.action==='kiosk.direct.invoke'?route.abort('failed'):route.fulfill({json:v})});await f.invoke('exit-meta-home');const before=await f.stored();
+  await f.page.reload();await f.page.waitForFunction(()=>window.fixtureReady);assert.deepEqual(await f.stored(),before);assert.equal(f.calls.length,1);
+  await f.recovery('request-status');assert.deepEqual(await f.stored(),before);await f.recovery('request-result');assert.equal(await f.stored(),null);
+  assert.equal(f.calls.at(-1).body.originalRequestId,before.original.requestId);assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);
+});
+
+for(const [name,patch] of Object.entries({auth:{authGeneration:2},disconnect:{connected:false},connection:{connection:{...connection(),connectionId:'d1234567-1234-4234-8234-123456789abc'}},generation:{connection:{...connection(),connectRequestId:'d1234567-1234-4234-8234-123456789abc',usbOperationId:'usb_d1234567123442348234123456789abc'}},target:{connection:{...connection(),serial:'OTHER_USB'}},channel:{connection:{...connection(),productChannel:'labs'}}}))test('Meta Home late '+name+' reply preserves original until its explicit cached GET',async t=>{
+  let release,held;const received=new Promise(r=>release=r);const f=await fixture(t,{respond:(route,body,v)=>{held=()=>route.fulfill({json:v});release();}});
+  const running=f.invoke('exit-meta-home');try{await received;const before=await f.stored();await f.update(patch);await held();await running;assert.deepEqual(await f.stored(),before);assert.equal(await f.page.evaluate(()=>window.latest),undefined);
+    await f.update({connected:true});await f.page.locator('#direct-command-original-status').click();await f.page.waitForFunction(()=>!window.view.hasUnresolved());assert.equal(f.calls.filter(c=>c.method==='POST').length,1);
+  }finally{if(held)await held().catch(()=>{});await running;}
+});
+
+test('Meta Home expired connection blocks native recovery while exact cached GET can acknowledge original',async t=>{
+  const f=await fixture(t,{respond:route=>route.abort('failed')});await f.invoke('exit-meta-home');const before=await f.stored();
+  await f.update({connection:{...f.scope,expiresAtUtc:new Date(Date.now()-1000).toISOString()}});assert.equal(await f.page.locator('#direct-command-request-result').isDisabled(),true);
+  await f.page.locator('#direct-command-original-status').click();await f.page.waitForFunction(()=>!window.view.hasUnresolved());assert.equal(await f.stored(),null);
+  assert.equal(f.calls.at(-1).path,'/browser/v1/requests/'+before.original.requestId);assert.equal(f.calls.filter(c=>c.method==='POST').length,1);
+});
+
+test('Meta Home provider recovery preserves separate uncertain cancellation and cleanup custody',async t=>{
+  const f=await fixture(t,{respond:(route,body,v)=>['kiosk.direct.invoke','kiosk.direct.request-cancel'].includes(body.action)?route.abort('failed'):route.fulfill({json:v})});
+  await f.invoke('exit-meta-home');await f.cancel();const before=await f.stored();await f.recovery('request-result');const after=await f.stored();
+  assert.equal(after.original,null);assert.deepEqual(after.cancellation,before.cancellation);assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);
+  assert.deepEqual(await f.page.evaluate(()=>window.view.getCleanupReference()),{sessionId:before.cancellation.sessionId,connectionId:before.cancellation.connectionId});assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);
+});

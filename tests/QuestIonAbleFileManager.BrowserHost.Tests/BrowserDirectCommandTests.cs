@@ -38,6 +38,18 @@ public sealed class BrowserDirectCommandTests
         Assert.Equal(value, core.Value); Assert.Equal(request.LogicalRequestId, core.RequestId);
     }
     [Fact]
+    public void MetaHomeAdmitsOnlyTheExistingNullValueCoreCommand()
+    {
+        var parsed = BrowserDirectCommands.Parse(Body(command: "exit-meta-home", id: Original));
+        Assert.Equal(RustyKioskCommand.ExitMetaHome, parsed.Command); Assert.Null(parsed.Value);
+        Assert.True(parsed.Mutation); Assert.Equal(Handle, parsed.ConnectionId);
+        Assert.Equal("kiosk_00000000000040008000000000000003", parsed.LogicalRequestId);
+        var core = KioskDirectOperatorCommand.Invoke(parsed.Command!.Value, parsed.Value, true, parsed.LogicalRequestId);
+        Assert.Equal(RustyKioskCommand.ExitMetaHome, core.KioskCommand); Assert.Null(core.Value);
+        Assert.Equal(parsed.LogicalRequestId, core.RequestId);
+    }
+
+    [Fact]
     public void AllTwentySixEnumsHaveAnExplicitInOrOutBoundary()
     {
         var initial = new[] { RustyKioskCommand.Status, RustyKioskCommand.ShowControls, RustyKioskCommand.ShowApps,
@@ -45,7 +57,7 @@ public sealed class BrowserDirectCommandTests
             RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload,
             RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
             RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour,
-            RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb };
+            RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb, RustyKioskCommand.ExitMetaHome };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
@@ -100,26 +112,67 @@ public sealed class BrowserDirectCommandTests
         Assert.Equal("direct_command_unsupported", Assert.Throws<BrowserRequestException>(() => BrowserDirectCommands.Parse(Body(command: "Status"))).Code);
     }
 
-    [Fact]
-    public async Task ReloadUsesOneNullValueCoreInvokeAndBoundAcknowledgement()
+    [Theory]
+    [InlineData("reload", RustyKioskCommand.Reload)]
+    [InlineData("exit-meta-home", RustyKioskCommand.ExitMetaHome)]
+    public async Task AcknowledgementOnlyCommandsUseOneNullValueCoreInvokeAndBoundAcknowledgement(string wire, RustyKioskCommand expected)
     {
-        var parsed = BrowserDirectCommands.Parse(Body(command: "reload", id: Original));
-        Assert.Equal(RustyKioskCommand.Reload, parsed.Command); Assert.Null(parsed.Value);
+        var parsed = BrowserDirectCommands.Parse(Body(command: wire, id: Original));
+        Assert.Equal(expected, parsed.Command); Assert.Null(parsed.Value);
         var fixture = await BrowserDirectCommandBrokerTests.Fixture.Create();
         try
         {
-            var outcome = await fixture.Invoke("reload");
+            var outcome = await fixture.Invoke(wire);
             Assert.Equal("completed", outcome.State); Assert.Null(outcome.Result); Assert.Null(outcome.Mutation);
             var facts = outcome.KioskDirectCommand!;
-            Assert.Equal("reload", facts.Command); Assert.Null(facts.Value);
+            Assert.Equal(wire, facts.Command); Assert.Null(facts.Value);
             Assert.Equal("confirmed", facts.OriginalEffect); Assert.True(facts.ReconcilesOriginal);
-            Assert.Equal("reload", facts.TypedResult!.Command); Assert.True(facts.TypedResult.Accepted); Assert.True(facts.TypedResult.Completed);
+            Assert.Equal(wire, facts.TypedResult!.Command); Assert.True(facts.TypedResult.Accepted); Assert.True(facts.TypedResult.Completed);
             Assert.Equal(OperatorMutationStage.Confirmed, facts.CoreReceipt!.Stage);
             var invoke = Assert.Single(fixture.Native.Core, item => item.Action == KioskDirectOperatorAction.Invoke);
-            Assert.Equal(RustyKioskCommand.Reload, invoke.KioskCommand); Assert.Null(invoke.Value);
+            Assert.Equal(expected, invoke.KioskCommand); Assert.Null(invoke.Value);
             Assert.Equal(facts.LogicalRequestId, invoke.RequestId); Assert.Equal(invoke.ActionId, facts.CoreReceipt.ActionId);
             Assert.Equal(KioskDirectOperatorAction.Invoke, facts.CoreReceipt.Action);
             Assert.Equal(facts.LogicalRequestId, facts.CoreReceipt.RequestId);
+        }
+        finally { Assert.True(await fixture.Owner.ShutdownAsync()); }
+    }
+
+    [Theory]
+    [InlineData("missing-value", "fields_invalid")]
+    [InlineData("string-value", "direct_value_invalid")]
+    [InlineData("bool-value", "direct_value_invalid")]
+    [InlineData("array-value", "direct_value_invalid")]
+    [InlineData("unconfirmed", "confirmation_required")]
+    [InlineData("missing-confirmation", "fields_invalid")]
+    [InlineData("case-command", "direct_command_unsupported")]
+    [InlineData("logical-id", "fields_invalid")]
+    [InlineData("endpoint", "fields_invalid")]
+    [InlineData("connection-close", "fields_invalid")]
+    public async Task InvalidMetaHomeAuthorityCannotAccessNativeOrConsumeItsRequest(string variant, string code)
+    {
+        var fixture = await BrowserDirectCommandBrokerTests.Fixture.Create();
+        try
+        {
+            var id = Guid.NewGuid().ToString("D");
+            var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Body(command: "exit-meta-home", id: id, handle: fixture.Handle))!;
+            switch (variant)
+            {
+                case "missing-value": fields.Remove("value"); break;
+                case "string-value": fields["value"] = JsonSerializer.SerializeToElement(""); break;
+                case "bool-value": fields["value"] = JsonSerializer.SerializeToElement(false); break;
+                case "array-value": fields["value"] = JsonSerializer.SerializeToElement(Array.Empty<string>()); break;
+                case "unconfirmed": fields["confirmed"] = JsonSerializer.SerializeToElement(false); break;
+                case "missing-confirmation": fields.Remove("confirmed"); break;
+                case "case-command": fields["command"] = JsonSerializer.SerializeToElement("Exit-Meta-Home"); break;
+                case "logical-id": fields["logicalRequestId"] = JsonSerializer.SerializeToElement("kiosk_attacker"); break;
+                case "endpoint": fields["endpoint"] = JsonSerializer.SerializeToElement("https://example.invalid"); break;
+                default: fields["connectionClose"] = JsonSerializer.SerializeToElement(true); break;
+            }
+            var before = fixture.Native.Core.Count;
+            var error = await Assert.ThrowsAsync<BrowserRequestException>(() => fixture.Broker.ExecuteAsync(JsonSerializer.SerializeToUtf8Bytes(fields)));
+            Assert.Equal(code, error.Code); Assert.True(error.Dispatched == false); Assert.Equal(before, fixture.Native.Core.Count);
+            Assert.Equal("request_not_found", Assert.Throws<BrowserRequestException>(() => fixture.Broker.Get(id)).Code);
         }
         finally { Assert.True(await fixture.Owner.ShutdownAsync()); }
     }
@@ -151,14 +204,24 @@ public sealed class BrowserDirectCommandTests
     }
 
     [Theory]
-    [InlineData("command")]
-    [InlineData("request-id")]
-    [InlineData("accepted")]
-    [InlineData("completed")]
-    [InlineData("receipt-id")]
-    [InlineData("receipt-stage")]
-    [InlineData("invalid-stage")]
-    public async Task ReloadCannotConfirmCrossedOrUnacknowledgedCoreEvidence(string variant)
+    [InlineData("reload", "command")]
+    [InlineData("reload", "request-id")]
+    [InlineData("reload", "accepted")]
+    [InlineData("reload", "completed")]
+    [InlineData("reload", "receipt-id")]
+    [InlineData("reload", "receipt-stage")]
+    [InlineData("reload", "invalid-stage")]
+    [InlineData("exit-meta-home", "command")]
+    [InlineData("exit-meta-home", "request-id")]
+    [InlineData("exit-meta-home", "accepted")]
+    [InlineData("exit-meta-home", "completed")]
+    [InlineData("exit-meta-home", "receipt-id")]
+    [InlineData("exit-meta-home", "receipt-request")]
+    [InlineData("exit-meta-home", "receipt-action")]
+    [InlineData("exit-meta-home", "native-command")]
+    [InlineData("exit-meta-home", "receipt-stage")]
+    [InlineData("exit-meta-home", "invalid-stage")]
+    public async Task AcknowledgementOnlyCommandsCannotConfirmCrossedOrUnacknowledgedCoreEvidence(string wire, string variant)
     {
         var fixture = await BrowserDirectCommandBrokerTests.Fixture.Create();
         try
@@ -170,10 +233,13 @@ public sealed class BrowserDirectCommandTests
                 "accepted" => result with { KioskResult = result.KioskResult! with { Accepted = false } },
                 "completed" => result with { KioskResult = result.KioskResult! with { Completed = false } },
                 "receipt-id" => result with { Mutation = result.Mutation with { ActionId = "crossed-action" } },
+                "receipt-request" => result with { Mutation = result.Mutation with { RequestId = "crossed-request" } },
+                "receipt-action" => result with { Mutation = result.Mutation with { Action = KioskDirectOperatorAction.Status } },
+                "native-command" => result with { Command = result.Command with { KioskCommand = RustyKioskCommand.Status } },
                 "receipt-stage" => result with { Mutation = result.Mutation with { Stage = OperatorMutationStage.PendingWearerAction } },
                 _ => result with { Mutation = result.Mutation with { Stage = (OperatorMutationStage)999 } }
             };
-            var outcome = await fixture.Invoke("reload");
+            var outcome = await fixture.Invoke(wire);
             Assert.Equal("outcomeUnknown", outcome.State); Assert.Equal("unknown", outcome.KioskDirectCommand!.OriginalEffect);
             Assert.False(outcome.KioskDirectCommand.ReconcilesOriginal); Assert.Null(outcome.KioskDirectCommand.TypedResult);
             Assert.Null(outcome.KioskDirectCommand.CoreReceipt);
@@ -181,14 +247,16 @@ public sealed class BrowserDirectCommandTests
         finally { Assert.True(await fixture.Owner.ShutdownAsync()); }
     }
 
-    [Fact]
-    public async Task LostReloadAcknowledgementRecoversSameLogicalResultWithoutReplayOrRewritingOriginal()
+    [Theory]
+    [InlineData("reload")]
+    [InlineData("exit-meta-home")]
+    public async Task LostAcknowledgementRecoversSameLogicalResultWithoutReplayOrRewritingOriginal(string wire)
     {
         var fixture = await BrowserDirectCommandBrokerTests.Fixture.Create();
         try
         {
             fixture.Native.Transform = (_, _) => throw new IOException("lost acknowledgement");
-            var id = Guid.NewGuid().ToString("D"); var body = Body(command: "reload", id: id, handle: fixture.Handle);
+            var id = Guid.NewGuid().ToString("D"); var body = Body(command: wire, id: id, handle: fixture.Handle);
             var original = await fixture.Broker.ExecuteAsync(body);
             Assert.Equal("outcomeUnknown", original.State); Assert.Same(original, fixture.Broker.Get(id));
             fixture.Native.Transform = null;
@@ -198,7 +266,7 @@ public sealed class BrowserDirectCommandTests
             fixture.Native.Lifecycle = null;
             var recovered = await fixture.Recover("kiosk.direct.request-result", id);
             Assert.Equal("completed", recovered.State); Assert.True(recovered.KioskDirectCommand!.ReconcilesOriginal);
-            Assert.Equal("reload", recovered.KioskDirectCommand.TypedResult!.Command);
+            Assert.Equal(wire, recovered.KioskDirectCommand.TypedResult!.Command);
             Assert.Equal(original.KioskDirectCommand!.LogicalRequestId, recovered.KioskDirectCommand.LogicalRequestId);
             Assert.Equal(id, recovered.KioskDirectCommand.OriginalRequestId); Assert.Same(original, fixture.Broker.Get(id));
             var duplicate = await Assert.ThrowsAsync<BrowserRequestException>(() => fixture.Broker.ExecuteAsync(body));

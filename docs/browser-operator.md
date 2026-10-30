@@ -672,7 +672,7 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its seventeen commands are `status`, `show-controls`, `show-apps`, `reload`,
+connection above. Its eighteen commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
 `disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
@@ -686,6 +686,14 @@ original command's bound, accepted and completed typed result with Core's
 confirmed receipt acknowledges the provider reload. This does not prove a
 fresh catalog, foreground, application or OpenXR readiness. A lost reply uses
 the same explicit original-result lookup and never repeats Reload.
+
+**Request Meta Home** sends the existing `exit-meta-home` command with literal
+`value:null` and the same separate confirmation. Only its bound, accepted and
+completed typed result plus Core's matching confirmed receipt acknowledges
+the request. This is Kiosk acknowledgement, not independent observation of
+Meta Home foreground, leaving an app, wearer visibility or application/OpenXR
+readiness. Original lookup and signed result recovery never send the command
+again. This request does not add a QFM connection-close or ADB bootstrap step.
 
 **Ask about Wi-Fi ADB after restart** and **Stop asking about Wi-Fi ADB after
 restart** use the existing Core preference commands with literal `value:null`

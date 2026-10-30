@@ -178,6 +178,7 @@ public static class BrowserDirectCommands
         "show-controls" => RustyKioskCommand.ShowControls,
         "show-apps" => RustyKioskCommand.ShowApps,
         "reload" => RustyKioskCommand.Reload,
+        "exit-meta-home" => RustyKioskCommand.ExitMetaHome,
         "enable-wifi-adb-after-boot" => RustyKioskCommand.EnableWifiAfterBoot,
         "disable-wifi-adb-after-boot" => RustyKioskCommand.DisableWifiAfterBoot,
         "enable-accessibility" => RustyKioskCommand.EnableAccessibility,
