@@ -189,6 +189,10 @@ public static class BrowserDirectCommands
         "disable-wifi-adb" => RustyKioskCommand.DisableWifiAdb,
         "check-setup-helper" => RustyKioskCommand.CheckSetupHelper,
         "set-launch-requirement" => RustyKioskCommand.SetLaunchRequirement,
+        "set-search" => RustyKioskCommand.SetSearch,
+        "filter-tag" => RustyKioskCommand.FilterTag,
+        "add-tag" => RustyKioskCommand.AddTag,
+        "remove-tag" => RustyKioskCommand.RemoveTag,
         "cancel-pending-launch" => RustyKioskCommand.CancelPendingLaunch,
         "launch-normal" => RustyKioskCommand.LaunchNormal,
         "launch-kiosk" => RustyKioskCommand.LaunchKiosk,
@@ -196,8 +200,29 @@ public static class BrowserDirectCommands
     };
     internal static void ValidateValue(RustyKioskCommand command, string? value)
     {
+        if (command is RustyKioskCommand.SetSearch or RustyKioskCommand.FilterTag or RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag)
+        {
+            if (value is not null && !IsWellFormedUtf16(value)) throw new BrowserRequestException("direct_value_invalid");
+            try
+            {
+                if (KioskDirectOperatorCommand.Invoke(command, value, true).Value != value)
+                    throw new BrowserRequestException("direct_value_invalid");
+            }
+            catch (ArgumentException) { throw new BrowserRequestException("direct_value_invalid"); }
+            return;
+        }
         if (command == RustyKioskCommand.SetLaunchRequirement ? value is not ("any" or "wifi-on" or "wifi-off") : value is not null)
             throw new BrowserRequestException("direct_value_invalid");
         if (KioskDirectOperatorCommand.Invoke(command, value, true).Value != value) throw new BrowserRequestException("direct_value_invalid");
+    }
+    internal static bool IsWellFormedUtf16(string value)
+    {
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!char.IsSurrogate(value[index])) continue;
+            if (!char.IsHighSurrogate(value[index]) || index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1])) return false;
+            index++;
+        }
+        return true;
     }
 }

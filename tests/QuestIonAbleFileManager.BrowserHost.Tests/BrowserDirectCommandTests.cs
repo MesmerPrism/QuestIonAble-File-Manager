@@ -57,11 +57,13 @@ public sealed class BrowserDirectCommandTests
             RustyKioskCommand.LaunchNormal, RustyKioskCommand.LaunchKiosk, RustyKioskCommand.Reload,
             RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
             RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour,
-            RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb, RustyKioskCommand.ExitMetaHome };
+            RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb, RustyKioskCommand.ExitMetaHome,
+            RustyKioskCommand.SetSearch, RustyKioskCommand.FilterTag, RustyKioskCommand.AddTag, RustyKioskCommand.RemoveTag };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
-            var body = Body(command: command.ToWireName(), value: command == RustyKioskCommand.SetLaunchRequirement ? "any" : null);
+            var body = Body(command: command.ToWireName(), value: command == RustyKioskCommand.SetLaunchRequirement ? "any" :
+                command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag ? "tag" : null);
             if (initial.Contains(command)) Assert.Equal(command, BrowserDirectCommands.Parse(body).Command);
             else Assert.Equal("direct_command_unsupported", Assert.Throws<BrowserRequestException>(() => BrowserDirectCommands.Parse(body)).Code);
         }

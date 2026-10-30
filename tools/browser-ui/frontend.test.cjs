@@ -457,7 +457,8 @@ for(const [command,desired,contrary] of directControlCases)test('real app Direct
       typedResult:{schema:'rusty.kiosk.cli_result.v1',requestId:logicalRequestId,command,accepted:true,completed:true,controlsOpen:null,selectedKey:null,selectedPackage:null,selectedInstalled:false,selectedLaunchable:false,selectedLaunchRequirement:null,pendingRequirementLaunch:null,guardArmed:false,setupHelperInstalled:false,setupHelperReady:false,selectedEntry:null,...(recovery?desired:contrary)}}};
     retained.set(body.requestId,value);return route.fulfill({json:value});
   }});
-  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll((options,count)=>options.slice(-count).map(option=>option.value),directControlCases.length),directControlCases.map(([command])=>command));
+  const controlCommands=directControlCases.map(([command])=>command);
+  assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll((options,names)=>options.map(option=>option.value).filter(value=>names.includes(value)),controlCommands),controlCommands);
   await adoptDirectForTags(f);await f.page.locator('#direct-command-command').selectOption(command);
   if(command==='disable-wifi-adb')assert.match(await f.page.locator('#direct-command-boundary').textContent(),/may immediately close an existing wireless ADB connection/);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-invoke').click();await f.settled();

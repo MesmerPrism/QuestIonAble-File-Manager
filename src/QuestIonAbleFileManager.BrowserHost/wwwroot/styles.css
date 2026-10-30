@@ -5,3 +5,5 @@
 .apk-facts{font-size:14px}.apk-facts div{display:grid;grid-template-columns:140px minmax(0,1fr);gap:12px;border-bottom:1px solid var(--line);padding:6px 0}.apk-facts dd{margin:0;overflow-wrap:anywhere}#apk-upload{margin:4px 0 12px;max-width:100%}#artifact-state,#package-stop-state{overflow-wrap:anywhere}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 #direct-staging-view table{width:100%;table-layout:fixed;border-collapse:collapse;text-align:left;font-size:14px}#direct-staging-view th,#direct-staging-view td{padding:6px;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}#direct-staging-view th:first-child{width:50%}#direct-staging-view .direct-staging-name{white-space:pre-wrap}
+
+#direct-command-text{display:block;width:100%;max-width:100%;resize:vertical;font:inherit;border:1px solid #beb6ae;border-radius:3px;padding:6px 10px;background:#fffdfa;color:var(--text)}#direct-command-text:focus-visible{outline:3px solid var(--accent);outline-offset:4px}
