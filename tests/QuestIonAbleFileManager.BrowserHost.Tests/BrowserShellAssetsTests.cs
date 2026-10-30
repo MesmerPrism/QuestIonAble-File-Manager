@@ -30,6 +30,8 @@ public sealed class BrowserShellAssetsTests : IDisposable
         Assert.DoesNotContain("QFM_SHELL_MANIFEST", first);
         using var manifest = Manifest(first);
         var assets = manifest.RootElement.GetProperty("assets");
+        Assert.Contains("/apk-set-view.js", BrowserShellAssets.Paths);
+        Assert.True(BrowserSecurity.IsStaticPath("/apk-set-view.js"));
         Assert.Equal(BrowserShellAssets.Paths.Count, assets.EnumerateObject().Count());
         var identity = new StringBuilder(Template).Append('\n');
         foreach (var path in BrowserShellAssets.Paths)
@@ -50,7 +52,7 @@ public sealed class BrowserShellAssetsTests : IDisposable
     public void AnyShellOrWorkerChangeUpdatesTheWorkerAndRevision()
     {
         var first = BrowserShellAssets.RenderWorker(_root);
-        File.AppendAllText(Path.Combine(_root, "app.js"), "\n// revision two");
+        File.AppendAllText(Path.Combine(_root, "apk-set-view.js"), "\n// revision two");
         var second = BrowserShellAssets.RenderWorker(_root);
         Assert.NotEqual(first, second);
         Assert.NotEqual(Revision(first), Revision(second));

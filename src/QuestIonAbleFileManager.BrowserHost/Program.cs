@@ -133,6 +133,7 @@ app.MapGet("/browser/v1/session", () => new
     actions = commands.AvailableActions, maxRequests = BrowserCommands.MaximumRequests,
     platformCapabilities = OperatorPlatformCapabilities.Current,
     artifactStaging = BrowserArtifactStore.Capability,
+    apkSetInstall = commands.ApkSetCapability,
     retainedOperations = retained.Capability,
     connectivityProfiles = profiles.Capability,
     fleetInstallerStatus = fleetStatus.Capability
@@ -178,6 +179,11 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    // Join pre-admission source leases as well as the actual infinite-wait Core
+    // operation before any source store or device-owner teardown.
+    await commands.DrainApkSetsAsync();
+    if (!await commands.CleanupApkSetWorkAsync())
+    { Console.Error.WriteLine("apk_set_work_cleanup_incomplete"); shutdownCode = 3; }
     // A package stop retains its task/gate through actual process exit and drain,
     // even after host stopping has requested cancellation of the Core operation.
     await commands.DrainPackageStopsAsync();

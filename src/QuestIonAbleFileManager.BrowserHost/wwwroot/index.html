@@ -48,6 +48,28 @@
       </section>
     </div>
     <p class="hint supervision">Coordinate with the active device supervisor before changing power or transports. This page does not take over watchdog custody.</p>
+    <section id="apk-set-view" class="panel" aria-labelledby="apk-set-title">
+      <h2 id="apk-set-title">Install APK package set</h2>
+      <p id="apk-set-capability" class="hint">Connect to check ordinary APK-set support.</p>
+      <p id="apk-set-capacity" class="hint">Review the source and working-copy limits before staging.</p>
+      <label for="apk-set-files">Choose APK parts together</label><input id="apk-set-files" type="file" accept=".apk" multiple disabled>
+      <div class="actions"><button id="apk-set-stage" type="button" disabled>Stage selected files locally</button><button id="apk-set-add-current" type="button" disabled>Add current staged APK</button></div>
+      <p class="hint">Stage files explicitly, then select 2–8 parts. Review each original filename, exact byte count and full SHA-256. Staging and selection perform no device action.</p>
+      <ul id="apk-set-sources" aria-label="APK source receipts"></ul>
+      <dl class="apk-facts"><div><dt>Reviewed target</dt><dd id="apk-set-target">No ready target</dd></div></dl>
+      <fieldset><legend>Reviewed install options</legend>
+        <label class="check"><input id="apk-set-replace" type="checkbox" checked disabled> Replace existing package (-r)</label>
+        <label class="check"><input id="apk-set-downgrade" type="checkbox" disabled> Allow version downgrade (-d)</label>
+        <label class="check"><input id="apk-set-grant" type="checkbox" disabled> Grant runtime permissions (-g)</label>
+        <label class="check"><input id="apk-set-test" type="checkbox" disabled> Allow test packages (-t)</label>
+      </fieldset>
+      <label class="check"><input id="apk-set-confirm" type="checkbox" disabled> I approve installing exactly these selected parts with these options on the reviewed target.</label>
+      <div class="actions"><button id="apk-set-send" type="button" disabled>Install reviewed APK set</button><button id="apk-set-original" type="button" disabled>Read original result</button><button id="apk-set-save" type="button" disabled>Save original reference</button></div>
+      <p id="apk-set-state" role="status" aria-live="polite">No APK-set install requested.</p>
+      <p id="apk-set-cleanup" class="hint" role="status">No working-copy cleanup debt reported.</p>
+      <p class="hint">Completion means Package Manager completed and package inventory refreshed. This does not prove installed bytes, signer, version, app readiness or rollback. Required split compatibility is validated by Android.</p>
+      <div id="apk-set-reference" hidden><dl class="apk-facts"><div><dt>Original request</dt><dd id="apk-set-request"></dd></div><div><dt>Original target</dt><dd id="apk-set-original-target"></dd></div><div><dt>Original sources</dt><dd id="apk-set-original-sources"></dd></div></dl></div>
+    </section>
     <section class="panel" aria-labelledby="artifact-title"><h2 id="artifact-title">Local APK inspection</h2><p id="artifact-capability" class="hint">Connect to check protected upload availability on this host.</p><form id="artifact-form"><label for="apk-upload">Choose a local APK</label><input id="apk-upload" type="file" accept=".apk" disabled><label for="artifact-name">Staged filename</label><div class="input-action"><input id="artifact-name" placeholder="example.apk" maxlength="128" autocomplete="off" spellcheck="false" disabled><button id="stage-apk" disabled>Stage APK</button></div></form><p id="artifact-limits" class="hint">Connect to read protected staging limits. Simple letters, numbers, spaces, dots, hyphens and underscores are supported in staged names.</p><p id="artifact-state" role="status">No file staged.</p><div class="actions"><button id="inspect-apk" disabled>Inspect staged APK</button><button id="download-artifact" disabled>Download staged bytes</button><button id="remove-artifact" disabled>Remove staged file</button><button id="clear-artifacts" disabled>Clear staged files</button></div><dl class="apk-facts"><div><dt>Package</dt><dd id="apk-package">Unknown</dd></div><div><dt>Version</dt><dd id="apk-version">Unknown</dd></div><div><dt>Signer SHA-256</dt><dd id="apk-signer">Unknown</dd></div><div><dt>APK SHA-256</dt><dd id="apk-digest">Unknown</dd></div></dl><p class="hint">Staging and inspection affect local temporary bytes. Installation is available through the configured retained workflow below. Advanced APK actions remain in the existing QFM desktop/CLI. Original files are unchanged.</p>
       <section id="apk-read-view" aria-labelledby="apk-read-title">
         <h3 id="apk-read-title">APK readiness and runtime facts</h3>

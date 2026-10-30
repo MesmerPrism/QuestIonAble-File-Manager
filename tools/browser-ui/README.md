@@ -26,6 +26,7 @@ node --test tools/browser-ui/fleet-status.test.cjs
 node --test tools/browser-ui/diagnostics.test.cjs
 node --test tools/browser-ui/diagnostics-launch.test.cjs
 node --test tools/browser-ui/package-stop.test.cjs
+node --test tools/browser-ui/apk-set.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -33,6 +34,15 @@ node --test tools/browser-ui/pwa.test.cjs
 `require('playwright')` uses normal Node resolution, including an explicitly
 configured `NODE_PATH` when using an existing external tooling installation.
 No dependency download is performed by these tests.
+
+APK-set fixtures use the actual shipped card to review selected receipt names,
+sizes, hashes and four flags before one approved request. They check immutable
+original recovery and separate work-copy cleanup debt from unknown device
+effects. Backend companion tests use the real Core installer with synthetic
+native transport. This composed evidence does not claim physical split-package
+installation, installed-byte/signer equality or app readiness. Protected staging
+is Windows-specific; limits are 8 parts, 1 GiB per file, 2 GiB sources plus a
+separate 2 GiB work-copy budget (4 GiB current-process APK payload).
 
 The tests load the actual shipped HTML, modules, CSS and Tango bundle in a
 headless browser. Every network request is intercepted and fulfilled or

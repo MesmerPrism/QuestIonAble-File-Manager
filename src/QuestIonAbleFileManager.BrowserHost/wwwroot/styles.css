@@ -11,3 +11,4 @@
 #direct-command-option-field{overflow-wrap:anywhere}
 #direct-command-option-review,#direct-command-original-value,#direct-command-facts{white-space:pre-wrap}
 #profile-selected-usb{overflow-wrap:anywhere}
+#apk-set-view{overflow-wrap:anywhere;min-width:0}#apk-set-sources{list-style:none;padding:0}#apk-set-sources li{padding:10px 0;border-bottom:1px solid var(--line);min-width:0}#apk-set-sources strong,#apk-set-sources code,#apk-set-sources label span span{display:block;white-space:pre-wrap;overflow-wrap:anywhere}#apk-set-sources code{font-size:12px}#apk-set-view fieldset{border:1px solid var(--line);min-width:0;margin-top:14px}#apk-set-view legend{padding:0 6px}#apk-set-original-sources{white-space:pre-wrap}
