@@ -68,12 +68,13 @@ public sealed class BrowserDirectCommandTests
             RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
             RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour,
             RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb, RustyKioskCommand.ExitMetaHome,
-            RustyKioskCommand.SetSearch, RustyKioskCommand.FilterTag, RustyKioskCommand.AddTag, RustyKioskCommand.RemoveTag, RustyKioskCommand.Select };
+            RustyKioskCommand.SetSearch, RustyKioskCommand.FilterTag, RustyKioskCommand.AddTag, RustyKioskCommand.RemoveTag, RustyKioskCommand.Select, RustyKioskCommand.LaunchOption };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
             var body = Body(command: command.ToWireName(), value: command == RustyKioskCommand.SetLaunchRequirement ? "any" :
-                command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag ? "tag" : command==RustyKioskCommand.Select ? "app-key" : null);
+                command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag ? "tag" : command==RustyKioskCommand.Select ? "app-key" : command==RustyKioskCommand.LaunchOption ? "opaque-option" : null);
+            if(command==RustyKioskCommand.LaunchOption) { var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(body)!; fields["optionsRequestId"]=JsonSerializer.SerializeToElement(Handle); body=JsonSerializer.SerializeToUtf8Bytes(fields); }
             if(command==RustyKioskCommand.Select) { var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(body)!; fields["catalogRequestId"]=JsonSerializer.SerializeToElement(Handle); body=JsonSerializer.SerializeToUtf8Bytes(fields); }
             if (initial.Contains(command)) Assert.Equal(command, BrowserDirectCommands.Parse(body).Command);
             else Assert.Equal("direct_command_unsupported", Assert.Throws<BrowserRequestException>(() => BrowserDirectCommands.Parse(body)).Code);

@@ -15,6 +15,7 @@ node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/direct-command-text.test.cjs
 node --test tools/browser-ui/direct-select.test.cjs
 node --test tools/browser-ui/direct-options.test.cjs
+node --test tools/browser-ui/direct-option-launch.test.cjs
 node --test tools/browser-ui/direct-tags.test.cjs
 node --test tools/browser-ui/direct-staging.test.cjs
 node --test tools/browser-ui/direct-upload.test.cjs
@@ -77,6 +78,12 @@ They check exact opaque IDs, literal rendering, memory-only rows and scope
 invalidation without another Invoke or option-discovery/launch request. Core
 wire-parser rejection remains unchanged; forged typed-record projection tests
 do not establish recovery from malformed native wire data.
+Returned-option launch fixtures cover explicit returned-row choice, exact opaque
+ID and source joins, separate consent, persist-before-send and immutable launch
+review through loss, reload and cancellation. They distinguish recovered-source
+outer IDs from original Select IDs, retain actual receipts on package drift and
+check bounded references with control-character IDs. They use synthetic results
+and do not establish a physical option launch or atomic app binding.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,

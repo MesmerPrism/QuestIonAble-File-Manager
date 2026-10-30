@@ -672,15 +672,17 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its twenty-three commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
+connection above. Its twenty-four commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
 `disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
 `passthrough-natural`, `passthrough-contour`, `request-wifi-adb` and
-`disable-wifi-adb`, `set-search`, `filter-tag`, `add-tag`, `remove-tag` and `select`.
+`disable-wifi-adb`, `set-search`, `filter-tag`, `add-tag`, `remove-tag`, `select`
+and `launch-option`.
 `set-launch-requirement` accepts exactly `any`, `wifi-on` or `wifi-off`.
 The four search/tag controls accept the text described below; Select uses a
-reviewed catalog key and source request ID as described below. Other commands
+reviewed catalog key and source request ID as described below. Launch Option
+uses an exact returned opaque ID and options-source request ID. Other commands
 use literal `value:null`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
@@ -730,7 +732,8 @@ contain app-provided launch options. The browser displays that observation with
 its original request, reviewed key/package and binding digest. It sends no
 additional Select or discovery request. Labels and descriptions are literal
 data; opaque option IDs are shown as JSON strings, preserving whitespace and
-control characters. This view offers no option dispatch control.
+control characters. Choosing an option prepares the separate launch review
+described below and sends no request by itself.
 
 Only Select adds `typedResult.launchOptions`: its closed `state` is `ready`,
 `none`, `rejected`, `missing` or `unavailable`, with `packageName`,
@@ -756,6 +759,44 @@ omits them. Reload and saved/exported references retain only the small
 original identity and review, never option rows or binding documents. Recover
 an unresolved original explicitly. These historical options do not establish
 current selection, app readiness, foreground or atomic named-app execution.
+
+**Dispatch a reviewed returned option.** Choose one row from the historical
+options observation, then review its exact JSON-string ID, package and source
+before separately confirming `launch-option`. There is no editable option ID.
+The host admits only one exact returned ID from a completed, confirmed Select
+result in this session and adopted connection. The source can be the original
+Select Invoke or its explicit original-result recovery. A recovery result has
+its own outer browser request ID; its original Select ID remains separate.
+Ready with zero rows cannot provide an option to launch.
+
+Only this command adds `optionsRequestId` to the Invoke body. The host derives
+its immutable `launchReview` from the cached source: `optionsRequestId`,
+`selectOriginalRequestId`, `catalogRequestId`, `key`, `packageName` and
+`bindingSha256`. Callers supply no package, digest, label, intent or binding
+fields. The value is the exact opaque returned ID, up to 160 UTF-16 code units;
+surrounding whitespace and internal controls are preserved without trimming,
+case folding or substitutions. Missing, blank, oversized or malformed UTF-16
+values reject before native access. No new Select or option refresh is sent.
+
+This is Kiosk's existing current-selection dispatch. Another wearer or client
+can change selection before execution. The historical binding digest does not
+lock an app/version/provider or prove fresh installed identity. Confirmation
+requires the exact bound accepted/completed original, actual Core receipt,
+and actual `lastDispatchedOptionId` and `lastDispatchedOptionPackage`, with the
+reported selected package matching the reviewed package. These fields appear
+only for Launch Option. Contrary or missing proof remains unknown; a stronger
+reviewed-package mismatch preserves Core's actual receipt stage. Detecting
+package drift after dispatch cannot undo an effect. Confirmation establishes
+dispatch acknowledgement, without app foreground, option semantics or readiness.
+
+Save the compact original review before sending once. Recovery retains that
+review without reopening current catalog or options admission. A separate
+cancellation keeps its own full `originalLaunch` reference even if the launch
+original later resolves; cancellation never implies rollback. The saved frame
+is bounded to 8192 UTF-16 characters and contains no option list, labels,
+descriptions or hidden provider fields. Source, chosen-row, authentication or
+connection changes revoke new launch approval. Lost replies keep custody for
+explicit original-result recovery without another Invoke.
 
 **Headset search, filtering and current-selection tags.** `set-search` and
 `filter-tag` change Kiosk's headset UI state, separately from the browser's
@@ -848,7 +889,7 @@ The existing execute route adds these closed actions:
 
 | Action | Fields beyond `requestId` and `action` |
 | --- | --- |
-| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (reviewed key for Select, canonical text for search/tags, requirement enum, or literal null), `confirmed:true`; `catalogRequestId` required only for Select |
+| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (exact opaque ID for Launch Option, reviewed key for Select, canonical text for search/tags, requirement enum, or literal null), `confirmed:true`; `catalogRequestId` required only for Select, `optionsRequestId` required only for Launch Option |
 | `kiosk.direct.request-status` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-result` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-cancel` | `connectionId`, `originalRequestId`, `confirmed:true` |

@@ -8,3 +8,5 @@
 
 #direct-command-text{display:block;width:100%;max-width:100%;resize:vertical;font:inherit;border:1px solid #beb6ae;border-radius:3px;padding:6px 10px;background:#fffdfa;color:var(--text)}#direct-command-text:focus-visible{outline:3px solid var(--accent);outline-offset:4px}
 #direct-command-launch-options{overflow-wrap:anywhere;border-top:1px solid var(--line);margin-top:12px;padding-top:4px}#direct-command-launch-options-rows{list-style:none;padding:0;max-height:360px;overflow:auto}#direct-command-launch-options-rows li{border-bottom:1px solid var(--line);padding:8px 0}#direct-command-launch-options-rows strong,#direct-command-launch-options-rows code{display:block;white-space:pre-wrap;overflow-wrap:anywhere}#direct-command-launch-options-rows p{white-space:pre-wrap}
+#direct-command-option-field{overflow-wrap:anywhere}
+#direct-command-option-review,#direct-command-original-value,#direct-command-facts{white-space:pre-wrap}

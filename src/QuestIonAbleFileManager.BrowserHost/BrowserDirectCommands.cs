@@ -19,6 +19,7 @@ public sealed record BrowserDirectRequest(string RequestId, string Action, strin
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? StagedName { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? InspectionRequestId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? CatalogRequestId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? OptionsRequestId { get; init; }
 }
 
 public sealed partial class BrowserCommands
@@ -39,7 +40,8 @@ public sealed partial class BrowserCommands
                 throw new BrowserRequestException("artifact_staging_unavailable",503);
             if(_directConnections is null)throw new BrowserRequestException("direct_unavailable",409);
             BrowserDirectCommandOutcome? original=null;
-            BrowserDirectSelectionReview? selection=null;
+            BrowserDirectSelectionReview? selection=null; BrowserDirectLaunchSource? launch=null;
+            if(request.Action=="kiosk.direct.invoke" && request.Command==RustyKioskCommand.LaunchOption)launch=ReadDirectOptionLaunch(request);
             if(request.Action=="kiosk.direct.invoke" && request.Command==RustyKioskCommand.Select)selection=ReadDirectSelection(request);
             BrowserDirectInstallSource? inspection=null; BrowserDirectInstallOutcome? installOriginal=null;
             if(request.Action=="kiosk.direct.install")inspection=ReadInstallInspection(request);
@@ -60,7 +62,7 @@ public sealed partial class BrowserCommands
                 original=source;
             }
             gate=_operationGate.TryAcquire() ?? throw new BrowserRequestException("busy",409);
-            try{operation=_directConnections.Reserve(request,SessionId,original,inspection,installOriginal,selection);}
+            try{operation=_directConnections.Reserve(request,SessionId,original,inspection,installOriginal,selection,launch);}
             catch{gate.Dispose();throw;}
             _requests[request.RequestId]=new(request.RequestId,request.Action,"running",KioskDirectCommand:operation.CommandMetadata){KioskDirectInstall=operation.InstallMetadata};_running=true;
         }
@@ -113,7 +115,7 @@ public static class BrowserDirectCommands
             var expected = new HashSet<string>(["requestId", "action"], StringComparer.Ordinal);
             if (action == "kiosk.direct.connect-usb") { expected.Add("serial"); expected.Add("productChannel"); }
             else expected.Add("connectionId");
-            if (action == "kiosk.direct.invoke") { expected.Add("command"); expected.Add("value"); if (Text(root,"command")=="select") expected.Add("catalogRequestId"); }
+            if (action == "kiosk.direct.invoke") { expected.Add("command"); expected.Add("value"); if (Text(root,"command")=="select") expected.Add("catalogRequestId"); if (Text(root,"command")=="launch-option") expected.Add("optionsRequestId"); }
             if (action == "kiosk.direct.staging-upload") foreach(var field in new[]{"artifactId","sha256","sizeBytes","name"}) expected.Add(field);
             if (action == "kiosk.direct.install") foreach(var field in new[]{"artifactId","sha256","sizeBytes","inspectionRequestId"}) expected.Add(field);
             if (action == "kiosk.direct.install-status") expected.Add("originalRequestId");
@@ -158,7 +160,8 @@ public static class BrowserDirectCommands
                 var value = item.ValueKind == JsonValueKind.Null ? null : item.ValueKind == JsonValueKind.String ? item.GetString() : throw new BrowserRequestException("direct_value_invalid");
                 ValidateValue(command, value);
                 return new(id, action, ConnectionId: connection, Command: command, Value: value)
-                    { CatalogRequestId = command==RustyKioskCommand.Select ? CanonicalId(Text(root,"catalogRequestId")) : null };
+                    { CatalogRequestId = command==RustyKioskCommand.Select ? CanonicalId(Text(root,"catalogRequestId")) : null,
+                      OptionsRequestId = command==RustyKioskCommand.LaunchOption ? CanonicalId(Text(root,"optionsRequestId")) : null };
             }
             if (action != "kiosk.direct.connect-usb") return new(id, action, ConnectionId: Id(Text(root, "connectionId")));
             var serial = AndroidInput.RequireSerial(Text(root, "serial"));
@@ -193,6 +196,7 @@ public static class BrowserDirectCommands
         "disable-wifi-adb" => RustyKioskCommand.DisableWifiAdb,
         "check-setup-helper" => RustyKioskCommand.CheckSetupHelper,
         "set-launch-requirement" => RustyKioskCommand.SetLaunchRequirement,
+        "launch-option" => RustyKioskCommand.LaunchOption,
         "select" => RustyKioskCommand.Select,
         "set-search" => RustyKioskCommand.SetSearch,
         "filter-tag" => RustyKioskCommand.FilterTag,
@@ -205,6 +209,13 @@ public static class BrowserDirectCommands
     };
     internal static void ValidateValue(RustyKioskCommand command, string? value)
     {
+        if(command==RustyKioskCommand.LaunchOption)
+        {
+            if(value is null || value.Length>RustyKioskContract.MaxCommandValueLength || string.IsNullOrWhiteSpace(value) || !IsWellFormedUtf16(value))
+                throw new BrowserRequestException("direct_value_invalid");
+            if(KioskDirectOperatorCommand.Invoke(command,value,true).Value!=value)throw new BrowserRequestException("direct_value_invalid");
+            return;
+        }
         if (command is RustyKioskCommand.Select or RustyKioskCommand.SetSearch or RustyKioskCommand.FilterTag or RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag)
         {
             if (command==RustyKioskCommand.Select && !BrowserKioskCommands.IsSelectableKey(value)) throw new BrowserRequestException("direct_value_invalid");

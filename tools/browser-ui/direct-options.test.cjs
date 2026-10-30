@@ -56,7 +56,7 @@ test('same original Select displays only bounded historical options with immutab
   const source=await f.page.locator('#direct-command-launch-options-source').textContent();assert.ok(source.includes(original.requestId));assert.ok(source.includes(logical(original.requestId)));assert.ok(source.includes(f.calls[0].body.requestId));assert.ok(source.includes(rows()[0].packageName));
   assert.match(await f.page.locator('#direct-command-launch-options-state').textContent(),/ready; 1 options/);assert.equal(await f.page.locator('#direct-command-launch-options-rows li').count(),1);
   assert.equal(await f.page.locator('#direct-command-launch-options button, #direct-command-launch-options input').count(),0);
-  assert.equal(await f.page.locator('#direct-command-command option[value="launch-option"], #direct-command-command option[value="focus-search"], #direct-command-command option[value="focus-tag-editor"]').count(),0);
+  assert.equal(await f.page.locator('#direct-command-command option[value="focus-search"], #direct-command-command option[value="focus-tag-editor"]').count(),0);
   assert.equal(f.calls.length,2);assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);
   assert.doesNotMatch(JSON.stringify(f.calls[1].saved),/launchOptions|bindingSha256|optionId|displayLabel/);
 });
