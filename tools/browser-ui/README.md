@@ -27,6 +27,7 @@ node --test tools/browser-ui/diagnostics.test.cjs
 node --test tools/browser-ui/diagnostics-launch.test.cjs
 node --test tools/browser-ui/package-stop.test.cjs
 node --test tools/browser-ui/apk-set.test.cjs
+node --test tools/browser-ui/apk-install.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```
@@ -42,7 +43,17 @@ effects. Backend companion tests use the real Core installer with synthetic
 native transport. This composed evidence does not claim physical split-package
 installation, installed-byte/signer equality or app readiness. Protected staging
 is Windows-specific; limits are 8 parts, 1 GiB per file, 2 GiB sources plus a
-separate 2 GiB work-copy budget (4 GiB current-process APK payload).
+separate 2 GiB work-copy budget (4 GiB upload-plus-set-work payload in that
+process; independent Core/retained owners are separate).
+
+Single-APK fixtures reuse the existing staged selection and approve all four
+ordinary install flags. They require exact installed-base bytes and full identity,
+including precision-safe positive Int64 version-code strings and literal nullable
+version names. Storage acknowledgement, exact original recovery, late replies and
+every sibling mutation context are checked. Real Core companion tests use fake
+inspection/native transport; physical installation and readiness remain separate.
+Core admission owns its independent protected copy/inventory and exposes no
+browser cleanup-status receipt; no aggregate disk cap across owners is claimed.
 
 The tests load the actual shipped HTML, modules, CSS and Tango bundle in a
 headless browser. Every network request is intercepted and fulfilled or

@@ -33,6 +33,8 @@ test('all shell bytes and worker logic determine revision; unrendered template f
   assert.notEqual(old.revision,next.revision);assert.notEqual(old.revision,fixed.revision);
   const changedSet=await renderShell({'/apk-set-view.js':Buffer.from('changed APK-set module')});
   assert.notEqual(old.revision,changedSet.revision);
+  const changedSingle=await renderShell({'/apk-install-view.js':Buffer.from('changed single APK module')});
+  assert.notEqual(old.revision,changedSingle.revision);
   assert.throws(()=>vm.runInNewContext(old.template,{self:{addEventListener(){}}}),/rendered|manifest/i);
 });
 
@@ -42,6 +44,8 @@ test('offline worker serves only shipped static assets and never handles private
   assert.ok(entries.has('/index.html')); assert.ok(entries.has('/agent.html'));
   assert.equal(await entries.get('/apk-set-view.js').clone().text(),await fs.readFile(path.join(root,'apk-set-view.js'),'utf8'));
   assert.match(await entries.get('/index.html').clone().text(),/id="apk-set-view"/);
+  assert.equal(await entries.get('/apk-install-view.js').clone().text(),await fs.readFile(path.join(root,'apk-install-view.js'),'utf8'));
+  assert.match(await entries.get('/index.html').clone().text(),/id="apk-install-view"/);
   for (const input of [
     ['http://127.0.0.1:18129/browser/v1/session', {}],
     ['http://127.0.0.1:18129/browser/v1/execute', { method: 'POST', body: '{}' }],

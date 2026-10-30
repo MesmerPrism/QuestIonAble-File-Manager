@@ -26,7 +26,12 @@ complete shell and shared host for matching .NET/ASP.NET Core runtimes.
 On a Windows NTFS host, the browser also stages a selected local APK, inspects
 it through shared Core, and downloads/removes its verified temporary bytes.
 Artifact-bound readiness preflight and exact or explicitly weaker development
-runtime reads work without configuring the retained owner. An optional Kiosk
+runtime reads work without configuring the retained owner. A separate
+single-APK install card offers all four ordinary flags and exact installed-base
+byte/identity readback. A package-set card installs 2–8 reviewed parts atomically
+with package-manager completion and inventory refresh only. Both keep an original
+for explicit cached recovery without replay; retained installation stays separate
+with its existing replace/grant options. An optional Kiosk
 card reads installation facts, explicitly opens its catalog, and selects a reviewed
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 An explicit USB Direct card adopts one short-lived Kiosk operator connection,

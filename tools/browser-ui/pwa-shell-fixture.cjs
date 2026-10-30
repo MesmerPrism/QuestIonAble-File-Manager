@@ -3,7 +3,7 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const {createHash}=require('node:crypto');
 const root=path.resolve(__dirname,'../../src/QuestIonAbleFileManager.BrowserHost/wwwroot');
-const paths=['/index.html','/agent.html','/app.js','/pwa.js','/retained-view.js','/styles.css','/usb-proof.js','/usb-proof-core.js','/vendor/tango-adb.js','/transfer-view.js','/verified-download.js','/apk-read-view.js','/file-push-view.js','/kiosk-view.js','/direct-connection-view.js','/direct-command-view.js','/profile-view.js','/fleet-status-view.js','/diagnostics-view.js','/direct-tags-view.js','/direct-staging-view.js','/direct-upload-view.js','/direct-install-view.js','/package-stop-view.js','/apk-set-view.js','/vendor/noble-sha256.js','/vendor/NOBLE_HASHES_NOTICES.txt','/manifest.webmanifest','/icons/qfm-192.png','/icons/qfm-512.png'];
+const paths=['/index.html','/agent.html','/app.js','/pwa.js','/retained-view.js','/styles.css','/usb-proof.js','/usb-proof-core.js','/vendor/tango-adb.js','/transfer-view.js','/verified-download.js','/apk-read-view.js','/file-push-view.js','/kiosk-view.js','/direct-connection-view.js','/direct-command-view.js','/profile-view.js','/fleet-status-view.js','/diagnostics-view.js','/direct-tags-view.js','/direct-staging-view.js','/direct-upload-view.js','/direct-install-view.js','/package-stop-view.js','/apk-set-view.js','/apk-install-view.js','/vendor/noble-sha256.js','/vendor/NOBLE_HASHES_NOTICES.txt','/manifest.webmanifest','/icons/qfm-192.png','/icons/qfm-512.png'];
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function renderShell(overrides={},workerSuffix='') {
   const template=await fs.readFile(path.join(root,'sw.js'),'utf8')+workerSuffix;

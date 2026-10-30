@@ -31,6 +31,8 @@ public sealed record BrowserCommandOutcome(
     public BrowserPackageStopOutcome? PackageStop { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BrowserApkSetOutcome? ApkSet { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserApkInstallOutcome? ApkInstall { get; init; }
 }
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
@@ -60,7 +62,7 @@ public sealed partial class BrowserCommands
         .. _profiles?.Capability.Supported == true ? BrowserProfileCommands.Actions : [],
         .. _fleetStatus?.Capability.Supported == true ? BrowserFleetCommands.Actions : []];
     private IReadOnlyList<string> ArtifactActions => _artifactStore is not null && BrowserArtifactStore.Capability.Supported
-        ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push", "files.pull", "apk.export"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push"] : Actions;
+        ? _capture is not null ? [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push", "files.pull", "apk.export", "apk.install"] : [.. Actions, "apk.inspect", "apk.preflight", "runtime.observe", "files.push", "apk.install"] : Actions;
     private readonly ConcurrentDictionary<string, BrowserCommandOutcome> _requests = new(StringComparer.Ordinal);
     private readonly object _admission = new();
     private bool _running;
@@ -108,6 +110,8 @@ public sealed partial class BrowserCommands
 
     public async Task<BrowserCommandOutcome> ExecuteAsync(ReadOnlyMemory<byte> body, CancellationToken stopping = default)
     {
+        if (BrowserApkInstallCommands.IsAction(body))
+            return await ExecuteSingleApkInstallAsync(BrowserApkInstallCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserApkSetCommands.IsAction(body))
             return await ExecuteApkSetAsync(BrowserApkSetCommands.Parse(body), stopping).ConfigureAwait(false);
         if (BrowserFleetCommands.IsFleetAction(body))

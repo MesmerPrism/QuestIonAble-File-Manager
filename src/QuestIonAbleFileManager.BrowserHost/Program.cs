@@ -179,6 +179,7 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    await commands.DrainSingleApkInstallsAsync();
     // Join pre-admission source leases as well as the actual infinite-wait Core
     // operation before any source store or device-owner teardown.
     await commands.DrainApkSetsAsync();
