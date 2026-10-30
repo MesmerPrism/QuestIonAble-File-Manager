@@ -55,6 +55,9 @@ use synthetic process facts and do not prove a headset stopped an app.
 Kiosk fixtures cover fixed product channels, explicit activity-opening consent,
 local-only filtering/highlighting, catalog-bound selection, conditional unavailable
 no-ops, original request custody and separate provider facts without reconciliation.
+Direct Meta Home fixtures retain the existing null-valued Invoke and original
+recovery flow. They verify Kiosk acknowledgement only, never physical Meta Home
+foreground or wearer visibility.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,
