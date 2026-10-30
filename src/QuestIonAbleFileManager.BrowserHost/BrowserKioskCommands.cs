@@ -129,20 +129,31 @@ public sealed partial class BrowserCommands
         finally { lock (_admission) { _running = false; gate.Dispose(); } }
     }
 
-    private BrowserKioskReview ReviewKioskSelection(BrowserKioskRequest request)
+    private BrowserKioskReview ReviewKioskSelection(BrowserKioskRequest request) =>
+        ReviewKioskSelection(request.CatalogRequestId!, request.Key!, request.Serial, request.ProductChannel);
+
+    private BrowserDirectSelectionReview ReadDirectSelection(BrowserDirectRequest request)
     {
-        if (!_requests.TryGetValue(request.CatalogRequestId!, out var cached) || cached.Action != "kiosk.catalog.open" || cached.State != "completed" ||
+        if (!_requests.TryGetValue(request.CatalogRequestId!, out var cached) || cached.Kiosk is not { } kiosk)
+            throw new BrowserRequestException("kiosk_catalog_unavailable", 409);
+        var row = ReviewKioskSelection(request.CatalogRequestId!, request.Value!, kiosk.Serial, kiosk.ProductChannel);
+        return new(request.CatalogRequestId!, kiosk.Serial, kiosk.ProductChannel, row.Key, row.PackageName);
+    }
+
+    private BrowserKioskReview ReviewKioskSelection(string catalogRequestId, string key, string serial, string productChannel)
+    {
+        if (!_requests.TryGetValue(catalogRequestId, out var cached) || cached.Action != "kiosk.catalog.open" || cached.State != "completed" ||
             cached.Kiosk is not { Operation: "catalog.open", ProviderState: "completed", ActivityOpenRequested: true, Result: { Accepted: true, Completed: true } } kiosk ||
-            kiosk.Serial != request.Serial || kiosk.ProductChannel != request.ProductChannel || kiosk.CatalogRequestId != request.CatalogRequestId ||
-            kiosk.ProviderRequestId != "pc-" + Guid.Parse(request.CatalogRequestId!).ToString("N"))
+            kiosk.Serial != serial || kiosk.ProductChannel != productChannel || kiosk.CatalogRequestId != catalogRequestId ||
+            kiosk.ProviderRequestId != "pc-" + Guid.Parse(catalogRequestId).ToString("N"))
             throw new BrowserRequestException("kiosk_catalog_unavailable", 409);
         // A proven no-selection outcome retires only the reviewed catalog's
         // admission authority. Keep both immutable historical outcomes intact.
         if (_requests.Values.Any(outcome => outcome.Action == "kiosk.select" && outcome.State == "completed" &&
                 outcome.Kiosk is { ProviderState: "installationOnly", ActivityOpenRequested: false, Result: null,
-                    Installation.HostOperatorAvailable: false } noOp && noOp.CatalogRequestId == request.CatalogRequestId))
+                    Installation.HostOperatorAvailable: false } noOp && noOp.CatalogRequestId == catalogRequestId))
             throw new BrowserRequestException("kiosk_catalog_unavailable", 409);
-        var entries = kiosk.Result.Entries.Where(row => row.Key == request.Key).ToArray();
+        var entries = kiosk.Result.Entries.Where(row => row.Key == key).ToArray();
         if (entries.Length != 1 || !entries[0].Selectable || !entries[0].Installed || !entries[0].Launchable || entries[0].PackageName is null)
             throw new BrowserRequestException("kiosk_selection_not_reviewed", 409);
         return new(entries[0].Key, entries[0].PackageName!);

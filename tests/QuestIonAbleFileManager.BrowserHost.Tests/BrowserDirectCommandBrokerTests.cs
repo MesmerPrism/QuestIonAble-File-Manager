@@ -322,11 +322,11 @@ public sealed class BrowserDirectCommandBrokerTests
         internal readonly BrowserOperationGate Gate = new();
         internal BrowserDirectConnections Owner = null!; internal BrowserCommands Broker = null!; internal NativeSession Native = null!;
         internal BrowserDirectConnectionOutcome Connection = null!; internal string Handle => Connection.ConnectionId!;
-        internal static async Task<Fixture> Create(string? connectRequestId = null)
+        internal static async Task<Fixture> Create(string? connectRequestId = null, Func<OperatorCommand,CancellationToken,Task<OperatorExecutionResult>>? execute = null)
         {
             var fixture = new Fixture();
             fixture.Owner = new((context, _) => Task.FromResult<IBrowserDirectSession>(fixture.Native = new(context, fixture.Clock)), fixture.Clock);
-            fixture.Broker = new((_, _) => throw new InvalidOperationException("no ADB path"), operationGate: fixture.Gate, directConnections: fixture.Owner);
+            fixture.Broker = new(execute ?? ((_, _) => throw new InvalidOperationException("no ADB path")), operationGate: fixture.Gate, directConnections: fixture.Owner);
             fixture.Connection = (await fixture.Broker.ExecuteAsync(BrowserDirectCommandsTests.Body(id: connectRequestId ?? Guid.NewGuid().ToString("D")))).KioskDirectConnection!;
             return fixture;
         }

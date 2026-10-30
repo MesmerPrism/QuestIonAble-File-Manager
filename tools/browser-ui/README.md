@@ -12,6 +12,8 @@ node --test tools/browser-ui/file-push.test.cjs
 node --test tools/browser-ui/kiosk.test.cjs
 node --test tools/browser-ui/direct-connection.test.cjs
 node --test tools/browser-ui/direct-command.test.cjs
+node --test tools/browser-ui/direct-command-text.test.cjs
+node --test tools/browser-ui/direct-select.test.cjs
 node --test tools/browser-ui/direct-tags.test.cjs
 node --test tools/browser-ui/direct-staging.test.cjs
 node --test tools/browser-ui/direct-upload.test.cjs
@@ -62,6 +64,11 @@ Direct text fixtures cover Core-compatible trimming and UTF-16 bounds,
 search/filter clears, server-derived comparison and selected-row tag proof,
 missing/duplicate-row uncertainty, old command shapes and recovery without
 another Invoke. They do not modify a headset's real search, selection or tags.
+Direct Select fixtures exercise the shipped catalog getter and composed app,
+scope-bound reviewed key/package admission, source-change approval revocation,
+unique returned-row proof and immutable originals through reload and cancellation.
+They preserve the existing eligible returned-row behavior for bounded catalogs
+and do not establish physical Direct selection on a headset.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,

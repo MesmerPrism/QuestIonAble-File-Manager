@@ -672,14 +672,15 @@ live-session operations.
 ## Kiosk Direct controls
 
 The separate **Kiosk Direct controls** card uses the acknowledged opaque
-connection above. Its twenty-two commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
+connection above. Its twenty-three commands are `status`, `show-controls`, `show-apps`, `reload`, `exit-meta-home`,
 `check-setup-helper`, `set-launch-requirement`, `cancel-pending-launch`,
 `launch-normal`, `launch-kiosk`, `enable-wifi-adb-after-boot` and
 `disable-wifi-adb-after-boot`, `enable-accessibility`, `disable-accessibility`,
 `passthrough-natural`, `passthrough-contour`, `request-wifi-adb` and
-`disable-wifi-adb`, `set-search`, `filter-tag`, `add-tag` and `remove-tag`.
+`disable-wifi-adb`, `set-search`, `filter-tag`, `add-tag`, `remove-tag` and `select`.
 `set-launch-requirement` accepts exactly `any`, `wifi-on` or `wifi-off`.
-The four search/tag controls accept the text described below; other commands
+The four search/tag controls accept the text described below; Select uses a
+reviewed catalog key and source request ID as described below. Other commands
 use literal `value:null`. All require explicit confirmation
 because even a status command creates a remote logical request.
 
@@ -696,6 +697,33 @@ the request. This is Kiosk acknowledgement, not independent observation of
 Meta Home foreground, leaving an app, wearer visibility or application/OpenXR
 readiness. Original lookup and signed result recovery never send the command
 again. This request does not add a QFM connection-close or ADB bootstrap step.
+
+**Select reviewed catalog entry.** First explicitly open a catalog in the Kiosk
+card and highlight one eligible returned row. Direct Select takes its key and
+package from that review; it has no editable key. The catalog must be a completed
+operation in this connector session, with the same exact serial and Stable/Labs
+channel as the adopted Direct connection. The existing catalog selection rules
+require exactly one matching selectable, installed, launchable row with a
+package. A returned eligible row can be reviewed even when the bounded catalog
+reports omitted rows. A retired or unresolved source cannot admit a new Select.
+
+Review the displayed key, package and catalog request ID, then confirm once.
+Changing the source, row, local filter, channel, authentication or connection
+revokes approval. The API adds `catalogRequestId` only to a Select Invoke and
+uses the reviewed canonical key as `value`; the host derives the expected package
+from its cached catalog before admitting the request.
+
+The original retains immutable `selectionReview` fields `catalogRequestId`,
+`serial`, `productChannel`, `key` and `packageName`. Recovery uses that saved
+review without requiring the current highlight or catalog to remain available.
+Confirmation requires the bound accepted/completed result and actual Core
+receipt, matching returned selected key and package, and exactly one matching
+returned row with literal `installed`, `launchable` and `selectable` facts.
+Those row facts and `packageName` are emitted only for Select. Missing,
+duplicate or contrary proof leaves the outcome unknown while preserving Core's
+actual receipt stage. Saved/exported references retain the review, including
+when a separate cancellation remains unresolved. Selection does not atomically
+bind a later launch or tag edit to this app, or prove foreground or readiness.
 
 **Headset search, filtering and current-selection tags.** `set-search` and
 `filter-tag` change Kiosk's headset UI state, separately from the browser's
@@ -788,7 +816,7 @@ The existing execute route adds these closed actions:
 
 | Action | Fields beyond `requestId` and `action` |
 | --- | --- |
-| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (canonical text for search/tags, requirement enum, or literal null), `confirmed:true` |
+| `kiosk.direct.invoke` | `connectionId`, `command`, `value` (reviewed key for Select, canonical text for search/tags, requirement enum, or literal null), `confirmed:true`; `catalogRequestId` required only for Select |
 | `kiosk.direct.request-status` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-result` | `connectionId`, `originalRequestId` |
 | `kiosk.direct.request-cancel` | `connectionId`, `originalRequestId`, `confirmed:true` |
