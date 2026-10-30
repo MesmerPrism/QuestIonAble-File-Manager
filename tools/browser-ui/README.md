@@ -21,6 +21,7 @@ node --test tools/browser-ui/direct-staging.test.cjs
 node --test tools/browser-ui/direct-upload.test.cjs
 node --test tools/browser-ui/direct-install.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
+node --test tools/browser-ui/profile-selected-usb.test.cjs
 node --test tools/browser-ui/fleet-status.test.cjs
 node --test tools/browser-ui/diagnostics.test.cjs
 node --test tools/browser-ui/diagnostics-launch.test.cjs
@@ -137,11 +138,16 @@ explicit bound result read. The prior fifteen projection shapes stay unchanged.
 These fixtures never set up, discover or connect a real host/device transport.
 
 Profile fixtures use synthetic intercepted responses and injected backend stores.
-They cover manual/private-file byte input, fixed headers and reviewed ID,
+They cover manual/private-file byte input, selected ready USB plus manually
+entered Kiosk link details, fixed headers and reviewed ID,
 private-field/buffer clearing, explicit replacement/revoke, exact rollback
 semantics, lost originals, auth generations and cross-view blocking. They never
 open Credential Manager or a real profile, ADB/Fleet provider, host or device.
 Local record validity is distinct from connectivity and lost-write identity.
+Selected-source fixtures also cover readiness/transport changes, stable source
+identity, preparation/post-persistence guards and explicit original recovery
+after selection disappears. They verify that serial, endpoint, code, body and
+derived hashes stay out of saved profile references and caches.
 
 Fleet status fixtures intercept every URL and inject only synthetic status
 receipts. They cover explicit target-free reads, unavailable/configured states,

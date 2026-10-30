@@ -74,6 +74,10 @@ The local Windows connectivity profile card uses the existing current-user
 Credential Manager owner for explicit list/status, private input, replacement and
 revocation. It tests stored validity, not connectivity, and keeps private documents
 out of staging, saved references and the offline cache.
+An explicit selected-USB source combines the reviewed ready USB row with
+manually entered Kiosk endpoint, pairing code and device ID through that same
+private import. Manual fields and private-file import remain independent of
+headset selection. This saves a local record without contacting the headset.
 A separate Windows Fleet status card explicitly reads trusted release/replay
 facts through the existing owner, without ADB or profile setup. It reports the
 host configuration rather than installed-service health; guided installation
