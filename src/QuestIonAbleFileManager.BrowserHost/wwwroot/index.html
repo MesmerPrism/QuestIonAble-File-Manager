@@ -227,6 +227,14 @@
       <p id="direct-command-boundary" class="hint">Current selection can change on the headset. No named-app, foreground or application/OpenXR readiness guarantee is offered.</p>
       <p id="direct-command-state" role="status">No Direct command sent.</p>
       <dl class="apk-facts"><div><dt>Result facts</dt><dd id="direct-command-facts">No typed original result observed.</dd></div></dl><p id="direct-command-lifecycle" class="hint">No separate lifecycle facts read.</p>
+      <section id="direct-command-launch-options" hidden aria-labelledby="direct-command-launch-options-heading">
+        <h3 id="direct-command-launch-options-heading">Options returned with this selection</h3>
+        <p class="hint">This is a historical observation from the same original Select result. It does not launch an option, refresh a list or establish current availability or app readiness.</p>
+        <p id="direct-command-launch-options-source" class="hint"></p>
+        <p id="direct-command-launch-options-state" role="status"></p>
+        <p id="direct-command-launch-options-binding" class="hint"></p>
+        <ul id="direct-command-launch-options-rows"></ul>
+      </section>
       <dl id="direct-command-original" class="apk-facts" hidden><div><dt>Original browser request</dt><dd id="direct-command-original-id">Unknown</dd></div><div><dt>Logical Kiosk request</dt><dd id="direct-command-original-logical">Unknown</dd></div><div><dt>Original command</dt><dd id="direct-command-original-command">Unknown</dd></div><div><dt>Original value</dt><dd id="direct-command-original-value">null</dd></div><div><dt>Target</dt><dd id="direct-command-original-target">Unknown</dd></div><div><dt>Product channel</dt><dd id="direct-command-original-channel">Unknown</dd></div><div><dt>Opaque connection</dt><dd id="direct-command-original-connection">Unknown</dd></div><div><dt>Host session</dt><dd id="direct-command-original-session">Unknown</dd></div></dl>
       <div class="actions"><button id="direct-command-original-status" type="button" disabled>Read original browser result</button><button id="direct-command-request-status" type="button" disabled>Read original lifecycle facts</button><button id="direct-command-request-result" type="button" disabled>Read original typed result (no replay)</button></div>
       <label class="check"><input id="direct-command-cancel-confirm" type="checkbox" disabled> I approve one cancellation request for this exact original logical request. Earlier effects may remain; this does not roll them back.</label><button id="direct-command-cancel" type="button" disabled>Request cancellation once</button>

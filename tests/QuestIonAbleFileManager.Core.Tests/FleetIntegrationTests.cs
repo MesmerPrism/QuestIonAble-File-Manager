@@ -725,6 +725,8 @@ public sealed class FleetIntegrationTests
         var payload = new byte[] { 4, 4, 2, 1 };
         StagePushInput(root.Path, "input01", payload);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationCommitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var verifier = new ScriptedAuthorityVerifier(_ => AcceptedAuthority());
         var runner = new ScriptedRunner(
             (_, arguments, _) =>
@@ -734,38 +736,65 @@ public sealed class FleetIntegrationTests
             inputStreamingHandler: async (_, _, _, _, _, cancellationToken) =>
             {
                 started.SetResult();
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    cancellationObserved.SetResult();
+                    // The cancel marker is visible before its journal append commits.
+                    // This fixture tests cancellation after that durable commit, not
+                    // contention between the cancel and terminal journal writers.
+                    await cancellationCommitted.Task;
+                    throw;
+                }
                 throw new InvalidOperationException("unreachable");
             });
         var adapter = CreateReadyAdapter(root.Path, runner, verifier);
         var request = CreatePushRequest(adapter, payload);
-        var invoke = adapter.InvokeAsync(request);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var live = adapter.GetOperationStatus(request.OperationId);
-        Assert.Equal(FleetIntegrationOperationPhase.Running, live.Phase);
-        Assert.Equal(FleetIntegrationCleanupState.Pending, live.CleanupState);
-        var untrusted = CreateReadyAdapter(
-            root.Path,
-            new ScriptedRunner((_, _, _) => Failure("ADB must not run")));
-        var untrustedCancel = await Assert.ThrowsAsync<FleetIntegrationException>(
-            () => untrusted.RequestOperationCancellationAsync(request.OperationId));
-        Assert.Equal("mutation_authority_unavailable", untrustedCancel.Code);
-        Assert.False(File.Exists(Path.Combine(
-            root.Path,
-            "operations",
-            request.OperationId,
-            "cancel.request")));
+        using var failureCleanup = new CancellationTokenSource();
+        var invoke = adapter.InvokeAsync(request, failureCleanup.Token);
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var live = adapter.GetOperationStatus(request.OperationId);
+            Assert.Equal(FleetIntegrationOperationPhase.Running, live.Phase);
+            Assert.Equal(FleetIntegrationCleanupState.Pending, live.CleanupState);
+            var untrusted = CreateReadyAdapter(
+                root.Path,
+                new ScriptedRunner((_, _, _) => Failure("ADB must not run")));
+            var untrustedCancel = await Assert.ThrowsAsync<FleetIntegrationException>(
+                () => untrusted.RequestOperationCancellationAsync(request.OperationId));
+            Assert.Equal("mutation_authority_unavailable", untrustedCancel.Code);
+            Assert.False(cancellationObserved.Task.IsCompleted);
+            Assert.False(File.Exists(Path.Combine(
+                root.Path,
+                "operations",
+                request.OperationId,
+                "cancel.request")));
 
-        var cancel = await adapter.RequestOperationCancellationAsync(request.OperationId);
-        var exception = await Assert.ThrowsAsync<FleetIntegrationException>(() => invoke);
+            var cancel = await adapter.RequestOperationCancellationAsync(request.OperationId);
+            await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(failureCleanup.IsCancellationRequested);
+            cancellationCommitted.TrySetResult();
+            var exception = await Assert.ThrowsAsync<FleetIntegrationException>(() => invoke);
 
-        Assert.Equal(FleetIntegrationOperationPhase.CancelRequested, cancel.Phase);
-        Assert.Equal("operation_cancelled", exception.Code);
-        var status = adapter.GetOperationStatus(request.OperationId);
-        Assert.Equal(FleetIntegrationOperationPhase.Cancelled, status.Phase);
-        Assert.Equal(FleetIntegrationCleanupState.Unknown, status.CleanupState);
-        Assert.True(status.DestinationMayExist);
-        Assert.True(status.PartialMayExist);
+            Assert.Equal(FleetIntegrationOperationPhase.CancelRequested, cancel.Phase);
+            Assert.Equal("operation_cancelled", exception.Code);
+            var status = adapter.GetOperationStatus(request.OperationId);
+            Assert.Equal(FleetIntegrationOperationPhase.Cancelled, status.Phase);
+            Assert.Equal(FleetIntegrationCleanupState.Unknown, status.CleanupState);
+            Assert.True(status.DestinationMayExist);
+            Assert.True(status.PartialMayExist);
+        }
+        finally
+        {
+            cancellationCommitted.TrySetResult();
+            failureCleanup.Cancel();
+            try { await invoke; }
+            catch { /* Preserve the assertion or cancellation failure already observed above. */ }
+        }
     }
 
     [Fact]
