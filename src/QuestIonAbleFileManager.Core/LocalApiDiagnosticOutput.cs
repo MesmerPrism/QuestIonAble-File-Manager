@@ -11,6 +11,8 @@ namespace QuestIonAbleFileManager.Core;
 internal sealed record LocalApiDiagnosticOutputIntent
 {
     internal const string PolicyVersion = "exact-installed-diagnostic-output.v1";
+    internal const string LaunchPolicyVersion = "exact-installed-launch-diagnostic-output.v1";
+    internal const int MaximumArmedCaptureBytes = 262144, PostActionWindowMilliseconds = 10000, MaximumLaunchOperationSeconds = 300;
     internal const string ArchiveFormat = "zip-store.v1";
     internal const int MaximumProcessLogs = 8, RecentLogLinesPerCapture = 400;
     internal const int MaximumPayloadFiles = 14, MaximumPayloadFileBytes = 262144;
@@ -22,8 +24,9 @@ internal sealed record LocalApiDiagnosticOutputIntent
     internal const long MaximumInputArtifactBytes = LocalApiStateLimits.DefaultMaximumSingleArtifactBytes;
     internal const int MaximumBinaryFramingBytes = 256, MaximumProcessTimeoutSeconds = 300;
 
-    private LocalApiDiagnosticOutputIntent(string operationId, string outputId)
+    private LocalApiDiagnosticOutputIntent(string operationId, string outputId, bool isLaunch = false)
     {
+        IsLaunch = isLaunch;
         OperationId = operationId; OutputId = outputId;
         PayloadLeaves = Array.AsReadOnly(Enumerable.Range(0, MaximumPayloadFiles).Select(i => $"d-{outputId[5..]}-{i:00}.bin").ToArray());
         ArchiveLeaf = $"d-{outputId[5..]}.zip";
@@ -31,7 +34,7 @@ internal sealed record LocalApiDiagnosticOutputIntent
         {
             domain = "questionable.file_manager.diagnostic_output_plan.v1", operationId, outputId,
             payloadLeaves = PayloadLeaves, archiveLeaf = ArchiveLeaf, archiveFormat = ArchiveFormat,
-            policyVersion = PolicyVersion, limits = Limits
+            policyVersion = Policy, limits = Limits
         }))).ToLowerInvariant();
     }
 
@@ -40,11 +43,28 @@ internal sealed record LocalApiDiagnosticOutputIntent
     public IReadOnlyList<string> PayloadLeaves { get; }
     public string ArchiveLeaf { get; }
     public string PlannedLeafDigest { get; }
-    [JsonPropertyName("policyVersion")] public string Policy => PolicyVersion;
+    internal bool IsLaunch { get; }
+    [JsonPropertyName("policyVersion")] public string Policy => IsLaunch ? LaunchPolicyVersion : PolicyVersion;
     [JsonPropertyName("archiveFormat")] public string Format => ArchiveFormat;
     // Explicit ordered limits are part of the future v3 digest, including ALL
     // process retention caps. Never use the legacy post-collection fallback.
-    public object Limits => new
+    public object Limits => IsLaunch ? new
+    {
+        maximumProcessLogs = MaximumProcessLogs, recentLogLinesPerCapture = RecentLogLinesPerCapture,
+        maximumPayloadFiles = MaximumPayloadFiles, maximumPayloadFileBytes = MaximumPayloadFileBytes,
+        maximumPayloadBytes = MaximumPayloadBytes, maximumArchiveBytes = MaximumArchiveBytes,
+        reservedOutputBytes = ReservedOutputBytes, reservedOutputFiles = ReservedOutputFiles,
+        maximumRequiredStandardOutputBytes = MaximumRequiredStandardOutputBytes,
+        maximumRequiredStandardErrorBytes = MaximumRequiredStandardErrorBytes,
+        maximumOptionalStandardOutputBytes = MaximumOptionalStandardOutputBytes,
+        maximumOptionalStandardErrorBytes = MaximumOptionalStandardErrorBytes,
+        maximumInputArtifactBytes = MaximumInputArtifactBytes,
+        maximumBinaryFramingBytes = MaximumBinaryFramingBytes,
+        maximumProcessTimeoutSeconds = MaximumProcessTimeoutSeconds,
+        maximumArmedCaptureBytes = MaximumArmedCaptureBytes,
+        postActionWindowMilliseconds = PostActionWindowMilliseconds,
+        maximumLaunchOperationSeconds = MaximumLaunchOperationSeconds
+    } : new
     {
         maximumProcessLogs = MaximumProcessLogs, recentLogLinesPerCapture = RecentLogLinesPerCapture,
         maximumPayloadFiles = MaximumPayloadFiles, maximumPayloadFileBytes = MaximumPayloadFileBytes,
@@ -60,22 +80,34 @@ internal sealed record LocalApiDiagnosticOutputIntent
     };
 
     internal static LocalApiDiagnosticOutputIntent Create(string operationId)
+        => Create(operationId, false);
+
+    internal static LocalApiDiagnosticOutputIntent CreateForLaunch(string operationId)
+        => Create(operationId, true);
+
+    private static LocalApiDiagnosticOutputIntent Create(string operationId, bool isLaunch)
     {
         if (operationId is null || !Regex.IsMatch(operationId, "\\Aapi-[0-9a-f]{32}\\z", RegexOptions.CultureInvariant) || operationId[4..] == new string('0', 32))
             throw Failure("diagnostic_operation_invalid");
-        return new(operationId, "diag-" + Guid.NewGuid().ToString("N"));
+        return new(operationId, "diag-" + Guid.NewGuid().ToString("N"), isLaunch);
     }
 
     // Rebuild only AFTER the existing journal authenticates the source values.
     // Recreating the plan does not adopt any file or permit publication.
     internal static LocalApiDiagnosticOutputIntent Restore(string operationId, string outputId, string expectedPlannedLeafDigest)
+        => Restore(operationId, outputId, expectedPlannedLeafDigest, false);
+
+    internal static LocalApiDiagnosticOutputIntent RestoreForLaunch(string operationId, string outputId, string expectedPlannedLeafDigest)
+        => Restore(operationId, outputId, expectedPlannedLeafDigest, true);
+
+    private static LocalApiDiagnosticOutputIntent Restore(string operationId, string outputId, string expectedPlannedLeafDigest, bool isLaunch)
     {
         if (operationId is null || outputId is null ||
             !Regex.IsMatch(operationId, "\\Aapi-[0-9a-f]{32}\\z", RegexOptions.CultureInvariant) ||
             !Regex.IsMatch(outputId, "\\Adiag-[0-9a-f]{32}\\z", RegexOptions.CultureInvariant) ||
             operationId[4..] == new string('0', 32) || outputId[5..] == new string('0', 32))
             throw Failure("diagnostic_operation_invalid");
-        var intent = new LocalApiDiagnosticOutputIntent(operationId, outputId);
+        var intent = new LocalApiDiagnosticOutputIntent(operationId, outputId, isLaunch);
         if (intent.PlannedLeafDigest != expectedPlannedLeafDigest) throw Failure("diagnostic_plan_mismatch");
         return intent;
     }
@@ -183,7 +215,7 @@ internal sealed class LocalApiDiagnosticUse(Action release) : IDisposable
     public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
 }
 
-internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
+internal sealed partial class LocalApiDiagnosticOutputReservation : IDisposable
 {
     private readonly string _root;
     private LocalApiDiagnosticInputLease? _input;
@@ -243,7 +275,9 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
 
     internal static void ValidateRecovery(LocalApiDiagnosticOutputSnapshot snapshot)
     {
-        _ = LocalApiDiagnosticOutputIntent.Restore(snapshot.Intent.OperationId, snapshot.Intent.OutputId, snapshot.Intent.PlannedLeafDigest);
+        _ = snapshot.Intent.IsLaunch
+            ? LocalApiDiagnosticOutputIntent.RestoreForLaunch(snapshot.Intent.OperationId, snapshot.Intent.OutputId, snapshot.Intent.PlannedLeafDigest)
+            : LocalApiDiagnosticOutputIntent.Restore(snapshot.Intent.OperationId, snapshot.Intent.OutputId, snapshot.Intent.PlannedLeafDigest);
         if (snapshot.Phase is not ("reserved" or "capturing" or "sealing" or "sealed" or "available" or "outcomeUnknown" or "removed") ||
             snapshot.Resources.Count != 16 || snapshot.Resources.Select(r => r.Slot).Distinct().Count() != 16)
             throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_resource_invalid");
@@ -267,10 +301,11 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
                 {
                     "runtime.json" => "runtime", "device.json" => "device", "package.txt" => "package",
                     "meminfo.txt" => "memory", "diagnostic-manifest.json" => "manifest",
+                    "logcat-uid-post-fence.txt" => "launch_logcat", "launch-diagnostic-manifest.json" => "launch_manifest",
                     _ when r.EntryName.StartsWith("logcat-uid-", StringComparison.Ordinal) => "logcat_uid",
                     _ when r.EntryName.StartsWith("logcat-pid-", StringComparison.Ordinal) => "logcat_pid", _ => ""
                 };
-                ValidateEntry(kind, r.EntryName);
+                ValidateEntry(snapshot.Intent.IsLaunch, kind, r.EntryName);
             }
         }
         var identities = snapshot.Resources.Where(r => r.Identity is not null).Select(r => r.Identity).ToArray();
@@ -391,7 +426,7 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
         try
         {
             releaseUse = _acquireRootUse();
-            EnsureUsable(); ValidateEntry(kind, entry);
+            EnsureUsable(); ValidateEntry(Intent.IsLaunch, kind, entry);
             if (bytes.LongLength > LocalApiDiagnosticOutputIntent.MaximumPayloadFileBytes ||
                 _resources.Where(r => r.Role == "payload").Sum(r => r.SizeBytes ?? 0) + bytes.LongLength > LocalApiDiagnosticOutputIntent.MaximumPayloadBytes)
                 throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_payload_capacity");
@@ -472,7 +507,11 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
         await PersistAsync(token).ConfigureAwait(false);
     }
 
-    internal async Task<LocalApiDiagnosticSealedOutput> SealAsync(ApkDiagnosticBundleResult result, CancellationToken token)
+    internal Task<LocalApiDiagnosticSealedOutput> SealAsync(ApkDiagnosticBundleResult result, CancellationToken token) =>
+        SealCoreAsync(result.Artifact, false, payloads => ValidateManifest(payloads, result), token);
+
+    private async Task<LocalApiDiagnosticSealedOutput> SealCoreAsync(ApkArtifactInspection artifact, bool isLaunch,
+        Action<Resource[]> validateManifest, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         Action? releaseUse = null;
@@ -480,10 +519,13 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
         {
             releaseUse = _acquireRootUse();
             EnsureUsable(); _input!.Verify();
-            if (result.Artifact.SizeBytes != _inputSize || result.Artifact.Sha256 != await _input.HashAsync(token).ConfigureAwait(false))
+            if (Intent.IsLaunch != isLaunch) throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_policy_mismatch");
+            if (artifact.SizeBytes != _inputSize || artifact.Sha256 != await _input.HashAsync(token).ConfigureAwait(false))
                 throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_input_changed");
             var payloads = _resources.Where(r => r.Role == "payload" && r.State == "sealed").ToArray();
-            ValidateManifest(payloads, result);
+            if (isLaunch)
+                foreach (var resource in payloads) await VerifyResourceAsync(resource, token).ConfigureAwait(false);
+            validateManifest(payloads);
             _phase = "sealing";
             var archive = _resources[^1];
             await CreateAsync(archive, null, token).ConfigureAwait(false);
@@ -790,9 +832,13 @@ internal sealed class LocalApiDiagnosticOutputReservation : IDisposable
         finally { _gate.Release(); releaseUse?.Invoke(); }
     }
 
-    private static void ValidateEntry(string kind, string entry)
+    private static void ValidateEntry(bool isLaunch, string kind, string entry)
     {
-        var valid = kind switch
+        var valid = isLaunch ? kind switch
+        {
+            "launch_logcat" => entry == "logcat-uid-post-fence.txt",
+            "launch_manifest" => entry == "launch-diagnostic-manifest.json", _ => false
+        } : kind switch
         {
             "runtime" => entry == "runtime.json", "device" => entry == "device.json",
             "package" => entry == "package.txt", "memory" => entry == "meminfo.txt",

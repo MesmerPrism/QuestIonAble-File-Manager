@@ -37,20 +37,25 @@ public sealed partial class AdbClient
         string outputDirectory,
         Action? dispatchObserver,
         CancellationToken cancellationToken)
+        => await RunLaunchDiagnosticWithFenceAsync(
+            observer => LaunchAndCaptureInspectedApkCoreAsync(serial, apkPath, outputDirectory, observer, cancellationToken),
+            dispatchObserver).ConfigureAwait(false);
+
+    private static async Task<ApkLaunchDiagnosticBundleResult> RunLaunchDiagnosticWithFenceAsync(
+        Func<Action, Task<ApkLaunchDiagnosticBundleResult>> operation, Action? dispatchObserver)
     {
         // 0: open, 1: fixed launch boundary crossed, 2: closed without dispatch.
         // Closing also fences a capture runner that retains its action callback.
         var dispatchState = 0;
         try
         {
-            return await LaunchAndCaptureInspectedApkCoreAsync(
-                serial, apkPath, outputDirectory,
+            return await operation(
                 () =>
                 {
                     if (Interlocked.CompareExchange(ref dispatchState, 1, 0) != 0)
                         throw new InvalidOperationException("The launch-diagnostic dispatch boundary is closed.");
                     dispatchObserver?.Invoke();
-                }, cancellationToken).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -91,8 +96,17 @@ public sealed partial class AdbClient
         using var admission = await ImmutableApkAdmission.CreateAsync(
             reportedPath,
             cancellationToken).ConfigureAwait(false);
+        return await CaptureAdmittedLaunchDiagnosticsCoreAsync(serial, reportedPath, admission.Path,
+            fullOutputDirectory, armedRunner, dispatchObserver, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ApkLaunchDiagnosticBundleResult> CaptureAdmittedLaunchDiagnosticsCoreAsync(
+        string serial, string reportedPath, string admittedPath, string fullOutputDirectory,
+        IArmedCaptureCommandRunner armedRunner, Action dispatchObserver,
+        LocalApiDiagnosticCaptureSink? output, CancellationToken cancellationToken)
+    {
         var artifact = await CreateApkInspector().InspectAsync(
-            admission.Path,
+            admittedPath,
             cancellationToken).ConfigureAwait(false);
         RejectSplitArtifact(artifact);
         await RequireExactLaunchDiagnosticReadySerialAsync(serial, cancellationToken).ConfigureAwait(false);
@@ -113,45 +127,40 @@ public sealed partial class AdbClient
         var hostFenceAt = DateTimeOffset.UtcNow;
 
         var deviceEffectPossible = false;
-        var stagingDirectory = Path.Combine(
+        var stagingDirectory = output is not null ? fullOutputDirectory : Path.Combine(
             Path.GetDirectoryName(fullOutputDirectory)!,
             $".{Path.GetFileName(fullOutputDirectory)}.qfm-launch-diagnostic-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(stagingDirectory);
+        if (output is null) Directory.CreateDirectory(stagingDirectory);
         try
         {
             const string logRelativePath = "logcat-uid-post-fence.txt";
             var logPath = Path.Combine(stagingDirectory, logRelativePath);
             ArmedCaptureCommandResult<ApkLaunchDiagnosticAttempt> capture;
-            await using (var logStream = new FileStream(
-                logPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.Read,
-                64 * 1024,
-                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            byte[]? ownedLogBytes = null;
+            await using (Stream logStream = output is null
+                ? new FileStream(logPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read,
+                    64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough)
+                : new OwnedLaunchBuffer(MaximumLaunchDiagnosticBytes))
             {
-                capture = await armedRunner.RunArmedCaptureAsync(
+                var arguments = new string[]
+                {
+                    "-s", serial, "shell", "logcat", "-v", "epoch",
+                    "-T", deviceFence, $"--uid={uid.ToString(CultureInfo.InvariantCulture)}"
+                };
+                Task<ApkLaunchDiagnosticAttempt> Action(CancellationToken actionToken) => DispatchLaunchDiagnosticAsync(
+                    serial, reportedPath, artifact, launcher,
+                    () => { dispatchObserver(); deviceEffectPossible = true; }, actionToken);
+                capture = output is null ? await armedRunner.RunArmedCaptureAsync(
                     AdbPath,
-                    [
-                        "-s", serial, "shell", "logcat", "-v", "epoch",
-                        "-T", deviceFence, $"--uid={uid.ToString(CultureInfo.InvariantCulture)}"
-                    ],
+                    arguments,
                     logStream,
                     MaximumLaunchDiagnosticBytes,
                     LaunchDiagnosticPostActionWindow,
-                    async actionToken => await DispatchLaunchDiagnosticAsync(
-                        serial,
-                        reportedPath,
-                        artifact,
-                        launcher,
-                        () =>
-                        {
-                            dispatchObserver();
-                            deviceEffectPossible = true;
-                        },
-                        actionToken).ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+                    Action, cancellationToken).ConfigureAwait(false)
+                    : await RunOwnedLaunchCaptureAsync(armedRunner, arguments, (OwnedLaunchBuffer)logStream,
+                        Action, () => deviceEffectPossible, cancellationToken).ConfigureAwait(false);
                 await logStream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+                if (logStream is OwnedLaunchBuffer ownedBuffer) ownedLogBytes = ownedBuffer.TakeSealedBytes();
             }
 
             var launchAttempt = capture.ActionResult;
@@ -233,20 +242,33 @@ public sealed partial class AdbClient
                     retryPerformed = false
                 }
             };
-            var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(
-                manifestValue,
-                LaunchDiagnosticJson);
+            byte[] manifestBytes;
+            if (output is null) manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifestValue, LaunchDiagnosticJson);
+            else
+            {
+                OwnedLaunchManifestBounds.RequireValid(normalizedArtifact, installed, installedAfter,
+                    launchAttempt, captureFacts, hostFence, deviceFence, effectDispositionDetail, postReadbackFailure);
+                using var manifestStream = new OwnedLaunchBuffer(MaximumLaunchDiagnosticBytes);
+                await JsonSerializer.SerializeAsync(manifestStream, manifestValue, LaunchDiagnosticJson, cancellationToken).ConfigureAwait(false);
+                manifestBytes = manifestStream.TakeSealedBytes();
+            }
             var manifestSha = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
-            await WriteLaunchDiagnosticCreateNewAsync(
-                Path.Combine(stagingDirectory, manifestRelativePath),
-                manifestBytes).ConfigureAwait(false);
+            if (output is null)
+                await WriteLaunchDiagnosticCreateNewAsync(Path.Combine(stagingDirectory, manifestRelativePath), manifestBytes).ConfigureAwait(false);
+            else
+            {
+                await output.WriteAsync("launch_logcat", logRelativePath, ownedLogBytes!, capture.CommandResult.ExitCode,
+                    "current-user package UID", "fixed bounded post-fence UID capture", capture.OutputLimitReached, cancellationToken).ConfigureAwait(false);
+                await output.WriteAsync("launch_manifest", manifestRelativePath, manifestBytes, null,
+                    "private launch-diagnostic manifest", "fixed launch capture inventory and hashes", false, cancellationToken).ConfigureAwait(false);
+            }
             var disposition = effectDisposition;
             var dispositionDetail = effectDispositionDetail;
-            var publishedAtRequestedPath = true;
+            var publishedAtRequestedPath = output is null;
             var actualOutputDirectory = fullOutputDirectory;
             try
             {
-                Directory.Move(stagingDirectory, fullOutputDirectory);
+                if (output is null) Directory.Move(stagingDirectory, fullOutputDirectory);
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -274,11 +296,12 @@ public sealed partial class AdbClient
                 manifestBytes.LongLength,
                 manifestSha,
                 publishedAtRequestedPath,
-                Path.GetFileName(actualOutputDirectory));
+                output?.Reservation.Intent.OutputId ?? Path.GetFileName(actualOutputDirectory))
+            { OwnedPostReadbackFailure = output is null ? null : postReadbackFailure };
         }
         catch
         {
-            if (!deviceEffectPossible && Directory.Exists(stagingDirectory))
+            if (output is null && !deviceEffectPossible && Directory.Exists(stagingDirectory))
                 Directory.Delete(stagingDirectory, recursive: true);
             throw;
         }
@@ -462,7 +485,7 @@ public sealed partial class AdbClient
         return matches.Distinct().Order().ToArray();
     }
 
-    private static (ApkLaunchDiagnosticDisposition Disposition, string Detail)
+    internal static (ApkLaunchDiagnosticDisposition Disposition, string Detail)
         ClassifyLaunchDiagnosticDisposition(
             ApkLaunchDiagnosticAttempt attempt,
             ApkLaunchDiagnosticCapture capture,

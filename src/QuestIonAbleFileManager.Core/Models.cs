@@ -717,6 +717,8 @@ public sealed record ApkLaunchDiagnosticBundleResult(
 {
     public string DiagnosticContract { get; init; } =
         "questionable.file_manager.apk_launch_diagnostic_bundle.v1";
+
+    internal string? OwnedPostReadbackFailure { get; init; }
 }
 
 public sealed record ApkExportResult(
