@@ -725,6 +725,38 @@ actual receipt stage. Saved/exported references retain the review, including
 when a separate cancellation remains unresolved. Selection does not atomically
 bind a later launch or tag edit to this app, or prove foreground or readiness.
 
+**Options returned with this selection.** The same original Select result may
+contain app-provided launch options. The browser displays that observation with
+its original request, reviewed key/package and binding digest. It sends no
+additional Select or discovery request. Labels and descriptions are literal
+data; opaque option IDs are shown as JSON strings, preserving whitespace and
+control characters. This view offers no option dispatch control.
+
+Only Select adds `typedResult.launchOptions`: its closed `state` is `ready`,
+`none`, `rejected`, `missing` or `unavailable`, with `packageName`,
+`bindingSha256` and bounded `options` rows. Ready rows contain `schemaVersion`,
+`optionId`, `displayLabel` and `description`. At most 64 rows use schema 1,
+unique case-sensitive IDs up to 160 UTF-16 code units, labels up to 96 and
+descriptions up to 160. Empty descriptions are valid. The host checks the
+existing complete binding and digest against the reviewed selected package
+without exposing its UID, signer, version, update time, provider or activity.
+The digest describes the returned binding; it is not fresh installed-byte proof.
+Ready with zero rows differs from an explicit None/Rejected or missing status.
+
+Unsafe optional browser projection produces Unavailable without undoing an
+otherwise valid Select acknowledgement. Core's existing rejection of malformed
+provider wire results is unchanged. Missing or contrary selection proof cannot
+supply usable option rows. Cached original lookup reads the same capture;
+explicit signed original-result recovery reads that original result without
+resubmitting Select or refreshing a separate catalog.
+
+Rows appear only in the dedicated options view, remain in page memory and are
+cleared on source, authentication or connection changes. Generic result JSON
+omits them. Reload and saved/exported references retain only the small
+original identity and review, never option rows or binding documents. Recover
+an unresolved original explicitly. These historical options do not establish
+current selection, app readiness, foreground or atomic named-app execution.
+
 **Headset search, filtering and current-selection tags.** `set-search` and
 `filter-tag` change Kiosk's headset UI state, separately from the browser's
 local catalog filter. Blank editor text clears them. `add-tag` and `remove-tag`

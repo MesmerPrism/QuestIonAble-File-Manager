@@ -50,7 +50,23 @@ function cancelReference(value) {
   return value && session(value.sessionId) && guid(value.requestId) && guid(value.originalRequestId) && value.requestId !== value.originalRequestId && guid(value.connectionId) && value.action === cancelAction && value.logicalRequestId === logical(value.originalRequestId)
     ? {requestId:value.requestId,sessionId:value.sessionId,action:cancelAction,originalRequestId:value.originalRequestId,connectionId:value.connectionId,logicalRequestId:value.logicalRequestId,...(selected ? {originalSelect:selected} : {})} : null;
 }
-function typedResult(value,id,command) {
+const exactFields = (value,fields) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === fields.length && fields.every(field => Object.hasOwn(value,field));
+const optionText = (value,maximum,nonblank = false) => typeof value === 'string' && value.length <= maximum && wellFormed(value) && (!nonblank || trimText(value).length > 0);
+function optionObservation(value,review) {
+  const empty = state => ({state,packageName:null,bindingSha256:null,options:[]});
+  if (value == null) return empty('missing');
+  if (!exactFields(value,['state','packageName','bindingSha256','options']) || !['missing','none','rejected','ready','unavailable'].includes(value.state) || !Array.isArray(value.options) || value.options.length > 64) return empty('unavailable');
+  if (value.state !== 'ready') return value.packageName === null && value.bindingSha256 === null && value.options.length === 0 ? empty(value.state) : empty('unavailable');
+  if (!review || value.packageName !== review.packageName || !packageValid(value.packageName) || typeof value.bindingSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.bindingSha256)) return empty('unavailable');
+  const ids = new Set(), rows = [];
+  for (const row of value.options) {
+    if (!exactFields(row,['schemaVersion','optionId','displayLabel','description']) || row.schemaVersion !== 1 || !optionText(row.optionId,160,true) || ids.has(row.optionId) ||
+        !optionText(row.displayLabel,96,true) || !optionText(row.description,160)) return empty('unavailable');
+    ids.add(row.optionId); rows.push({schemaVersion:1,optionId:row.optionId,displayLabel:row.displayLabel,description:row.description});
+  }
+  return {state:'ready',packageName:value.packageName,bindingSha256:value.bindingSha256,options:rows};
+}
+function typedResult(value,id,command,review) {
   if (!value || value.schema !== 'rusty.kiosk.cli_result.v1' || value.requestId !== id || value.command !== command || typeof value.accepted !== 'boolean' || typeof value.completed !== 'boolean' || (bootPreferences.has(command) && typeof value.requestWifiAdbAfterBoot !== 'boolean') ||
       (wifiAdbCommands.has(command) && typeof value.wifiAdbEnabled !== 'boolean') ||
       (accessibilityCommands.has(command) && typeof value.accessibilityEnabled !== 'boolean') ||
@@ -68,7 +84,7 @@ function typedResult(value,id,command) {
       !['installed','launchable','selectable'].every(field => typeof row[field] === 'boolean'))) throw new Error('typed_result_invalid');
   return {schema:value.schema,requestId:id,command,accepted:value.accepted,completed:value.completed,controlsOpen:value.controlsOpen,selectedKey:value.selectedKey,selectedPackage:value.selectedPackage,
     selectedInstalled:value.selectedInstalled,selectedLaunchable:value.selectedLaunchable,selectedLaunchRequirement:value.selectedLaunchRequirement,pendingRequirementLaunch:value.pendingRequirementLaunch,
-    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),...(accessibilityCommands.has(command) ? {accessibilityEnabled:value.accessibilityEnabled} : {}),...(passthroughCommands.has(command) ? {systemPassthroughEnabled:value.systemPassthroughEnabled,passthroughStyle:value.passthroughStyle} : {}),...(command === 'passthrough-contour' ? {passthroughLutApplied:value.passthroughLutApplied} : {}),...(wifiAdbCommands.has(command) ? {wifiAdbEnabled:value.wifiAdbEnabled} : {}),...(command === 'set-search' ? {search:value.search,valueMatches:value.valueMatches} : {}),...(command === 'filter-tag' ? {tagFilter:value.tagFilter,valueMatches:value.valueMatches} : {}),...(tagCommands.has(command) ? {requestedTagPresent:value.requestedTagPresent} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement,...(command === 'select' ? {packageName:row.packageName,installed:row.installed,launchable:row.launchable,selectable:row.selectable} : {})}};
+    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(command === 'select' ? {launchOptions:optionObservation(value.launchOptions,review)} : {}),...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),...(accessibilityCommands.has(command) ? {accessibilityEnabled:value.accessibilityEnabled} : {}),...(passthroughCommands.has(command) ? {systemPassthroughEnabled:value.systemPassthroughEnabled,passthroughStyle:value.passthroughStyle} : {}),...(command === 'passthrough-contour' ? {passthroughLutApplied:value.passthroughLutApplied} : {}),...(wifiAdbCommands.has(command) ? {wifiAdbEnabled:value.wifiAdbEnabled} : {}),...(command === 'set-search' ? {search:value.search,valueMatches:value.valueMatches} : {}),...(command === 'filter-tag' ? {tagFilter:value.tagFilter,valueMatches:value.valueMatches} : {}),...(tagCommands.has(command) ? {requestedTagPresent:value.requestedTagPresent} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement,...(command === 'select' ? {packageName:row.packageName,installed:row.installed,launchable:row.launchable,selectable:row.selectable} : {})}};
 }
 function project(value,ref,requestId,action) {
   const d = value?.kioskDirectCommand, operation = ({[invokeAction]:'invoke','kiosk.direct.request-status':'requestStatus','kiosk.direct.request-result':'requestResult',[cancelAction]:'requestCancel'})[action];
@@ -95,7 +111,7 @@ function project(value,ref,requestId,action) {
     if (!l || l.requestId !== ref.logicalRequestId || !states.has(l.operationState) || typeof l.accepted !== 'boolean' || typeof l.completed !== 'boolean' || !time(l.enqueuedAtMs) || !time(l.expiresAtMs)) throw new Error('lifecycle_invalid');
     lifecycle = {requestId:l.requestId,operationState:l.operationState,accepted:l.accepted,completed:l.completed,enqueuedAtMs:l.enqueuedAtMs,expiresAtMs:l.expiresAtMs};
   }
-  if (d.typedResult !== null) typed = typedResult(d.typedResult,ref.logicalRequestId,d.command);
+  if (d.typedResult !== null) typed = typedResult(d.typedResult,ref.logicalRequestId,d.command,review);
   if (typed && lifecycle || typed && !['invoke','requestResult'].includes(operation)) throw new Error('command_binding_invalid');
   return {connectionId:d.connectionId,connectRequestId:d.connectRequestId,usbOperationId:d.usbOperationId,serial:d.serial,productChannel:d.productChannel,operation,originalRequestId:originalId,
     logicalRequestId:ref.logicalRequestId,command:d.command,value:d.value,originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:receipt,lifecycle,typedResult:typed,cancellationAcknowledged:d.cancellationAcknowledged,...(review ? {selectionReview:review} : {})};
@@ -137,6 +153,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   let original = null, cancellation = null, damaged = false, storageAvailable = true;
   let writing = false, reading = false, probing = false, cancelProbing = false, authStamp = '', authEpoch = 0, stamp = '', epoch = 0, sourceEpoch = 0;
   let message = 'No Direct command sent.', facts = null, lifecycle = null, cancelMessage = 'No cancellation requested.';
+  let optionSnapshot = null;
   const hasUnresolved = () => Boolean(original || cancellation || damaged || !storageAvailable);
   const getCleanupReference = () => {
     if (damaged) return null;
@@ -176,6 +193,27 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const review = selectionReview(context.reviewedSelection), c = connection(context);
     return review && c && context.reviewedSelection.sessionId === context.sessionId && c.serial === review.serial && c.productChannel === review.productChannel ? review : null;
   };
+  const observationScope = context => {
+    const c = connection(context);
+    return JSON.stringify([context.connected,context.sessionId,context.authGeneration,c,Boolean(c && Date.parse(c.expiresAtUtc) > Date.now()),currentSelection(context),sourceEpoch]);
+  };
+  function renderOptions() {
+    element('launch-options').hidden = !optionSnapshot;
+    const list = element('launch-options-rows'); list.replaceChildren();
+    if (!optionSnapshot) {
+      for (const id of ['launch-options-source','launch-options-state','launch-options-binding']) text(id,'');
+      return;
+    }
+    const {reference:ref,observation:o} = optionSnapshot, review = ref.selectionReview;
+    text('launch-options-source',`Original request: ${ref.requestId}; logical request: ${ref.logicalRequestId}; catalog source: ${review.catalogRequestId}; selected key: ${review.key}; package: ${review.packageName}; target: ${ref.serial} · ${ref.productChannel}; connection: ${ref.connectionId}; host session: ${ref.sessionId}.`);
+    text('launch-options-state',`Returned option status: ${o.state}; ${o.options.length} options.${o.state === 'unavailable' ? ' Option observation unavailable; the selection acknowledgement remains separate.' : ''}`);
+    text('launch-options-binding',o.state === 'ready' ? `Returned package: ${o.packageName}; binding SHA-256: ${o.bindingSha256}.` : 'No ready option binding observed.');
+    for (const row of o.options) {
+      const item = document.createElement('li'), label = document.createElement('strong'), id = document.createElement('code'), description = document.createElement('p');
+      label.textContent = row.displayLabel; id.textContent = JSON.stringify(row.optionId); description.textContent = row.description;
+      item.append(label,id,description); list.append(item);
+    }
+  }
   const editorValue = () => {
     const command = element('command').value;
     if (command === 'select') return currentSelection(getContext())?.key;
@@ -185,6 +223,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   };
   function update() {
     const context = getContext(), c = connection(context), nextAuth = JSON.stringify([context.connected,context.sessionId,context.authGeneration]);
+    if (optionSnapshot && optionSnapshot.scope !== observationScope(context)) optionSnapshot = null;
     if (nextAuth !== authStamp) { authStamp = nextAuth; authEpoch++; }
     const reviewed = currentSelection(context);
     const next = JSON.stringify([nextAuth,c,element('command').value,element('requirement').value,element('text').value,element('command').value === 'select' ? [reviewed,sourceEpoch] : null,[...(context.actions || [])].sort(),Boolean(context.externalUnresolved)]);
@@ -220,15 +259,22 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     element('original').hidden = !original; element('cancellation').hidden = !cancellation;
     for (const [id,value] of Object.entries({id:original?.requestId,logical:original?.logicalRequestId,command:original?.command,value:original && textCommands.has(original.command) ? JSON.stringify(original.value) : original?.value ?? 'null',target:original?.serial,channel:original?.productChannel,connection:original?.connectionId,session:original?.sessionId})) text('original-' + id,value || 'Unknown');
     for (const [id,value] of Object.entries({id:cancellation?.requestId,original:cancellation?.originalRequestId,logical:cancellation?.logicalRequestId})) text('cancellation-' + id,value || 'Unknown');
+    renderOptions();
   }
   function show(d,requestId,action,summary = message) {
-    facts = d.typedResult; lifecycle = d.lifecycle;
+    // The dedicated, scoped snapshot is the sole option-row output. Generic
+    // result JSON can outlive this card's source/auth/connection invalidation.
+    if (d.typedResult) { const {launchOptions,...baseFacts} = d.typedResult; facts = baseFacts; }
+    else facts = null;
+    lifecycle = d.lifecycle;
     showResult({requestId,action,connectionId:d.connectionId,originalRequestId:d.originalRequestId,logicalRequestId:d.logicalRequestId,command:d.command,value:d.value,
-      originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:d.coreReceipt,lifecycle:d.lifecycle,typedResult:d.typedResult,cancellationAcknowledged:d.cancellationAcknowledged,...(d.selectionReview ? {selectionReview:d.selectionReview} : {})},summary);
+      originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:d.coreReceipt,lifecycle:d.lifecycle,typedResult:facts,cancellationAcknowledged:d.cancellationAcknowledged,...(d.selectionReview ? {selectionReview:d.selectionReview} : {})},summary);
   }
-  function acknowledgeOriginal(value,ref,requestId = ref.requestId,action = invokeAction) {
+  function acknowledgeOriginal(value,ref,requestId = ref.requestId,action = invokeAction,captureOptions = true) {
     const d = project(value,ref,requestId,action);
+    if (ref.command === 'select' && !captureOptions && d.typedResult) d.typedResult = {...d.typedResult,launchOptions:{state:'unavailable',packageName:null,bindingSha256:null,options:[]}};
     if (value.state === 'completed' && confirms(d) && original?.requestId === ref.requestId) {
+      if (ref.command === 'select') optionSnapshot = captureOptions ? {reference:originalReference(ref),observation:d.typedResult.launchOptions,scope:observationScope(getContext())} : null;
       original = null; if (!persist()) { original = ref; return; }
       message = ref.command === 'select' ? 'Kiosk acknowledged the reviewed app selection and exact package. App launch, foreground and readiness remain unverified.' : textCommands.has(ref.command) ? (tagCommands.has(ref.command) ? `Kiosk acknowledged the tag request. Returned selection: ${d.typedResult.selectedKey}; requested tag ${d.typedResult.requestedTagPresent ? 'present' : 'absent'}.` : 'Kiosk acknowledged the exact headset search or tag-filter request. The browser local catalog filter is separate.') : ref.command === 'exit-meta-home' ? 'Kiosk acknowledged the Meta Home request as accepted and completed. Meta Home foreground, leaving an app, wearer visibility and application/OpenXR readiness remain unverified.' : wifiAdbCommands.has(ref.command) ? `Kiosk-reported Wi-Fi ADB flag observed: ${d.typedResult.wifiAdbEnabled ? 'enabled' : 'disabled'}. Host discovery, connectivity, pairing, address, protected approval, future boot behavior, foreground and readiness remain unverified.` : accessibilityCommands.has(ref.command) ? `Kiosk-reported accessibility-enabled flag observed: ${d.typedResult.accessibilityEnabled ? 'on' : 'off'}. Protected approval, OS permission, foreground and app readiness remain unverified.` : passthroughCommands.has(ref.command) ? `Kiosk-reported passthrough state observed: ${d.typedResult.passthroughStyle}${ref.command === 'passthrough-contour' ? ', LUT reported applied' : ''}. Visual camera output, protected approval, foreground and app readiness remain unverified.` : bootPreferences.has(ref.command) ? `Request-after-restart preference observed: ${d.typedResult.requestWifiAdbAfterBoot ? 'on' : 'off'}. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.` : ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
     } else message = `Original proof remains ${d.originalEffect}; actual Core stage ${d.coreReceipt?.stage ?? 'unavailable'}. Lifecycle, pending requirements and missing evidence do not confirm a typed effect.`;
@@ -248,18 +294,20 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const ref = cancel ? cancelReference({requestId,sessionId:context.sessionId,action:cancelAction,originalRequestId:original.requestId,connectionId:original.connectionId,logicalRequestId:original.logicalRequestId,...(original.command === 'select' ? {originalSelect:originalReference(original)} : {})})
       : originalReference({...c,requestId,action:invokeAction,logicalRequestId:logical(requestId),command:element('command').value,value:editorValue(),...(element('command').value === 'select' ? {selectionReview:currentSelection(context)} : {})});
     if (!ref) return;
+    if (!cancel) optionSnapshot = null;
     if (cancel) cancellation = ref; else original = ref;
     if (!persist()) { if (cancel) cancellation = null; else original = null; update(); setBusy(Boolean(getContext().busy)); return; }
     writing = true; element('invoke-confirm').checked = false; element('cancel-confirm').checked = false; setBusy(true); update();
-    const sentAuth = authEpoch, sentEpoch = epoch;
+    const sentAuth = authEpoch, sentEpoch = epoch, sentObservation = observationScope(getContext());
     const body = cancel ? {requestId,action:cancelAction,connectionId:ref.connectionId,originalRequestId:ref.originalRequestId,confirmed:true}
       : {requestId,action:invokeAction,connectionId:ref.connectionId,command:ref.command,value:ref.value,confirmed:true,...(ref.command === 'select' ? {catalogRequestId:ref.selectionReview.catalogRequestId} : {})};
     try {
       const value = await api('/browser/v1/execute',{method:'POST',body:JSON.stringify(body)}); update();
       if ((cancel ? cancellation : original)?.requestId !== ref.requestId) return;
-      if (sentAuth !== authEpoch || sentEpoch !== epoch || !live(getContext())) { message = 'Reply arrived after authentication, form or connection changed. Read the exact cached original explicitly; no replay.'; return; }
-      if (cancel) acknowledgeCancel(value,ref); else acknowledgeOriginal(value,ref);
+      if (sentAuth !== authEpoch || sentEpoch !== epoch || !live(getContext())) { optionSnapshot = null; message = 'Reply arrived after authentication, form or connection changed. Read the exact cached original explicitly; no replay.'; return; }
+      if (cancel) acknowledgeCancel(value,ref); else acknowledgeOriginal(value,ref,ref.requestId,invokeAction,sentObservation === observationScope(getContext()));
     } catch (error) {
+      optionSnapshot = null;
       update(); if ((cancel ? cancellation : original)?.requestId !== ref.requestId) return;
       if (sentAuth === authEpoch && sentEpoch === epoch && live(getContext()) && error.dispatched === false && predispatch.has(error.message)) {
         if (cancel) cancellation = null; else original = null;
@@ -270,25 +318,25 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   }
   async function recover(result = false) {
     update(); if (element(result ? 'request-result' : 'request-status').disabled) return;
-    const ref = {...original}, requestId = crypto.randomUUID(), action = result ? 'kiosk.direct.request-result' : 'kiosk.direct.request-status', sentAuth = authEpoch, sentEpoch = epoch;
+    const ref = {...original}, requestId = crypto.randomUUID(), action = result ? 'kiosk.direct.request-result' : 'kiosk.direct.request-status', sentAuth = authEpoch, sentEpoch = epoch, sentObservation = observationScope(getContext());
     reading = true; setBusy(true); update();
     try {
       const value = await api('/browser/v1/execute',{method:'POST',body:JSON.stringify({requestId,action,connectionId:ref.connectionId,originalRequestId:ref.requestId})}); update();
-      if (original?.requestId !== ref.requestId || sentAuth !== authEpoch || sentEpoch !== epoch || !live(getContext())) return;
-      if (result) acknowledgeOriginal(value,ref,requestId,action);
+      if (original?.requestId !== ref.requestId || sentAuth !== authEpoch || sentEpoch !== epoch || !live(getContext())) { optionSnapshot = null; return; }
+      if (result) acknowledgeOriginal(value,ref,requestId,action,sentObservation === observationScope(getContext()));
       else { const d = project(value,ref,requestId,action); message = 'Separate lifecycle facts read. They never acknowledge the original or a cancellation call.'; show(d,requestId,action); }
-    } catch { message = 'Original native read unavailable or unbound. Original references unchanged; no retry or replacement connection.'; }
+    } catch { optionSnapshot = null; message = 'Original native read unavailable or unbound. Original references unchanged; no retry or replacement connection.'; }
     finally { reading = false; update(); setBusy(false); }
   }
   async function cached(cancel = false) {
     update(); if (element(cancel ? 'cancellation-status' : 'original-status').disabled) return;
-    const ref = {...(cancel ? cancellation : original)}, sentAuth = authEpoch;
+    const ref = {...(cancel ? cancellation : original)}, sentAuth = authEpoch, sentObservation = observationScope(getContext());
     if (cancel) cancelProbing = true; else probing = true; update();
     try {
       const value = await api('/browser/v1/requests/' + encodeURIComponent(ref.requestId)); update();
-      if ((cancel ? cancellation : original)?.requestId !== ref.requestId || sentAuth !== authEpoch || !live(getContext()) || getContext().sessionId !== ref.sessionId) return;
-      if (cancel) acknowledgeCancel(value,ref); else acknowledgeOriginal(value,ref);
-    } catch { message = 'Cached original result unavailable or crossed. Missing records prove no absence of effects.'; }
+      if ((cancel ? cancellation : original)?.requestId !== ref.requestId || sentAuth !== authEpoch || !live(getContext()) || getContext().sessionId !== ref.sessionId) { optionSnapshot = null; return; }
+      if (cancel) acknowledgeCancel(value,ref); else acknowledgeOriginal(value,ref,ref.requestId,invokeAction,sentObservation === observationScope(getContext()));
+    } catch { optionSnapshot = null; message = 'Cached original result unavailable or crossed. Missing records prove no absence of effects.'; }
     finally { if (cancel) cancelProbing = false; else probing = false; update(); setBusy(Boolean(getContext().busy)); }
   }
   for (const id of ['command','requirement']) element(id).addEventListener('change',update);
@@ -299,6 +347,6 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   element('original-status').addEventListener('click',()=>cached(false)); element('cancellation-status').addEventListener('click',()=>cached(true));
   element('save-reference').addEventListener('click',()=>{const blob = new Blob([JSON.stringify({original:originalReference(original),cancellation:cancelReference(cancellation)},null,2)],{type:'application/json'}), url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'qfm-direct-command-reference.json'; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);});
   setInterval(update,1000);
-  const selectionSourceChanged = () => { sourceEpoch++; update(); };
+  const selectionSourceChanged = () => { sourceEpoch++; optionSnapshot = null; update(); };
   return {update,hasUnresolved,getCleanupReference,selectionSourceChanged};
 }

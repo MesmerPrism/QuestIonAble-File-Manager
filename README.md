@@ -45,6 +45,9 @@ atomic named-entry edit or expose the full tag document.
 Direct Select uses an eligible reviewed row from the existing completed catalog,
 checks its package and exact connection scope, and retains that review for
 original-result recovery. Selection and later launch or tag edits are separate requests.
+App-provided options returned with that same Select result appear as historical
+observations. Reading the result sends no extra selection or option-discovery
+request; dispatching an option remains a separate CLI/WPF workflow.
 Accessibility and natural/contour passthrough
 controls confirm only Kiosk's reported flag, mode and applicable LUT state;
 protected prompts remain wearer decisions. Guard-mode acknowledgement does not prove

@@ -14,6 +14,7 @@ node --test tools/browser-ui/direct-connection.test.cjs
 node --test tools/browser-ui/direct-command.test.cjs
 node --test tools/browser-ui/direct-command-text.test.cjs
 node --test tools/browser-ui/direct-select.test.cjs
+node --test tools/browser-ui/direct-options.test.cjs
 node --test tools/browser-ui/direct-tags.test.cjs
 node --test tools/browser-ui/direct-staging.test.cjs
 node --test tools/browser-ui/direct-upload.test.cjs
@@ -69,6 +70,13 @@ scope-bound reviewed key/package admission, source-change approval revocation,
 unique returned-row proof and immutable originals through reload and cancellation.
 They preserve the existing eligible returned-row behavior for bounded catalogs
 and do not establish physical Direct selection on a headset.
+Returned-options fixtures use the same Select result and immutable source
+header, distinguish missing/none/rejected/ready/unavailable observations, and
+preserve valid Select acknowledgement when optional browser data is unusable.
+They check exact opaque IDs, literal rendering, memory-only rows and scope
+invalidation without another Invoke or option-discovery/launch request. Core
+wire-parser rejection remains unchanged; forged typed-record projection tests
+do not establish recovery from malformed native wire data.
 Transfer fixtures keep read captures separate from local APK/retained references,
 check exact source/target/receipt bindings and reject stale replies. Download
 fixtures use explicit mock picker/writable handles with real Chromium streams,

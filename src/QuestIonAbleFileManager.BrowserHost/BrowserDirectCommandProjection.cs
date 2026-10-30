@@ -38,6 +38,8 @@ public sealed record BrowserDirectTypedResult(string Schema,string RequestId,str
     public bool? ValueMatches { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? RequestedTagPresent { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserDirectLaunchOptions? LaunchOptions { get; init; }
 }
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
@@ -107,6 +109,8 @@ internal static class BrowserDirectCommandProjection
             var selectionProof=expected!=RustyKioskCommand.Select || selection is not null && snapshot.SelectedKey==source.Value && snapshot.SelectedKey==selection.Key &&
                 snapshot.SelectedPackage==selection.PackageName && snapshot.SelectedInstalled && snapshot.SelectedLaunchable &&
                 snapshot.SelectedEntry is { Installed:true, Launchable:true, Selectable:true } row && row.Key==selection.Key && row.PackageName==selection.PackageName;
+            if(expected==RustyKioskCommand.Select && selectionProof)
+                snapshot=snapshot with { LaunchOptions=BrowserDirectLaunchOptionsProjection.Capture(typed.State,selection!) };
             var missing=!selectionProof || launch && snapshot.PendingRequirementLaunch is null || expected==RustyKioskCommand.SetLaunchRequirement && shared && snapshot.SelectedEntry is null ||
                 tags && (snapshot.SelectedEntry is null || snapshot.RequestedTagPresent is null);
             var confirmed=shared && !missing && (!launch || snapshot.PendingRequirementLaunch==false);
