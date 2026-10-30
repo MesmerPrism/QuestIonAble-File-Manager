@@ -144,8 +144,11 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
             cancellationToken,
             timeoutSource.Token);
 
-        var outputTask = process.StandardOutput.ReadToEndAsync(linkedSource.Token);
-        var errorTask = process.StandardError.ReadToEndAsync(linkedSource.Token);
+        // Retained operations own these exact readers through actual EOF. Caller
+        // cancellation requests process termination; it cannot acknowledge drain.
+        var readerToken = timeout == Timeout.InfiniteTimeSpan ? CancellationToken.None : linkedSource.Token;
+        var outputTask = process.StandardOutput.ReadToEndAsync(readerToken);
+        var errorTask = process.StandardError.ReadToEndAsync(readerToken);
 
         string standardOutput;
         string standardError;
@@ -185,7 +188,12 @@ public sealed class CommandRunner : IArmedCaptureCommandRunner, ISensitiveComman
         {
             linkedSource.Cancel();
             TryKill(process);
-            await WaitAfterKillAsync(process).ConfigureAwait(false);
+            if (timeout == Timeout.InfiniteTimeSpan)
+                // A failed kill or inherited pipe remains owned until the same
+                // process really exits and both original readers actually settle.
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            else
+                await WaitAfterKillAsync(process).ConfigureAwait(false);
             await IgnoreFailureAsync(outputTask).ConfigureAwait(false);
             await IgnoreFailureAsync(errorTask).ConfigureAwait(false);
             throw;

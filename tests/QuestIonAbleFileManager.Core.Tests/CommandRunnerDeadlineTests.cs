@@ -57,6 +57,31 @@ public sealed class CommandRunnerDeadlineTests
     }
 
     [Fact]
+    public async Task RetainedOperation_PreservesExplicitCancellationUntilActualPipeEof()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new HeldPipeFixture("ordinary");
+        using var cancellation = new CancellationTokenSource();
+        var runner = new CommandRunner(TimeSpan.FromMilliseconds(100));
+        var invocation = runner.RunAsync(fixture.Executable, fixture.Arguments,
+            Timeout.InfiniteTimeSpan, cancellation.Token);
+        await fixture.WaitForParentExitAsync(invocation);
+        Assert.False(HasExited(fixture.ChildId));
+        fixture.AssertChildIdentity();
+
+        cancellation.Cancel();
+        await Task.Delay(300);
+
+        Assert.False(invocation.IsCompleted,
+            "Explicit cancellation must retain the original readers until their actual pipe EOF.");
+        Assert.False(HasExited(fixture.ChildId));
+        fixture.AssertChildIdentity();
+        fixture.ReleaseChild();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => invocation.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
     public async Task RetainedOperation_WarningObserverFailureDoesNotAbandonOperation()
     {
         if (!OperatingSystem.IsWindows()) return;

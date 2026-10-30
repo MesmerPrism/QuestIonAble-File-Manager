@@ -108,6 +108,16 @@ documented.
   actual dispatch. Actual mutation evidence and archive availability remain
   separate. Capture or readback ambiguity remains unknown; never retry the
   launch automatically or infer rollback from local cancellation or cleanup.
+- The reviewed browser package-stop projection invokes the existing typed
+  `StopPackage` command for one exact serial and package, with separate
+  current-user stop approval. Its existing process waits for exit/drain or
+  deliberate connector-shutdown cancellation; an elapsed browser timer never
+  cancels or replays it. The shared gate and one-use request remain owned
+  through settlement. Closed presence, coherent process-absence and activity
+  count facts plus a sanitized actual receipt prove quiescence only. The
+  in-memory original lookup is connector-session scoped; lost or uncertain
+  outcomes stay blocked, including after restart. No arbitrary user, component,
+  command, uninstall or installed-byte/readiness claim is admitted.
 - Wi-Fi ADB enable/connect/disconnect is the reviewed exception documented in
   `docs/wifi-adb-and-parallel-install.md`. Every route requires explicit
   operator confirmation. Enablement reads `wlan0` before mutation, scopes

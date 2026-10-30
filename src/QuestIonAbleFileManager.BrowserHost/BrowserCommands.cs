@@ -27,6 +27,8 @@ public sealed record BrowserCommandOutcome(
     public BrowserDirectUploadOutcome? KioskDirectUpload { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BrowserDirectInstallOutcome? KioskDirectInstall { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BrowserPackageStopOutcome? PackageStop { get; init; }
 }
 
 public sealed record BrowserArtifactInspectionOutcome(BrowserArtifactReceipt Artifact, ApkArtifactInspection Inspection);
@@ -42,7 +44,7 @@ public sealed partial class BrowserCommands
     public const int MaximumRequests = 256;
     public static readonly string[] Actions =
         ["devices", "device.status", "wifi.enable", "wifi.connect", "wifi.disconnect", "device.keep-awake", "device.normal",
-         "files.list", "apk.list", "apk.permissions", "device.performance", "device.performance-clear",
+         "files.list", "apk.list", "apk.permissions", "apk.stop", "device.performance", "device.performance-clear",
          "device.actor-observe", "device.actor-identity", "adb.forwards",
          "kiosk.installation", "kiosk.catalog.open", "kiosk.select", "kiosk.original-result"];
     private readonly Func<OperatorCommand, CancellationToken, Task<OperatorExecutionResult>> _execute;
@@ -115,6 +117,9 @@ public sealed partial class BrowserCommands
         if (BrowserTransferCommands.IsTransferAction(body))
             return await ExecuteTransferAsync(BrowserTransferCommands.Parse(body), stopping).ConfigureAwait(false);
         var artifact = BrowserArtifactCommands.IsArtifactAction(body) ? BrowserArtifactCommands.Parse(body) : null;
+        var parsed = artifact is null ? Parse(body) : null;
+        if (parsed?.Command.Kind == OperatorCommandKind.StopPackage)
+            return await ExecutePackageStopAsync(parsed, stopping).ConfigureAwait(false);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stopping);
         timeout.CancelAfter(TimeSpan.FromSeconds(artifact is null ? 90 : BrowserArtifactStore.TransferTimeoutSeconds));
         if (artifact is not null)
@@ -128,7 +133,7 @@ public sealed partial class BrowserCommands
             }
         }
         await using var artifactLease = await AcquireArtifactAsync(artifact, timeout.Token).ConfigureAwait(false);
-        var request = artifact is null ? Parse(body) : new BrowserCommandRequest(
+        var request = artifact is null ? parsed! : new BrowserCommandRequest(
             artifact.RequestId, artifact.Action, artifact.ToOperatorCommand(artifactLease!), artifact.Action == "files.push");
         IDisposable operationLease;
         lock (_admission)
@@ -288,6 +293,7 @@ public sealed partial class BrowserCommands
                 "device.status" or "apk.list" or "adb.forwards" => ["requestId", "action", "serial"],
                 "files.list" => ["requestId", "action", "serial", "path"],
                 "apk.permissions" => ["requestId", "action", "serial", "package"],
+                "apk.stop" => ["requestId", "action", "serial", "package", "confirmed"],
                 "device.actor-observe" or "device.actor-identity" => ["requestId", "action", "serial", "pid"],
                 "wifi.enable" => ["requestId", "action", "serial", "port", "confirmed"],
                 "wifi.connect" or "wifi.disconnect" => ["requestId", "action", "serial", "host", "port", "confirmed"],
@@ -298,7 +304,7 @@ public sealed partial class BrowserCommands
             };
             if (!names.SetEquals(allowed)) throw new BrowserRequestException("fields_invalid");
             var mutation = action is "wifi.enable" or "wifi.connect" or "wifi.disconnect" or
-                "device.keep-awake" or "device.normal" or "device.performance" or "device.performance-clear";
+                "device.keep-awake" or "device.normal" or "device.performance" or "device.performance-clear" or "apk.stop";
             if (mutation && root.GetProperty("confirmed").ValueKind != JsonValueKind.True)
                 throw new BrowserRequestException("confirmation_required");
             var serial = action == "devices" ? null : RequiredString(root, "serial");
@@ -309,6 +315,7 @@ public sealed partial class BrowserCommands
                 "files.list" => OperatorCommands.ListFiles(serial!, RequiredString(root, "path")),
                 "apk.list" => OperatorCommands.ListPackages(serial!),
                 "apk.permissions" => OperatorCommands.ObservePackagePermissions(serial!, RequiredString(root, "package")),
+                "apk.stop" => OperatorCommands.StopPackage(serial!, RequiredString(root, "package"), operatorConfirmed: true),
                 "device.actor-observe" => OperatorCommands.ObserveDeviceActor(serial!, Integer(root, "pid", 1, int.MaxValue)),
                 "device.actor-identity" => OperatorCommands.ObserveDeviceActorIdentity(serial!, Integer(root, "pid", 1, int.MaxValue)),
                 "adb.forwards" => OperatorCommands.InventoryAdbForwards(serial!),

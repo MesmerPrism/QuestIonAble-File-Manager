@@ -178,6 +178,9 @@ var shutdownCode = 0;
 try { await app.RunAsync(); }
 finally
 {
+    // A package stop retains its task/gate through actual process exit and drain,
+    // even after host stopping has requested cancellation of the Core operation.
+    await commands.DrainPackageStopsAsync();
     // An admitted private write retains its bytes/gate through real verification
     // and rollback; cooperative cancellation is not an acknowledgement.
     await commands.DrainProfilesAsync();

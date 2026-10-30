@@ -116,6 +116,7 @@ fields reject, and each action requires exactly its listed fields:
 | `files.list` | `serial`, `path` (absolute headset folder) |
 | `apk.list` | `serial` |
 | `apk.permissions` | `serial`, `package` (exact package name) |
+| `apk.stop` | `serial`, `package`, `confirmed:true` (current-user package stop) |
 | `device.performance` | `serial`, `cpu`, `gpu`, `confirmed:true` |
 | `device.performance-clear` | `serial`, `confirmed:true` |
 | `device.actor-observe` | `serial`, `pid` (positive process ID) |
@@ -182,6 +183,9 @@ running ID is classified as consumed before the busy check.
 Body reads have a five-second deadline. Ordinary admitted ADB commands have a
 90-second cancellation deadline; staged APK inspection/lease acquisition and
 read captures instead share a five-minute lifetime with their bounded runners.
+The explicit package-stop path retains its same native operation through actual
+exit and stream drain without that elapsed deadline; connector shutdown requests
+cancellation but still joins its real completion.
 Local profile writes below retain their synchronous owner's real completion
 and rollback rather than imposing a false hard timeout on native storage.
 Closing the page does not
@@ -277,6 +281,36 @@ and rejects late responses from an earlier authentication or selection. It never
 persists or replays these reads, chooses a fallback verification policy, or
 clears an original unknown mutation. An explicit local connector connection
 can still read a USB headset while the wider network is offline.
+
+## Stop one current-user package
+
+In **Installed apps**, select or enter the exact package, review the selected
+ready headset, then approve and send one stop. The request contains only
+`requestId`, `action: "apk.stop"`, `serial`, `package` and `confirmed: true`.
+The connector invokes the existing typed Core current-user package stop;
+callers cannot choose a user, component, command or shell fragment.
+
+The stop keeps its native process and shared operation gate until actual
+exit/drain and readback. Elapsed time does not cancel it, and closing the page
+does not cancel or repeat it. Stopping the connector requests cancellation;
+that cannot undo an Android effect. This control has no separate cancellation
+endpoint.
+
+Confirmation requires both package-presence reads, coherent package-UID and
+process-birth absence evidence, and no exact-package foreground or top-resumed
+component. The closed `packageStop` result exposes only presence, verification
+and count facts alongside a sanitized actual mutation receipt. It does not
+expose command output, PIDs, UIDs or components and does not prove installed
+APK bytes, application readiness, OpenXR readiness or wearer visibility.
+
+The browser saves the original request before sending it. A lost reply,
+pending readback or malformed acknowledgement blocks new mutations. **Read
+original stop result** uses only that request ID in its original connector
+session and never sends another stop. Save the reference before recovery.
+Reload and reconnect send nothing. A new connector session cannot recover this
+in-memory result: missing state remains unknown, and separate inventory or
+permission reads cannot clear it. Use the typed owner route for qualified
+recovery; never repeat the mutation merely because its reply was lost.
 
 ## Upload and push one file
 
