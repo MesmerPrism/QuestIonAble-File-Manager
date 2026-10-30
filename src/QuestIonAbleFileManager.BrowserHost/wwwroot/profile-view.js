@@ -35,12 +35,16 @@ function terminal(value,ref) {
 export function createProfileView({api,getContext,setBusy,showResult}) {
   const element = id => document.getElementById('profile-' + id), text = (id,value) => { element(id).textContent = value; };
   let original = null, damaged = false, storageAvailable = true, reading = false, writing = false, probing = false;
-  let authStamp = '', capabilityStamp = '', authEpoch = 0, revision = 0, rows = [], statusFact = null;
+  let authStamp = '', capabilityStamp = '', authEpoch = 0, revision = 0, sourceStamp = '', sourceRevision = 0, rows = [], statusFact = null;
   let message = 'No profile request sent.', listMessage = 'No profile list requested.', statusMessage = 'No stored status requested.';
   const live = context => Boolean(context.connected && session(context.sessionId));
   const supported = context => context.capability?.supported === true && context.capability.maximumPrivateInputBytes === 4096 && context.capability.maximumListEntries === 128;
   const supports = (context,action) => context.actions?.has?.(action) === true;
   const hasUnresolved = () => Boolean(original || damaged || !storageAvailable);
+  const selectedUsb = context => context.selected?.isReady === true && context.selected.isWifiConnection === false &&
+    typeof context.selected.serial === 'string' && context.selected.serial.length > 0 && context.selected.serial.length <= 256 && /^[A-Za-z0-9._:-]+$/.test(context.selected.serial) ? context.selected.serial : null;
+  const sourceIdentity = context => JSON.stringify([element('mode').value,element('mode').value === 'selected-usb' ?
+    [context.selected?.serial ?? null,context.selected?.isReady ?? null,context.selected?.isWifiConnection ?? null] : null]);
   function persist() {
     try { sessionStorage.setItem(storageKey,JSON.stringify(original ? reference(original) : damaged ? {} : null)); if (!original && !damaged) sessionStorage.removeItem(storageKey); return true; }
     catch { storageAvailable = false; return false; }
@@ -72,14 +76,22 @@ export function createProfileView({api,getContext,setBusy,showResult}) {
       authStamp = nextAuth; capabilityStamp = nextCapability; clearPrivate(); rows = []; statusFact = null;
       listMessage = 'No profile list requested for this authentication scope.'; statusMessage = 'No stored status requested for this authentication scope.';
     }
+    const nextSource = sourceIdentity(context);
+    if (nextSource !== sourceStamp) {
+      sourceStamp = nextSource; sourceRevision++;
+      for (const kind of ['create','replace']) element(kind + '-confirm').checked = false;
+    }
     const available = live(context) && supported(context), idle = available && !context.busy && !reading && !writing;
-    const reviewedId = deviceId(element('id').value), fileMode = element('mode').value === 'file';
-    const privateReady = reviewedId && (fileMode ? element('file').files?.length === 1 : Boolean(element('usb').value && element('endpoint').value && element('code').value));
+    const reviewedId = deviceId(element('id').value), fileMode = element('mode').value === 'file', selectedMode = element('mode').value === 'selected-usb';
+    const privateReady = reviewedId && (fileMode ? element('file').files?.length === 1 : Boolean((selectedMode ? selectedUsb(context) : element('usb').value) && element('endpoint').value && element('code').value));
     const mutatable = idle && !hasUnresolved() && !context.externalUnresolved;
     for (const id of ['id','mode']) element(id).disabled = !available;
     for (const id of ['usb','endpoint','code']) element(id).disabled = !available || fileMode || writing;
+    element('usb').disabled = element('usb').disabled || selectedMode;
     element('file').disabled = !available || !fileMode || writing;
     element('manual').hidden = fileMode; element('file-source').hidden = !fileMode;
+    element('manual-usb').hidden = selectedMode; element('selected-usb').hidden = !selectedMode;
+    text('selected-usb',available && selectedUsb(context) ? `USB serial from the selected ready target: ${selectedUsb(context)}. Enter the endpoint and pairing code manually below; selection does not prove endpoint ownership or connectivity.` : 'Select one ready USB target in the host device list. A Wi-Fi, unavailable or unready row cannot supply this enrollment source.');
     element('list').disabled = !idle || !supports(context,'profile.list'); element('status').disabled = !idle || !reviewedId || !supports(context,'profile.status');
     for (const kind of ['create','replace']) {
       const allowed = mutatable && privateReady && supports(context,'profile.import');
@@ -90,7 +102,8 @@ export function createProfileView({api,getContext,setBusy,showResult}) {
     element('clear').disabled = !live(context);
     element('original-status').disabled = !live(context) || !original || original.sessionId !== context.sessionId || probing || damaged;
     element('original-save').disabled = !original;
-    text('capability',available ? 'Current-user Windows profile management is available. Store health has not been tested; no headset is required.' : 'Use the Windows QFM companion or its connectivity-profile CLI. This host does not advertise supported profile management.');
+    text('capability',available ? 'Current-user Windows profile management is available. Store health has not been tested. Manual and private-file sources need no headset; selected USB supplies only the reviewed serial.' : 'Use the Windows QFM companion or its connectivity-profile CLI. This host does not advertise supported profile management.');
+    text('boundary',selectedMode ? 'The selected ready USB row supplies only the serial. You enter the endpoint and pairing code manually; their relationship to this headset is not verified. Confirmation proves only the local current-user profile write, not connectivity or headset readiness. Private inputs clear after every attempt and on focus, visibility or authentication changes. An admitted write keeps its original identity.' : 'Enrolled means a parsable local record, not connected, authenticated or ready. These actions need no ADB target and perform no connection test. Private inputs clear after every attempt and on focus, visibility or authentication changes. Clearing fields cannot zero browser internals or cancel an admitted store write.');
     text('list-state',listMessage); text('status-state',statusFact && statusFact.deviceId === element('id').value ? 'Stored ' + statusFact.deviceId + ': ' + statusFact.state + '. This is a local record fact; no connection was tested.' : statusMessage);
     text('state',!storageAvailable ? 'Reference storage unavailable. New profile mutations are blocked.' : damaged ? 'Unknown: saved profile reference is invalid. Preserve the owner reference for recovery.' : original ? 'Unknown original profile mutation. Fresh stored status cannot acknowledge this write; read the original browser result explicitly.' : message);
     element('original').hidden = !original;
@@ -109,33 +122,45 @@ export function createProfileView({api,getContext,setBusy,showResult}) {
   async function mutate(action,replaceExisting = false) {
     update(); const button = element(action === 'profile.revoke' ? 'revoke' : replaceExisting ? 'replace' : 'create'); if (button.disabled) return;
     const context = getContext(), ref = reference({requestId:crypto.randomUUID(),sessionId:context.sessionId,action,deviceId:element('id').value,...(action === 'profile.import' ? {replaceExisting} : {})});
-    const startedAuth = authEpoch, startedRevision = revision; let bytes = null, dispatched = false;
+    const mode = element('mode').value, usb = mode === 'selected-usb' ? selectedUsb(context) : null;
+    const startedAuth = authEpoch, startedRevision = revision, startedSourceRevision = sourceRevision, startedSource = sourceIdentity(context);
+    const startedAuthIdentity = JSON.stringify([context.connected,context.sessionId,context.authGeneration]);
+    const sameScope = current => authEpoch === startedAuth && revision === startedRevision && element('id').value === ref.deviceId &&
+      JSON.stringify([current.connected,current.sessionId,current.authGeneration]) === startedAuthIdentity &&
+      (action !== 'profile.import' || element('mode').value === mode && sourceRevision === startedSourceRevision && sourceIdentity(current) === startedSource);
+    const canDispatch = () => { const current = getContext(); return sameScope(current) && live(current) && supported(current) && supports(current,action) && !current.externalUnresolved; };
+    let bytes = null, dispatched = false;
     writing = true; setBusy(true); update();
     try {
       if (action === 'profile.import') {
-        if (element('mode').value === 'file') {
+        if (mode === 'file') {
           let file = element('file').files?.[0];
           if (!file || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 4096) throw new Error('local_private_input_invalid');
           const expectedSize = file.size; bytes = new Uint8Array(await file.arrayBuffer()); file = null;
           if (bytes.byteLength !== expectedSize) throw new Error('local_private_input_invalid');
         } else {
-          let document = JSON.stringify({schema:prefix + 'enrollment.v1',target:'QuestIonAbleFileManager/QuestConnectivity/' + ref.deviceId,device_id:ref.deviceId,usb_serial:element('usb').value,endpoint:element('endpoint').value,pairing_code:element('code').value});
+          if (mode === 'selected-usb' && !usb) throw new Error('local_private_input_invalid');
+          let document = JSON.stringify({schema:prefix + 'enrollment.v1',target:'QuestIonAbleFileManager/QuestConnectivity/' + ref.deviceId,device_id:ref.deviceId,usb_serial:mode === 'selected-usb' ? usb : element('usb').value,endpoint:element('endpoint').value,pairing_code:element('code').value});
           bytes = new TextEncoder().encode(document); document = null;
         }
         if (bytes.byteLength < 1 || bytes.byteLength > 4096) throw new Error('local_private_input_invalid');
       }
-      update(); if (authEpoch !== startedAuth || revision !== startedRevision || !live(getContext())) return;
+      update(); if (!canDispatch()) return;
       original = ref; if (!persist()) { original = null; return; } update();
+      if (!canDispatch() || original?.requestId !== ref.requestId) {
+        if (original?.requestId === ref.requestId) { original = null; persist(); }
+        return;
+      }
       dispatched = true;
       const value = action === 'profile.import'
         ? await api('/browser/v1/profiles/import',{method:'POST',headers:{'Content-Type':'application/json','X-Qfm-Request-Id':ref.requestId,'X-Qfm-Profile-Device-Id':ref.deviceId,'X-Qfm-Confirm-Profile-Write':'true','X-Qfm-Replace-Existing':String(replaceExisting)},body:bytes})
         : await api('/browser/v1/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requestId:ref.requestId,action,deviceId:ref.deviceId,confirmed:true})});
       update();
-      if (original?.requestId === ref.requestId && authEpoch === startedAuth && revision === startedRevision && live(getContext()) && !acknowledge(value,ref)) message = 'Unknown: profile mutation acknowledgement was incomplete or did not match the original.';
+      if (original?.requestId === ref.requestId && sameScope(getContext()) && live(getContext()) && !acknowledge(value,ref)) message = 'Unknown: profile mutation acknowledgement was incomplete or did not match the original.';
     } catch (error) {
       update();
       if (!dispatched) message = 'Private enrollment input could not be prepared. Inputs cleared; no profile request sent.';
-      else if (original?.requestId === ref.requestId && authEpoch === startedAuth && revision === startedRevision && live(getContext()) && error.dispatched === false && predispatch.has(error.message)) {
+      else if (original?.requestId === ref.requestId && sameScope(getContext()) && live(getContext()) && error.dispatched === false && predispatch.has(error.message)) {
         original = null; if (!persist()) original = ref;
         message = 'Profile request rejected before dispatch (' + error.message + '). Private inputs cleared.';
       } else if (original?.requestId === ref.requestId) message = 'Unknown: profile reply lost or write may have entered execution. Preserve the nonsecret original reference.';

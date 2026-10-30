@@ -1115,13 +1115,15 @@ Windows CLI/WPF guided-install workflow and its protected replay authority.
 
 ## Local Windows connectivity profiles
 
-The optional **Fleet connectivity profiles** card manages only File Manager's
+The optional **Local connectivity profiles** card manages only File Manager's
 current-Windows-user records under `QuestIonAbleFileManager/QuestConnectivity/`.
 It lists IDs, checks stored record validity, imports/creates, explicitly replaces,
 and revokes one reviewed ID. It does not connect to a headset, test a listener,
 activate a Fleet provider, choose a default profile or enroll a transient USB
-Direct session. No ready headset, ADB executable, protected artifact staging,
-Native retained configuration or Fleet installer setup is required.
+Direct session. Manual/private-file input and list/status/revoke need no ready
+headset, ADB executable, protected artifact staging, Native retained
+configuration or Fleet installer setup. The selected-USB input mode described
+below additionally requires a ready USB row for its reviewed serial source.
 
 `GET /browser/v1/session` reports `connectivityProfiles` with supported/code/
 reason/alternative and limits of 4096 private input bytes and 128 returned list
@@ -1158,6 +1160,26 @@ it does not open the store. The server then feeds the same owned bytes to the
 existing typed stdin import. Manual fields construct the same fixed namespace
 document; a browser-selected private JSON file is a bounded byte input, not a
 claim that the host's native `--file` ACL/handle checks were performed.
+
+**Selected USB + entered Kiosk link** implements the existing desktop binding
+workflow. Explicitly choose this input source, select a ready USB headset in
+Devices, and review the displayed serial. Enter the device ID, endpoint and
+pairing code manually. The serial comes from that selected row, with no editable
+serial override in this mode. A Wi-Fi, unready or missing selection cannot
+approve it. Selection and source changes send no discovery or profile request.
+The existing manual and private-file sources retain their independent behavior.
+
+This mode constructs the same bounded enrollment document and uses the same
+private import headers and separate create/replacement approvals. It adds no
+backend fields and never reads an adopted Direct connection's credentials.
+Changing the selected row, readiness, transport, source or authentication
+revokes approval and invalidates prepared bytes before POST. A change after
+dispatch preserves the admitted original and cannot retarget or acknowledge it.
+Explicit original lookup remains available even if the selected row disappears.
+The ready USB row supplies a serial; it does not prove that the entered endpoint
+belongs to that headset or that a listener is available. Confirmation proves
+only the existing local credential write/readback, without a headset connection
+or Fleet provider activation.
 
 Writes require explicit scope-bound approval. Create uses `replaceExisting:false`;
 an existing-record rejection never grants replacement automatically. Deliberate
