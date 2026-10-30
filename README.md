@@ -31,7 +31,7 @@ card reads installation facts, explicitly opens its catalog, and selects a revie
 returned row using a fixed Stable or Labs channel. It sends no app-launch command.
 An explicit USB Direct card adopts one short-lived Kiosk operator connection,
 reads signed status and closes its opaque handle with separate listener cleanup.
-Its Direct controls card provides twenty-two typed Kiosk actions and
+Its Direct controls card provides twenty-three typed Kiosk actions and
 explicit original-result recovery, including the stored preference to ask about
 Wi-Fi ADB after restart. That preference does not establish current connectivity
 or approval of a protected prompt. Separate Wi-Fi ADB request/disable controls
@@ -42,6 +42,9 @@ Headset search/filter and tag add/remove controls retain the same original
 request recovery. Tag edits target Kiosk's selection at execution time and
 report the returned selection and tag presence/absence; they do not bind an
 atomic named-entry edit or expose the full tag document.
+Direct Select uses an eligible reviewed row from the existing completed catalog,
+checks its package and exact connection scope, and retains that review for
+original-result recovery. Selection and later launch or tag edits are separate requests.
 Accessibility and natural/contour passthrough
 controls confirm only Kiosk's reported flag, mode and applicable LUT state;
 protected prompts remain wearer decisions. Guard-mode acknowledgement does not prove

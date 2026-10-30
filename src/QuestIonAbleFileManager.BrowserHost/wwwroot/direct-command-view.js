@@ -1,6 +1,6 @@
 const storageKey = 'qfm-browser-direct-command-v1';
 const invokeAction = 'kiosk.direct.invoke', cancelAction = 'kiosk.direct.request-cancel';
-const commands = new Set(['status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload','enable-wifi-adb-after-boot','disable-wifi-adb-after-boot','enable-accessibility','disable-accessibility','passthrough-natural','passthrough-contour','request-wifi-adb','disable-wifi-adb','exit-meta-home','set-search','filter-tag','add-tag','remove-tag']);
+const commands = new Set(['select','status','show-controls','show-apps','check-setup-helper','set-launch-requirement','cancel-pending-launch','launch-normal','launch-kiosk','reload','enable-wifi-adb-after-boot','disable-wifi-adb-after-boot','enable-accessibility','disable-accessibility','passthrough-natural','passthrough-contour','request-wifi-adb','disable-wifi-adb','exit-meta-home','set-search','filter-tag','add-tag','remove-tag']);
 const wifiAdbCommands = new Set(['request-wifi-adb','disable-wifi-adb']);
 const bootPreferences = new Set(['enable-wifi-adb-after-boot','disable-wifi-adb-after-boot']);
 const accessibilityCommands = new Set(['enable-accessibility','disable-accessibility']);
@@ -21,23 +21,34 @@ const trimText = value => value.replace(/^[\u0009-\u000d\u0020\u0085\u00a0\u1680
 const wellFormed = value => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
 const effectiveText = value => typeof value === 'string' && value.length <= 160 && wellFormed(value);
 const canonicalText = value => effectiveText(value) && value.length > 0 && trimText(value) === value;
-const valueValid = (command,value) => commands.has(command) && (command === 'set-launch-requirement' ? requirements.has(value) : textCommands.has(command) ? canonicalText(value) || !tagCommands.has(command) && value === null : value === null);
+const valueValid = (command,value) => commands.has(command) && (command === 'select' ? keyValid(value) && wellFormed(value) && trimText(value) === value : command === 'set-launch-requirement' ? requirements.has(value) : textCommands.has(command) ? canonicalText(value) || !tagCommands.has(command) && value === null : value === null);
 const boolOrNull = value => value === null || typeof value === 'boolean';
 const keyValid = value => typeof value === 'string' && value.length > 0 && value.length <= 160 && value.trim() === value && !/[\x00-\x1f\x7f-\x9f]/.test(value);
 const packageValid = value => typeof value === 'string' && value.length <= 256 && /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(value);
-const predispatch = new Set(['busy','session_capacity_reached','session_changed','unauthorized','origin_or_host_rejected','action_unsupported','confirmation_required','fields_invalid','request_invalid','content_type_invalid','body_size_invalid','request_body_timeout','request_id_invalid','field_invalid','duplicate_field','direct_unavailable','direct_connection_not_found','direct_connection_expired','direct_owner_stopping','direct_command_unsupported','direct_value_invalid','direct_original_unavailable','direct_original_mismatch']);
+const predispatch = new Set(['kiosk_catalog_unavailable','kiosk_selection_not_reviewed','direct_selection_mismatch','busy','session_capacity_reached','session_changed','unauthorized','origin_or_host_rejected','action_unsupported','confirmation_required','fields_invalid','request_invalid','content_type_invalid','body_size_invalid','request_body_timeout','request_id_invalid','field_invalid','duplicate_field','direct_unavailable','direct_connection_not_found','direct_connection_expired','direct_owner_stopping','direct_command_unsupported','direct_value_invalid','direct_original_unavailable','direct_original_mismatch']);
 function scope(value) {
   return value && session(value.sessionId) && guid(value.connectionId) && guid(value.connectRequestId) && value.usbOperationId === usb(value.connectRequestId) && serial(value.serial) && ['stable','labs'].includes(value.productChannel)
     ? {sessionId:value.sessionId,connectionId:value.connectionId,connectRequestId:value.connectRequestId,usbOperationId:value.usbOperationId,serial:value.serial,productChannel:value.productChannel} : null;
 }
+function selectionReview(value) {
+  return value && guid(value.catalogRequestId) && serial(value.serial) && ['stable','labs'].includes(value.productChannel) &&
+    keyValid(value.key) && wellFormed(value.key) && trimText(value.key) === value.key && packageValid(value.packageName)
+    ? {catalogRequestId:value.catalogRequestId,serial:value.serial,productChannel:value.productChannel,key:value.key,packageName:value.packageName} : null;
+}
+const sameReview = (left,right) => Boolean(left && right && ['catalogRequestId','serial','productChannel','key','packageName'].every(field => left[field] === right[field]));
 function originalReference(value) {
   const base = scope(value);
+  const review = selectionReview(value?.selectionReview);
   return base && guid(value.requestId) && value.action === invokeAction && value.logicalRequestId === logical(value.requestId) && valueValid(value.command,value.value)
-    ? {...base,requestId:value.requestId,action:invokeAction,logicalRequestId:value.logicalRequestId,command:value.command,value:value.value} : null;
+    && (value.command === 'select' ? review && review.serial === base.serial && review.productChannel === base.productChannel && review.key === value.value : value.selectionReview == null)
+    ? {...base,requestId:value.requestId,action:invokeAction,logicalRequestId:value.logicalRequestId,command:value.command,value:value.value,...(review ? {selectionReview:review} : {})} : null;
 }
 function cancelReference(value) {
+  const selected = value?.originalSelect == null ? null : originalReference(value.originalSelect);
+  if (value?.originalSelect != null && (!selected || selected.command !== 'select' || selected.requestId !== value.originalRequestId ||
+      selected.connectionId !== value.connectionId || selected.sessionId !== value.sessionId || selected.logicalRequestId !== value.logicalRequestId)) return null;
   return value && session(value.sessionId) && guid(value.requestId) && guid(value.originalRequestId) && value.requestId !== value.originalRequestId && guid(value.connectionId) && value.action === cancelAction && value.logicalRequestId === logical(value.originalRequestId)
-    ? {requestId:value.requestId,sessionId:value.sessionId,action:cancelAction,originalRequestId:value.originalRequestId,connectionId:value.connectionId,logicalRequestId:value.logicalRequestId} : null;
+    ? {requestId:value.requestId,sessionId:value.sessionId,action:cancelAction,originalRequestId:value.originalRequestId,connectionId:value.connectionId,logicalRequestId:value.logicalRequestId,...(selected ? {originalSelect:selected} : {})} : null;
 }
 function typedResult(value,id,command) {
   if (!value || value.schema !== 'rusty.kiosk.cli_result.v1' || value.requestId !== id || value.command !== command || typeof value.accepted !== 'boolean' || typeof value.completed !== 'boolean' || (bootPreferences.has(command) && typeof value.requestWifiAdbAfterBoot !== 'boolean') ||
@@ -53,18 +64,25 @@ function typedResult(value,id,command) {
       tagCommands.has(command) && value.requestedTagPresent != null && typeof value.requestedTagPresent !== 'boolean') throw new Error('typed_result_invalid');
   const row = value.selectedEntry;
   if (row !== null && (!row || !keyValid(row.key) || !requirements.has(row.launchRequirement) || row.key !== value.selectedKey)) throw new Error('typed_result_invalid');
+  if (command === 'select' && row !== null && ((row.packageName != null && !packageValid(row.packageName)) ||
+      !['installed','launchable','selectable'].every(field => typeof row[field] === 'boolean'))) throw new Error('typed_result_invalid');
   return {schema:value.schema,requestId:id,command,accepted:value.accepted,completed:value.completed,controlsOpen:value.controlsOpen,selectedKey:value.selectedKey,selectedPackage:value.selectedPackage,
     selectedInstalled:value.selectedInstalled,selectedLaunchable:value.selectedLaunchable,selectedLaunchRequirement:value.selectedLaunchRequirement,pendingRequirementLaunch:value.pendingRequirementLaunch,
-    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),...(accessibilityCommands.has(command) ? {accessibilityEnabled:value.accessibilityEnabled} : {}),...(passthroughCommands.has(command) ? {systemPassthroughEnabled:value.systemPassthroughEnabled,passthroughStyle:value.passthroughStyle} : {}),...(command === 'passthrough-contour' ? {passthroughLutApplied:value.passthroughLutApplied} : {}),...(wifiAdbCommands.has(command) ? {wifiAdbEnabled:value.wifiAdbEnabled} : {}),...(command === 'set-search' ? {search:value.search,valueMatches:value.valueMatches} : {}),...(command === 'filter-tag' ? {tagFilter:value.tagFilter,valueMatches:value.valueMatches} : {}),...(tagCommands.has(command) ? {requestedTagPresent:value.requestedTagPresent} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement}};
+    guardArmed:value.guardArmed,setupHelperInstalled:value.setupHelperInstalled,setupHelperReady:value.setupHelperReady,...(bootPreferences.has(command) ? {requestWifiAdbAfterBoot:value.requestWifiAdbAfterBoot} : {}),...(accessibilityCommands.has(command) ? {accessibilityEnabled:value.accessibilityEnabled} : {}),...(passthroughCommands.has(command) ? {systemPassthroughEnabled:value.systemPassthroughEnabled,passthroughStyle:value.passthroughStyle} : {}),...(command === 'passthrough-contour' ? {passthroughLutApplied:value.passthroughLutApplied} : {}),...(wifiAdbCommands.has(command) ? {wifiAdbEnabled:value.wifiAdbEnabled} : {}),...(command === 'set-search' ? {search:value.search,valueMatches:value.valueMatches} : {}),...(command === 'filter-tag' ? {tagFilter:value.tagFilter,valueMatches:value.valueMatches} : {}),...(tagCommands.has(command) ? {requestedTagPresent:value.requestedTagPresent} : {}),selectedEntry:row === null ? null : {key:row.key,launchRequirement:row.launchRequirement,...(command === 'select' ? {packageName:row.packageName,installed:row.installed,launchable:row.launchable,selectable:row.selectable} : {})}};
 }
 function project(value,ref,requestId,action) {
   const d = value?.kioskDirectCommand, operation = ({[invokeAction]:'invoke','kiosk.direct.request-status':'requestStatus','kiosk.direct.request-result':'requestResult',[cancelAction]:'requestCancel'})[action];
   const originalId = ref.action === cancelAction ? ref.originalRequestId : ref.requestId;
+  const bound = ref.action === cancelAction ? ref.originalSelect : ref;
+  const review = selectionReview(d?.selectionReview);
   if (value?.requestId !== requestId || value.action !== action || value.result !== null || value.mutation !== null || !d || d.operation !== operation ||
       d.connectionId !== ref.connectionId || d.originalRequestId !== originalId || d.logicalRequestId !== ref.logicalRequestId || !guid(d.connectRequestId) || d.usbOperationId !== usb(d.connectRequestId) ||
       !serial(d.serial) || !['stable','labs'].includes(d.productChannel) || !valueValid(d.command,d.value) ||
       (ref.action === invokeAction && (d.connectRequestId !== ref.connectRequestId || d.usbOperationId !== ref.usbOperationId || d.serial !== ref.serial || d.productChannel !== ref.productChannel || d.command !== ref.command || d.value !== ref.value)) ||
       !['confirmed','pending','pendingWearerAction','unknown'].includes(d.originalEffect) || typeof d.reconcilesOriginal !== 'boolean' || typeof d.cancellationAcknowledged !== 'boolean') throw new Error('command_binding_invalid');
+  if (d.command === 'select' ? !bound || bound.command !== 'select' || !sameReview(review,bound.selectionReview) || d.value !== bound.value ||
+      d.connectRequestId !== bound.connectRequestId || d.usbOperationId !== bound.usbOperationId || d.serial !== bound.serial || d.productChannel !== bound.productChannel : d.selectionReview != null || ref.originalSelect != null)
+    throw new Error('selection_binding_invalid');
   if ((operation === 'requestStatus' || operation === 'requestCancel') && d.reconcilesOriginal) throw new Error('command_binding_invalid');
   let receipt = null, lifecycle = null, typed = null;
   if (d.coreReceipt !== null) {
@@ -80,12 +98,15 @@ function project(value,ref,requestId,action) {
   if (d.typedResult !== null) typed = typedResult(d.typedResult,ref.logicalRequestId,d.command);
   if (typed && lifecycle || typed && !['invoke','requestResult'].includes(operation)) throw new Error('command_binding_invalid');
   return {connectionId:d.connectionId,connectRequestId:d.connectRequestId,usbOperationId:d.usbOperationId,serial:d.serial,productChannel:d.productChannel,operation,originalRequestId:originalId,
-    logicalRequestId:ref.logicalRequestId,command:d.command,value:d.value,originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:receipt,lifecycle,typedResult:typed,cancellationAcknowledged:d.cancellationAcknowledged};
+    logicalRequestId:ref.logicalRequestId,command:d.command,value:d.value,originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:receipt,lifecycle,typedResult:typed,cancellationAcknowledged:d.cancellationAcknowledged,...(review ? {selectionReview:review} : {})};
 }
 function confirms(d) {
   const t = d.typedResult;
   if (!t?.accepted || !t.completed || d.originalEffect !== 'confirmed' || !d.reconcilesOriginal || d.coreReceipt?.stage !== 'confirmed') return false;
   switch (d.command) {
+    case 'select': return d.selectionReview?.key === d.value && t.selectedKey === d.value && t.selectedPackage === d.selectionReview.packageName &&
+      t.selectedInstalled === true && t.selectedLaunchable === true && t.selectedEntry?.key === d.value && t.selectedEntry.packageName === d.selectionReview.packageName &&
+      t.selectedEntry.installed === true && t.selectedEntry.launchable === true && t.selectedEntry.selectable === true;
     case 'set-search': return t.valueMatches === true && t.search === (d.value ?? '');
     // Core owns OrdinalIgnoreCase matching; JavaScript must not approximate it.
     case 'filter-tag': return t.valueMatches === true && effectiveText(t.tagFilter);
@@ -114,7 +135,7 @@ function confirms(d) {
 export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   const element = id => document.getElementById('direct-command-' + id), text = (id,value) => { element(id).textContent = value; };
   let original = null, cancellation = null, damaged = false, storageAvailable = true;
-  let writing = false, reading = false, probing = false, cancelProbing = false, authStamp = '', authEpoch = 0, stamp = '', epoch = 0;
+  let writing = false, reading = false, probing = false, cancelProbing = false, authStamp = '', authEpoch = 0, stamp = '', epoch = 0, sourceEpoch = 0;
   let message = 'No Direct command sent.', facts = null, lifecycle = null, cancelMessage = 'No cancellation requested.';
   const hasUnresolved = () => Boolean(original || cancellation || damaged || !storageAvailable);
   const getCleanupReference = () => {
@@ -136,6 +157,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
       original = originalReference(frame?.original); cancellation = cancelReference(frame?.cancellation);
       damaged = !frame || frame.damaged === true || Boolean(frame.original && !original) || Boolean(frame.cancellation && !cancellation) || !original && !cancellation;
       if (original && cancellation && (cancellation.originalRequestId !== original.requestId || cancellation.logicalRequestId !== original.logicalRequestId || cancellation.connectionId !== original.connectionId || cancellation.sessionId !== original.sessionId)) damaged = true;
+      if (original && cancellation && (original.command === 'select' ? !sameReview(original.selectionReview,cancellation.originalSelect?.selectionReview) : cancellation.originalSelect != null)) damaged = true;
     }
     persist();
   } catch { storageAvailable = false; }
@@ -150,8 +172,13 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const c = connection(context);
     return c && ref.sessionId === context.sessionId && c.connectionId === ref.connectionId && c.connectRequestId === ref.connectRequestId && c.usbOperationId === ref.usbOperationId && c.serial === ref.serial && c.productChannel === ref.productChannel && Date.parse(c.expiresAtUtc) > Date.now();
   };
+  const currentSelection = context => {
+    const review = selectionReview(context.reviewedSelection), c = connection(context);
+    return review && c && context.reviewedSelection.sessionId === context.sessionId && c.serial === review.serial && c.productChannel === review.productChannel ? review : null;
+  };
   const editorValue = () => {
     const command = element('command').value;
+    if (command === 'select') return currentSelection(getContext())?.key;
     if (!textCommands.has(command)) return command === 'set-launch-requirement' ? element('requirement').value : null;
     const raw = element('text').value;
     return raw.length <= 4096 && wellFormed(raw) ? trimText(raw) || null : undefined;
@@ -159,7 +186,8 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   function update() {
     const context = getContext(), c = connection(context), nextAuth = JSON.stringify([context.connected,context.sessionId,context.authGeneration]);
     if (nextAuth !== authStamp) { authStamp = nextAuth; authEpoch++; }
-    const next = JSON.stringify([nextAuth,c,element('command').value,element('requirement').value,element('text').value,[...(context.actions || [])].sort(),Boolean(context.externalUnresolved)]);
+    const reviewed = currentSelection(context);
+    const next = JSON.stringify([nextAuth,c,element('command').value,element('requirement').value,element('text').value,element('command').value === 'select' ? [reviewed,sourceEpoch] : null,[...(context.actions || [])].sort(),Boolean(context.externalUnresolved)]);
     if (next !== stamp) {
       if (stamp && !hasUnresolved() && !writing && !reading) { message = 'No typed acknowledgement for this current scope. Earlier receipts apply only to their original request.'; cancelMessage = 'No cancellation requested for this current scope.'; }
       stamp = next; epoch++; element('invoke-confirm').checked = false; element('cancel-confirm').checked = false; facts = null; lifecycle = null;
@@ -169,6 +197,8 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     const canInvoke = idle && available && !hasUnresolved() && !context.externalUnresolved && supports(context,invokeAction) && valueValid(element('command').value,editorValue());
     element('command').disabled = !live(context); element('requirement').disabled = !live(context); element('requirement-field').hidden = element('command').value !== 'set-launch-requirement';
     const command = element('command').value, value = editorValue(), isText = textCommands.has(command);
+    element('selection-review').hidden = command !== 'select';
+    text('selection-review',reviewed ? `Reviewed app key: ${reviewed.key}; package: ${reviewed.packageName}; catalog source: ${reviewed.catalogRequestId}.` : 'Highlight an eligible app in a completed Kiosk catalog for this session, target and channel first.');
     element('text-field').hidden = !isText; element('text').disabled = !live(context);
     text('text-label',tagCommands.has(command) ? 'Tag for Kiosk’s selection at execution' : command === 'set-search' ? 'Headset search text' : 'Headset tag filter');
     text('text-review',!isText ? '' : !valueValid(command,value) ? 'Enter up to 160 characters after trimming (some emoji count as two); tags need text.' : value === null ? 'Text to send: null — clear the headset search or tag filter.' : 'Text to send: ' + JSON.stringify(value));
@@ -182,7 +212,7 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
     element('save-reference').disabled = !original && !cancellation;
     const displayed = c || original;
     text('scope',displayed ? `${displayed.serial} · ${displayed.productChannel} · ${displayed.connectionId}` : 'No adopted connection. Use the connection card first.');
-    text('boundary',textCommands.has(command) ? (tagCommands.has(command) ? 'This changes the requested tag on Kiosk’s selection when executed. Another wearer or client may change that selection. Readback identifies the returned selection and requested tag presence or absence only; it does not establish previous presence or readiness.' : 'This changes the HEADSET search or tag filter. The browser’s local catalog filter is separate. Blank text clears this headset value; no request is sent until you approve and send.') : element('command').value === 'exit-meta-home' ? 'Only Kiosk’s acceptance and completion of this exact Meta Home request can be acknowledged. Meta Home foreground, leaving an app, wearer visibility and application/OpenXR readiness remain unverified.' : wifiAdbCommands.has(element('command').value) ? (element('command').value === 'disable-wifi-adb' ? 'Disabling Wi-Fi ADB may immediately close an existing wireless ADB connection. ' : '') + 'Only Kiosk’s reported Wi-Fi ADB flag is observed. Host discovery, connectivity, pairing, address, protected approval, future boot behavior, foreground and readiness remain unverified.' : accessibilityCommands.has(element('command').value) ? 'This observes only Kiosk’s reported accessibility-enabled flag. Protected settings approval and OS permission remain wearer-owned; foreground and app readiness remain unverified.' : passthroughCommands.has(element('command').value) ? 'This observes only Kiosk-reported passthrough mode and LUT state. Visual camera output, protected approval, foreground and app readiness remain unverified.' : bootPreferences.has(element('command').value) ? 'This changes only the request-after-restart preference. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.' : c && !available ? 'Connection expired. No new native request is available; cached original GET and explicit connection cleanup remain separate.' : 'Requests affect Kiosk’s current selection, which another wearer or client can change. Guard acknowledgement does not establish a named app launch, foreground state, or application/OpenXR readiness. No atomic catalog-row launch is offered.');
+    text('boundary',command === 'select' ? 'This requests the reviewed catalog app selection only. Later launch and tag commands use Kiosk’s selection at execution; selecting an app does not launch it or establish readiness.' : textCommands.has(command) ? (tagCommands.has(command) ? 'This changes the requested tag on Kiosk’s selection when executed. Another wearer or client may change that selection. Readback identifies the returned selection and requested tag presence or absence only; it does not establish previous presence or readiness.' : 'This changes the HEADSET search or tag filter. The browser’s local catalog filter is separate. Blank text clears this headset value; no request is sent until you approve and send.') : element('command').value === 'exit-meta-home' ? 'Only Kiosk’s acceptance and completion of this exact Meta Home request can be acknowledged. Meta Home foreground, leaving an app, wearer visibility and application/OpenXR readiness remain unverified.' : wifiAdbCommands.has(element('command').value) ? (element('command').value === 'disable-wifi-adb' ? 'Disabling Wi-Fi ADB may immediately close an existing wireless ADB connection. ' : '') + 'Only Kiosk’s reported Wi-Fi ADB flag is observed. Host discovery, connectivity, pairing, address, protected approval, future boot behavior, foreground and readiness remain unverified.' : accessibilityCommands.has(element('command').value) ? 'This observes only Kiosk’s reported accessibility-enabled flag. Protected settings approval and OS permission remain wearer-owned; foreground and app readiness remain unverified.' : passthroughCommands.has(element('command').value) ? 'This observes only Kiosk-reported passthrough mode and LUT state. Visual camera output, protected approval, foreground and app readiness remain unverified.' : bootPreferences.has(element('command').value) ? 'This changes only the request-after-restart preference. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.' : c && !available ? 'Connection expired. No new native request is available; cached original GET and explicit connection cleanup remain separate.' : 'Requests affect Kiosk’s current selection, which another wearer or client can change. Guard acknowledgement does not establish a named app launch, foreground state, or application/OpenXR readiness. No atomic catalog-row launch is offered.');
     text('state',!storageAvailable ? 'Reference storage unavailable; new Invoke and cancel are blocked.' : damaged ? 'Unknown: invalid saved command references. Preserve owner evidence; no automatic recovery.' : message + (hasUnresolved() ? ' Preserve unresolved originals; new mutations stay blocked.' : ''));
     text('facts',facts && textCommands.has(facts.command) ? (tagCommands.has(facts.command) ? `Returned selected key: ${facts.selectedKey ?? 'unknown'}; requested tag ${facts.requestedTagPresent === true ? 'present' : facts.requestedTagPresent === false ? 'absent' : 'unknown'}.` : `Headset ${facts.command === 'set-search' ? 'search' : 'tag filter'} (JSON string): ${JSON.stringify(facts.command === 'set-search' ? facts.search : facts.tagFilter) ?? 'unknown'}; Core value match: ${facts.valueMatches}.`) : facts ? `Observed selected key: ${facts.selectedKey ?? 'unknown'}; package: ${facts.selectedPackage ?? 'unknown'}; controls open: ${facts.controlsOpen ?? 'unknown'}; launch requirement: ${facts.selectedLaunchRequirement ?? 'unknown'}; pending requirement launch: ${facts.pendingRequirementLaunch ?? 'unknown'}; guard armed: ${facts.guardArmed}; helper installed: ${facts.setupHelperInstalled}; helper ready: ${facts.setupHelperReady}. These are observations, not an entry-bound launch promise.` : 'No typed original result observed for this scope.');
     text('lifecycle',lifecycle ? `Original remote record: ${lifecycle.operationState}; accepted ${lifecycle.accepted}; completed ${lifecycle.completed}. Lifecycle facts do not acknowledge typed effects or this cancellation call.` : 'No separate lifecycle facts read.');
@@ -194,13 +224,13 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   function show(d,requestId,action,summary = message) {
     facts = d.typedResult; lifecycle = d.lifecycle;
     showResult({requestId,action,connectionId:d.connectionId,originalRequestId:d.originalRequestId,logicalRequestId:d.logicalRequestId,command:d.command,value:d.value,
-      originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:d.coreReceipt,lifecycle:d.lifecycle,typedResult:d.typedResult,cancellationAcknowledged:d.cancellationAcknowledged},summary);
+      originalEffect:d.originalEffect,reconcilesOriginal:d.reconcilesOriginal,coreReceipt:d.coreReceipt,lifecycle:d.lifecycle,typedResult:d.typedResult,cancellationAcknowledged:d.cancellationAcknowledged,...(d.selectionReview ? {selectionReview:d.selectionReview} : {})},summary);
   }
   function acknowledgeOriginal(value,ref,requestId = ref.requestId,action = invokeAction) {
     const d = project(value,ref,requestId,action);
     if (value.state === 'completed' && confirms(d) && original?.requestId === ref.requestId) {
       original = null; if (!persist()) { original = ref; return; }
-      message = textCommands.has(ref.command) ? (tagCommands.has(ref.command) ? `Kiosk acknowledged the tag request. Returned selection: ${d.typedResult.selectedKey}; requested tag ${d.typedResult.requestedTagPresent ? 'present' : 'absent'}.` : 'Kiosk acknowledged the exact headset search or tag-filter request. The browser local catalog filter is separate.') : ref.command === 'exit-meta-home' ? 'Kiosk acknowledged the Meta Home request as accepted and completed. Meta Home foreground, leaving an app, wearer visibility and application/OpenXR readiness remain unverified.' : wifiAdbCommands.has(ref.command) ? `Kiosk-reported Wi-Fi ADB flag observed: ${d.typedResult.wifiAdbEnabled ? 'enabled' : 'disabled'}. Host discovery, connectivity, pairing, address, protected approval, future boot behavior, foreground and readiness remain unverified.` : accessibilityCommands.has(ref.command) ? `Kiosk-reported accessibility-enabled flag observed: ${d.typedResult.accessibilityEnabled ? 'on' : 'off'}. Protected approval, OS permission, foreground and app readiness remain unverified.` : passthroughCommands.has(ref.command) ? `Kiosk-reported passthrough state observed: ${d.typedResult.passthroughStyle}${ref.command === 'passthrough-contour' ? ', LUT reported applied' : ''}. Visual camera output, protected approval, foreground and app readiness remain unverified.` : bootPreferences.has(ref.command) ? `Request-after-restart preference observed: ${d.typedResult.requestWifiAdbAfterBoot ? 'on' : 'off'}. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.` : ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
+      message = ref.command === 'select' ? 'Kiosk acknowledged the reviewed app selection and exact package. App launch, foreground and readiness remain unverified.' : textCommands.has(ref.command) ? (tagCommands.has(ref.command) ? `Kiosk acknowledged the tag request. Returned selection: ${d.typedResult.selectedKey}; requested tag ${d.typedResult.requestedTagPresent ? 'present' : 'absent'}.` : 'Kiosk acknowledged the exact headset search or tag-filter request. The browser local catalog filter is separate.') : ref.command === 'exit-meta-home' ? 'Kiosk acknowledged the Meta Home request as accepted and completed. Meta Home foreground, leaving an app, wearer visibility and application/OpenXR readiness remain unverified.' : wifiAdbCommands.has(ref.command) ? `Kiosk-reported Wi-Fi ADB flag observed: ${d.typedResult.wifiAdbEnabled ? 'enabled' : 'disabled'}. Host discovery, connectivity, pairing, address, protected approval, future boot behavior, foreground and readiness remain unverified.` : accessibilityCommands.has(ref.command) ? `Kiosk-reported accessibility-enabled flag observed: ${d.typedResult.accessibilityEnabled ? 'on' : 'off'}. Protected approval, OS permission, foreground and app readiness remain unverified.` : passthroughCommands.has(ref.command) ? `Kiosk-reported passthrough state observed: ${d.typedResult.passthroughStyle}${ref.command === 'passthrough-contour' ? ', LUT reported applied' : ''}. Visual camera output, protected approval, foreground and app readiness remain unverified.` : bootPreferences.has(ref.command) ? `Request-after-restart preference observed: ${d.typedResult.requestWifiAdbAfterBoot ? 'on' : 'off'}. Current Wi-Fi ADB, next-boot success, connectivity and protected approval remain unverified.` : ref.command === 'reload' ? 'Kiosk provider reload acknowledged. App foreground and application/OpenXR readiness remain unknown.' : ['launch-normal','launch-kiosk'].includes(ref.command) ? 'Typed current-selection request acknowledged; guard mode observed. Named app launch, foreground and readiness remain unknown.' : 'Exact typed original request acknowledged. No application readiness inferred.';
     } else message = `Original proof remains ${d.originalEffect}; actual Core stage ${d.coreReceipt?.stage ?? 'unavailable'}. Lifecycle, pending requirements and missing evidence do not confirm a typed effect.`;
     show(d,requestId,action);
   }
@@ -215,15 +245,15 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   async function mutate(cancel = false) {
     update(); if (element(cancel ? 'cancel' : 'invoke').disabled) return;
     const context = getContext(), c = connection(context), requestId = crypto.randomUUID();
-    const ref = cancel ? cancelReference({requestId,sessionId:context.sessionId,action:cancelAction,originalRequestId:original.requestId,connectionId:original.connectionId,logicalRequestId:original.logicalRequestId})
-      : originalReference({...c,requestId,action:invokeAction,logicalRequestId:logical(requestId),command:element('command').value,value:editorValue()});
+    const ref = cancel ? cancelReference({requestId,sessionId:context.sessionId,action:cancelAction,originalRequestId:original.requestId,connectionId:original.connectionId,logicalRequestId:original.logicalRequestId,...(original.command === 'select' ? {originalSelect:originalReference(original)} : {})})
+      : originalReference({...c,requestId,action:invokeAction,logicalRequestId:logical(requestId),command:element('command').value,value:editorValue(),...(element('command').value === 'select' ? {selectionReview:currentSelection(context)} : {})});
     if (!ref) return;
     if (cancel) cancellation = ref; else original = ref;
     if (!persist()) { if (cancel) cancellation = null; else original = null; update(); setBusy(Boolean(getContext().busy)); return; }
     writing = true; element('invoke-confirm').checked = false; element('cancel-confirm').checked = false; setBusy(true); update();
     const sentAuth = authEpoch, sentEpoch = epoch;
     const body = cancel ? {requestId,action:cancelAction,connectionId:ref.connectionId,originalRequestId:ref.originalRequestId,confirmed:true}
-      : {requestId,action:invokeAction,connectionId:ref.connectionId,command:ref.command,value:ref.value,confirmed:true};
+      : {requestId,action:invokeAction,connectionId:ref.connectionId,command:ref.command,value:ref.value,confirmed:true,...(ref.command === 'select' ? {catalogRequestId:ref.selectionReview.catalogRequestId} : {})};
     try {
       const value = await api('/browser/v1/execute',{method:'POST',body:JSON.stringify(body)}); update();
       if ((cancel ? cancellation : original)?.requestId !== ref.requestId) return;
@@ -269,5 +299,6 @@ export function createDirectCommandView({api,getContext,setBusy,showResult}) {
   element('original-status').addEventListener('click',()=>cached(false)); element('cancellation-status').addEventListener('click',()=>cached(true));
   element('save-reference').addEventListener('click',()=>{const blob = new Blob([JSON.stringify({original:originalReference(original),cancellation:cancelReference(cancellation)},null,2)],{type:'application/json'}), url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'qfm-direct-command-reference.json'; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);});
   setInterval(update,1000);
-  return {update,hasUnresolved,getCleanupReference};
+  const selectionSourceChanged = () => { sourceEpoch++; update(); };
+  return {update,hasUnresolved,getCleanupReference,selectionSourceChanged};
 }

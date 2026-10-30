@@ -130,8 +130,8 @@ for(const [name,state] of Object.entries({disconnected:{connected:false},noConne
   const f=await fixture(t,{state});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isDisabled(),true);await f.page.locator('#direct-command-invoke').evaluate(button=>{button.disabled=false;button.click();});assert.equal(f.calls.length,0);assert.equal(await f.stored(),null);
 });
 
-test('only twenty-two closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
-  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[...commands,'exit-meta-home',...bootPreferences,...controlCommands,...wifiAdbCommands,'set-search','filter-tag','add-tag','remove-tag']);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
+test('only twenty-three closed commands and three canonical requirements exist and each approval is scope-bound',async t=>{
+  const f=await fixture(t);assert.deepEqual(await f.page.locator('#direct-command-command option').evaluateAll(options=>options.map(o=>o.value)),[commands[0],'select',...commands.slice(1),'exit-meta-home',...bootPreferences,...controlCommands,...wifiAdbCommands,'set-search','filter-tag','add-tag','remove-tag']);assert.deepEqual(await f.page.locator('#direct-command-requirement option').evaluateAll(options=>options.map(o=>o.value)),['any','wifi-on','wifi-off']);
   assert.equal(await f.page.locator('#direct-command-invoke').isDisabled(),true);await f.page.locator('#direct-command-invoke-confirm').check();await f.page.locator('#direct-command-command').selectOption('check-setup-helper');assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);
   await f.page.locator('#direct-command-invoke-confirm').check();await f.update({authGeneration:2});assert.equal(await f.page.locator('#direct-command-invoke-confirm').isChecked(),false);assert.equal(f.calls.length,0);
 });
@@ -432,4 +432,11 @@ test('Meta Home provider recovery preserves separate uncertain cancellation and 
   await f.invoke('exit-meta-home');await f.cancel();const before=await f.stored();await f.recovery('request-result');const after=await f.stored();
   assert.equal(after.original,null);assert.deepEqual(after.cancellation,before.cancellation);assert.equal(await f.page.evaluate(()=>window.view.hasUnresolved()),true);
   assert.deepEqual(await f.page.evaluate(()=>window.view.getCleanupReference()),{sessionId:before.cancellation.sessionId,connectionId:before.cancellation.connectionId});assert.equal(f.calls.filter(c=>c.body?.action==='kiosk.direct.invoke').length,1);
+});
+
+test('shipped Direct offers reviewed catalog Select and a source review control',async t=>{
+  const f=await fixture(t);
+  assert.equal(await f.page.locator('#direct-command-command option[value="select"]').count(),1);
+  assert.equal(await f.page.locator('#direct-command-selection-review').count(),1);
+  assert.equal(f.calls.length,0);
 });

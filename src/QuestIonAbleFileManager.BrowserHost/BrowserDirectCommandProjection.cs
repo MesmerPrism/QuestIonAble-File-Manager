@@ -5,7 +5,14 @@ namespace QuestIonAbleFileManager.BrowserHost;
 
 public sealed record BrowserDirectCoreReceipt(string ActionId,KioskDirectOperatorAction Action,string RequestId,OperatorMutationStage Stage);
 public sealed record BrowserDirectLifecycle(string RequestId,string OperationState,bool Accepted,bool Completed,long? EnqueuedAtMs,long? ExpiresAtMs);
-public sealed record BrowserDirectSelectedEntry(string Key,string LaunchRequirement);
+public sealed record BrowserDirectSelectedEntry(string Key,string LaunchRequirement)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PackageName { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Installed { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Launchable { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Selectable { get; init; }
+}
+public sealed record BrowserDirectSelectionReview(string CatalogRequestId,string Serial,string ProductChannel,string Key,string PackageName);
 public sealed record BrowserDirectTypedResult(string Schema,string RequestId,string Command,bool Accepted,bool Completed,
     bool? ControlsOpen,string? SelectedKey,string? SelectedPackage,bool SelectedInstalled,bool SelectedLaunchable,
     string? SelectedLaunchRequirement,bool? PendingRequirementLaunch,bool GuardArmed,bool SetupHelperInstalled,bool SetupHelperReady,
@@ -34,11 +41,14 @@ public sealed record BrowserDirectTypedResult(string Schema,string RequestId,str
 }
 public sealed record BrowserDirectCommandOutcome(string ConnectionId,string ConnectRequestId,string UsbOperationId,string Serial,string ProductChannel,
     string Operation,string OriginalRequestId,string LogicalRequestId,string Command,string? Value,string OriginalEffect="unknown",bool ReconcilesOriginal=false,
-    BrowserDirectCoreReceipt? CoreReceipt=null,BrowserDirectLifecycle? Lifecycle=null,BrowserDirectTypedResult? TypedResult=null,bool CancellationAcknowledged=false);
+    BrowserDirectCoreReceipt? CoreReceipt=null,BrowserDirectLifecycle? Lifecycle=null,BrowserDirectTypedResult? TypedResult=null,bool CancellationAcknowledged=false)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public BrowserDirectSelectionReview? SelectionReview { get; init; }
+}
 
 internal static class BrowserDirectCommandProjection
 {
-    internal static BrowserDirectCommandOutcome Metadata(BrowserDirectRequest request,BrowserDirectConnections.Entry entry,BrowserDirectCommandOutcome? original)
+    internal static BrowserDirectCommandOutcome Metadata(BrowserDirectRequest request,BrowserDirectConnections.Entry entry,BrowserDirectCommandOutcome? original,BrowserDirectSelectionReview? selection=null)
     {
         var operation=request.Action switch
         { "kiosk.direct.invoke"=>"invoke","kiosk.direct.request-status"=>"requestStatus","kiosk.direct.request-result"=>"requestResult","kiosk.direct.request-cancel"=>"requestCancel",_=>throw new InvalidDataException() };
@@ -46,8 +56,11 @@ internal static class BrowserDirectCommandProjection
         {
             var kind=request.Command ?? throw new BrowserRequestException("direct_command_unsupported");
             var name=kind.ToWireName();_ = BrowserDirectCommands.CommandName(name);BrowserDirectCommands.ValidateValue(kind,request.Value);
+            ValidateSelection(kind,request.Value,selection,entry);
+            if (kind==RustyKioskCommand.Select && selection!.CatalogRequestId!=request.CatalogRequestId)
+                throw new BrowserRequestException("direct_selection_mismatch",409);
             return new(entry.Id,entry.Context.RequestId,entry.Context.UsbOperationId,entry.Context.Serial,entry.Context.ProductChannel,
-                operation,request.RequestId,request.LogicalRequestId,name,request.Value);
+                operation,request.RequestId,request.LogicalRequestId,name,request.Value) { SelectionReview=selection };
         }
         if(original is null || original.Operation!="invoke" || original.OriginalRequestId!=request.OriginalRequestId || original.ConnectionId!=entry.Id ||
             original.ConnectRequestId!=entry.Context.RequestId || original.UsbOperationId!=entry.Context.UsbOperationId ||
@@ -55,7 +68,23 @@ internal static class BrowserDirectCommandProjection
             original.LogicalRequestId!="kiosk_"+Guid.Parse(request.OriginalRequestId!).ToString("N"))
             throw new BrowserRequestException("direct_original_mismatch",409);
         BrowserDirectCommands.ValidateValue(BrowserDirectCommands.CommandName(original.Command),original.Value);
+        ValidateSelection(BrowserDirectCommands.CommandName(original.Command),original.Value,original.SelectionReview,entry);
         return original with { Operation=operation,OriginalEffect="unknown",ReconcilesOriginal=false,CoreReceipt=null,Lifecycle=null,TypedResult=null,CancellationAcknowledged=false };
+    }
+    private static void ValidateSelection(RustyKioskCommand kind,string? value,BrowserDirectSelectionReview? review,BrowserDirectConnections.Entry entry)
+    {
+        if(kind!=RustyKioskCommand.Select)
+        {
+            if(review is not null)throw new BrowserRequestException("direct_selection_mismatch",409);
+            return;
+        }
+        if(review is null || !Guid.TryParseExact(review.CatalogRequestId,"D",out var id) || id==Guid.Empty || id.ToString("D")!=review.CatalogRequestId ||
+            review.Serial!=entry.Context.Serial || review.ProductChannel!=entry.Context.ProductChannel || review.Key!=value ||
+            !BrowserKioskCommands.IsSelectableKey(review.Key) || !BrowserDirectCommands.IsWellFormedUtf16(review.Key) ||
+            string.IsNullOrEmpty(review.PackageName) || review.PackageName.Length>256)
+            throw new BrowserRequestException("direct_selection_mismatch",409);
+        try { if(AndroidInput.RequirePackageName(review.PackageName)!=review.PackageName)throw new ArgumentException(); }
+        catch(ArgumentException) { throw new BrowserRequestException("direct_selection_mismatch",409); }
     }
     internal static BrowserCommandOutcome Project(BrowserDirectRequest request,BrowserDirectCommandOutcome source,KioskDirectOperatorCommand command,KioskDirectOperatorResult result)
     {
@@ -74,7 +103,11 @@ internal static class BrowserDirectCommandProjection
             var snapshot=Typed(typed,source.Value,shared);
             var launch=expected is RustyKioskCommand.LaunchNormal or RustyKioskCommand.LaunchKiosk;
             var tags=expected is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag;
-            var missing=launch && snapshot.PendingRequirementLaunch is null || expected==RustyKioskCommand.SetLaunchRequirement && shared && snapshot.SelectedEntry is null ||
+            var selection=source.SelectionReview;
+            var selectionProof=expected!=RustyKioskCommand.Select || selection is not null && snapshot.SelectedKey==source.Value && snapshot.SelectedKey==selection.Key &&
+                snapshot.SelectedPackage==selection.PackageName && snapshot.SelectedInstalled && snapshot.SelectedLaunchable &&
+                snapshot.SelectedEntry is { Installed:true, Launchable:true, Selectable:true } row && row.Key==selection.Key && row.PackageName==selection.PackageName;
+            var missing=!selectionProof || launch && snapshot.PendingRequirementLaunch is null || expected==RustyKioskCommand.SetLaunchRequirement && shared && snapshot.SelectedEntry is null ||
                 tags && (snapshot.SelectedEntry is null || snapshot.RequestedTagPresent is null);
             var confirmed=shared && !missing && (!launch || snapshot.PendingRequirementLaunch==false);
             var effect=confirmed?"confirmed":missing?"unknown":"pendingWearerAction";
@@ -96,12 +129,25 @@ internal static class BrowserDirectCommandProjection
     private static BrowserDirectTypedResult Typed(RustyKioskOperatorResult typed,string? value,bool matches)
     {
         var state=typed.State;var key=state.SelectedKey;
-        if(key is not null && (key.Length is < 1 or > 160 || key.Trim()!=key || key.Any(char.IsControl)))throw new InvalidDataException("direct_selected_key_invalid");
+        if(key is not null && (key.Length is < 1 or > 160 || key.Trim()!=key || key.Any(char.IsControl) ||
+            typed.Command==RustyKioskCommand.Select && !BrowserDirectCommands.IsWellFormedUtf16(key)))
+        {
+            if(typed.Command!=RustyKioskCommand.Select)throw new InvalidDataException("direct_selected_key_invalid");
+            key=null;
+        }
         var package=state.SelectedPackage;
-        if(package is not null && (package.Length>256 || AndroidInput.RequirePackageName(package)!=package))throw new InvalidDataException("direct_selected_package_invalid");
+        if(typed.Command==RustyKioskCommand.Select)package=SelectionPackage(package);
+        else if(package is not null && (package.Length>256 || AndroidInput.RequirePackageName(package)!=package))throw new InvalidDataException("direct_selected_package_invalid");
         var requirement=state.SelectedLaunchRequirement?.ToWireName();
         var selected=key is null?[]:state.Entries.Where(entry=>entry.Key==key).Take(2).ToArray();
         var entry=selected.Length==1?new BrowserDirectSelectedEntry(key!,selected[0].LaunchRequirement.ToWireName()):null;
+        if(typed.Command==RustyKioskCommand.Select && entry is not null)
+        {
+            var row=selected[0];
+            var rowPackage=SelectionPackage(row.PackageName);
+            entry=entry with { PackageName=rowPackage,Installed=row.Installed,Launchable=row.Launchable,
+                Selectable=row.Installed && row.Launchable && rowPackage is not null };
+        }
         var tags=typed.Command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag;
         if(tags && key is not null && !BrowserDirectCommands.IsWellFormedUtf16(key))throw new InvalidDataException("direct_selected_key_invalid");
         var search=typed.Command==RustyKioskCommand.SetSearch?BoundedText(state.Search):null;
@@ -120,6 +166,12 @@ internal static class BrowserDirectCommandProjection
             ValueMatches=typed.Command is RustyKioskCommand.SetSearch or RustyKioskCommand.FilterTag ? matches : null,
             RequestedTagPresent=tags && entry is not null ? selected[0].Tags.Contains(value!,StringComparer.OrdinalIgnoreCase) : null
         };
+    }
+    private static string? SelectionPackage(string? value)
+    {
+        if(value is null || value.Length>256)return null;
+        try { return AndroidInput.RequirePackageName(value)==value ? value : null; }
+        catch(ArgumentException) { return null; }
     }
     private static string BoundedText(string? value) => value is not null && value.Length<=RustyKioskContract.MaxCommandValueLength && BrowserDirectCommands.IsWellFormedUtf16(value)
         ? value : throw new InvalidDataException("direct_text_proof_invalid");

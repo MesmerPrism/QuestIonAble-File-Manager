@@ -35,7 +35,7 @@ function resultValid(value, expectedId, command) {
 
 // Catalogs and provider facts are ephemeral. Only one small original mutation
 // reference survives reload; separate facts never clear that reference.
-export function createKioskView({api,getContext,setBusy,showResult}) {
+export function createKioskView({api,getContext,setBusy,showResult,onSelectionSourceChange = () => {}}) {
   const element = id => document.getElementById('kiosk-' + id), text = (id,value) => { element(id).textContent = value; };
   let original = null, damaged = false, storageAvailable = true, catalog = null, highlighted = null, selectedFact = null, installed = null, factsView = null;
   let reading = false, writing = false, probing = false, factsReading = false;
@@ -64,6 +64,8 @@ export function createKioskView({api,getContext,setBusy,showResult}) {
   function clearCatalog() { catalog = null; highlighted = null; selectedFact = null; catalogEpoch++; }
   const eligible = entry => Boolean(catalog && entry && entry.selectable && entry.installed && entry.launchable && packageName(entry.packageName) &&
     catalog.result.entries.filter(candidate => candidate.key === entry.key).length === 1);
+  const getReviewedSelection = () => !hasUnresolved() && eligible(highlighted) ?
+    {sessionId:catalog.sessionId,serial:catalog.serial,productChannel:catalog.productChannel,catalogRequestId:catalog.requestId,key:highlighted.key,packageName:highlighted.packageName} : null;
   function filtered() {
     const query = element('filter').value.trim().toLowerCase();
     return catalog ? catalog.result.entries.filter(entry => [entry.name,entry.packageName,entry.key].some(value => value?.toLowerCase().includes(query))) : [];
@@ -105,7 +107,7 @@ export function createKioskView({api,getContext,setBusy,showResult}) {
       button.type = 'button'; button.className = 'device-button'; button.setAttribute('aria-pressed',String(highlighted === entry));
       name.textContent = entry.name; detail.textContent = `${entry.packageName || 'No installed package'} · ${entry.installed ? 'installed' : 'not installed'} · ${entry.launchable ? 'public launcher reported' : 'no public launcher reported'}`;
       label.append(name,detail); button.append(label); item.append(button); element('entries').append(item);
-      button.addEventListener('click',() => { if (catalog?.result.entries.includes(entry)) { highlighted = entry; rowEpoch++; update(); } });
+      button.addEventListener('click',() => { if (catalog?.result.entries.includes(entry)) { highlighted = entry; rowEpoch++; update(); onSelectionSourceChange(); } });
     }
     text('catalog-state',catalog ? `Reported installed: ${catalog.result.installedCount}; not installed: ${catalog.result.notInstalledCount}; visible: ${catalog.result.visibleCount}. ${visible.length} matching rows from ${catalog.result.entries.length} returned rows.${catalog.result.visibleEntriesTruncated || catalog.result.projectionTruncated ? ' Catalog/projection is truncated; displayed rows are incomplete.' : ''} This is the returned snapshot, not a live refresh.` : catalogMessage);
     text('row-key',highlighted?.key || 'No local row highlighted'); text('row-package',highlighted?.packageName || 'Unknown');
@@ -157,12 +159,13 @@ export function createKioskView({api,getContext,setBusy,showResult}) {
     if (currentTarget(saved)) {
       if (checked.facts.installation) installed = checked.facts.installation;
       if (checked.kind === 'unavailable') { clearCatalog(); catalogMessage = saved.expectedCommand === 'select' ? 'Selection not performed: operator unavailable; no catalog returned. Open a fresh catalog before another selection.' : 'Kiosk operator unavailable; no catalog returned. No activity was opened by this conditional operation.'; }
-      else if (saved.expectedCommand === 'status') { catalog = {requestId:saved.requestId,result:checked.facts.result}; selectedFact = checked.facts.result; highlighted = null; catalogEpoch++; }
+      else if (saved.expectedCommand === 'status') { catalog = {requestId:saved.requestId,sessionId:saved.sessionId,serial:saved.serial,productChannel:saved.productChannel,result:checked.facts.result}; selectedFact = checked.facts.result; highlighted = null; catalogEpoch++; }
       else { selectedFact = checked.facts.result; rowEpoch++; }
     }
     message = checked.kind === 'unavailable' ? 'Owner confirmed the conditional installation check without opening the activity. No selection was performed.' :
       saved.expectedCommand === 'select' ? 'Owner confirmed the exact Kiosk selection. This does not establish an app launch or readiness.' : 'Owner returned the requested Kiosk catalog. Review a row separately before selecting it on the headset.';
     showResult(value,message);
+    onSelectionSourceChange();
   }
   async function mutate(action) {
     update(); if (element(action === 'kiosk.select' ? 'select' : 'open').disabled) return;
@@ -226,7 +229,8 @@ export function createKioskView({api,getContext,setBusy,showResult}) {
     } catch { factsMessage = 'Separate original provider facts unavailable. Original reference unchanged; no automatic retry.'; }
     finally { factsReading = false; setBusy(false); update(); }
   }
-  element('channel').addEventListener('change',update); element('filter').addEventListener('input',update);
+  const sourceChanged = () => { update(); onSelectionSourceChange(); };
+  element('channel').addEventListener('change',sourceChanged); element('filter').addEventListener('input',sourceChanged);
   for (const id of ['open-confirm','select-confirm']) element(id).addEventListener('change',update);
   element('installation').addEventListener('click',readInstallation); element('open').addEventListener('click',() => mutate('kiosk.catalog.open')); element('select').addEventListener('click',() => mutate('kiosk.select'));
   element('original-status').addEventListener('click',originalStatus); element('original-facts').addEventListener('click',readOriginalFacts);
@@ -235,5 +239,5 @@ export function createKioskView({api,getContext,setBusy,showResult}) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(reference(original),null,2)],{type:'application/json'})), link = document.createElement('a');
     link.href = url; link.download = 'qfm-kiosk-original-reference.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
   });
-  update(); return {update,hasUnresolved};
+  update(); return {update,hasUnresolved,getReviewedSelection};
 }

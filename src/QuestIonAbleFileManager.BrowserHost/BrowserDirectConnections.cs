@@ -50,7 +50,7 @@ public sealed partial class BrowserDirectConnections
     }
 
     internal Operation Reserve(BrowserDirectRequest request,string hostSession,BrowserDirectCommandOutcome? original=null,
-        BrowserDirectInstallSource? inspection=null,BrowserDirectInstallOutcome? installOriginal=null)
+        BrowserDirectInstallSource? inspection=null,BrowserDirectInstallOutcome? installOriginal=null,BrowserDirectSelectionReview? selection=null)
     {
         lock(_sync)
         {
@@ -72,7 +72,7 @@ public sealed partial class BrowserDirectConnections
                 if(entry.Session is null || requiresLive && (entry.State!="connected" || entry.Revoked || !entry.Published))
                     throw new BrowserRequestException("direct_connection_not_found",409);
             }
-            var metadata=request.IsCommand ? BrowserDirectCommandProjection.Metadata(request,entry,original) : null;
+            var metadata=request.IsCommand ? BrowserDirectCommandProjection.Metadata(request,entry,original,selection) : null;
             var operation=new Operation(request,entry,metadata)
             {
                 InstallMetadata=request.Action is "kiosk.direct.install" or "kiosk.direct.install-status" ? InstallMetadata(request,entry,inspection,installOriginal) : null

@@ -18,6 +18,16 @@ public sealed class BrowserDirectCommandTests
         if (action is "kiosk.direct.invoke" or "kiosk.direct.request-cancel") fields["confirmed"] = true;
         return JsonSerializer.SerializeToUtf8Bytes(fields);
     }
+    [Fact]
+    public void SelectAcceptsOnlyReviewedCatalogEnvelopeUsingExistingCoreCommand()
+    {
+        var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Body(command: "select", value: "app-key", id: Original))!;
+        fields["catalogRequestId"] = JsonSerializer.SerializeToElement(Handle);
+        var parsed = BrowserDirectCommands.Parse(JsonSerializer.SerializeToUtf8Bytes(fields));
+        Assert.Equal(RustyKioskCommand.Select, parsed.Command);
+        Assert.Equal("app-key", parsed.Value);
+        Assert.Equal("app-key", KioskDirectOperatorCommand.Invoke(parsed.Command!.Value, parsed.Value, true, parsed.LogicalRequestId).Value);
+    }
     [Theory]
     [InlineData("status", null, RustyKioskCommand.Status)]
     [InlineData("show-controls", null, RustyKioskCommand.ShowControls)]
@@ -58,12 +68,13 @@ public sealed class BrowserDirectCommandTests
             RustyKioskCommand.EnableWifiAfterBoot, RustyKioskCommand.DisableWifiAfterBoot,
             RustyKioskCommand.EnableAccessibility, RustyKioskCommand.DisableAccessibility, RustyKioskCommand.PassthroughNatural, RustyKioskCommand.PassthroughContour,
             RustyKioskCommand.RequestWifiAdb, RustyKioskCommand.DisableWifiAdb, RustyKioskCommand.ExitMetaHome,
-            RustyKioskCommand.SetSearch, RustyKioskCommand.FilterTag, RustyKioskCommand.AddTag, RustyKioskCommand.RemoveTag };
+            RustyKioskCommand.SetSearch, RustyKioskCommand.FilterTag, RustyKioskCommand.AddTag, RustyKioskCommand.RemoveTag, RustyKioskCommand.Select };
         Assert.Equal(26, Enum.GetValues<RustyKioskCommand>().Length);
         foreach (var command in Enum.GetValues<RustyKioskCommand>())
         {
             var body = Body(command: command.ToWireName(), value: command == RustyKioskCommand.SetLaunchRequirement ? "any" :
-                command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag ? "tag" : null);
+                command is RustyKioskCommand.AddTag or RustyKioskCommand.RemoveTag ? "tag" : command==RustyKioskCommand.Select ? "app-key" : null);
+            if(command==RustyKioskCommand.Select) { var fields=JsonSerializer.Deserialize<Dictionary<string,JsonElement>>(body)!; fields["catalogRequestId"]=JsonSerializer.SerializeToElement(Handle); body=JsonSerializer.SerializeToUtf8Bytes(fields); }
             if (initial.Contains(command)) Assert.Equal(command, BrowserDirectCommands.Parse(body).Command);
             else Assert.Equal("direct_command_unsupported", Assert.Throws<BrowserRequestException>(() => BrowserDirectCommands.Parse(body)).Code);
         }
