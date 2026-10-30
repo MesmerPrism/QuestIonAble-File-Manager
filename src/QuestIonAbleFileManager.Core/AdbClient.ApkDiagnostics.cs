@@ -42,20 +42,45 @@ public sealed partial class AdbClient
 
     // Also used by the future v3 preflight/reverification path. Every inspector
     // subprocess sees the required bounded adapter; legacy injection is rejected.
-    internal AdbClient CreateOwnedDiagnosticClient() => new(AdbPath,
-        new DiagnosticRequiredCommandRunner(_runner), _buildTools, _launchReadbackTimeProvider, _launchReadbackDelay);
+    internal AdbClient CreateOwnedDiagnosticClient(CancellationToken operationToken = default) => new(AdbPath,
+        new DiagnosticRequiredCommandRunner(_runner, operationToken), _buildTools, _launchReadbackTimeProvider, _launchReadbackDelay);
 
     // Consume the registry's already-retained immutable command. Output paths
     // remain generated local stems, never caller-selected directory authority.
     internal async Task<OperatorExecutionResult> ExecuteOwnedDiagnosticAsync(OperatorCommand command,
         LocalApiDiagnosticInputLease input, LocalApiDiagnosticCaptureSink output, CancellationToken cancellationToken = default)
     {
-        if (command.Kind != OperatorCommandKind.DiagnoseInspectedApp || command.Serial is null)
+        if (command.Kind is not (OperatorCommandKind.DiagnoseInspectedApp or OperatorCommandKind.LaunchDiagnoseInspectedApp) || command.Serial is null)
             throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
-        var expected = OperatorCommands.DiagnoseInspectedApp(command.Serial, input.Path, output.Reservation.PlannedOutputPath);
+        var isLaunch = command.Kind == OperatorCommandKind.LaunchDiagnoseInspectedApp;
+        if (isLaunch != output.Reservation.Intent.IsLaunch)
+            throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
+        var expected = isLaunch
+            ? OperatorCommands.LaunchDiagnoseInspectedApp(command.Serial, input.Path, output.Reservation.PlannedOutputPath)
+            : OperatorCommands.DiagnoseInspectedApp(command.Serial, input.Path, output.Reservation.PlannedOutputPath);
         if (!command.CliArguments.SequenceEqual(expected.CliArguments, StringComparer.Ordinal) ||
-            command.LocalPath != input.Path || command.OutputPath != expected.OutputPath)
+            command.LocalPath != input.Path || command.OutputPath != expected.OutputPath ||
+            command.InstallOptions is not null)
             throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
+        if (isLaunch)
+        {
+            var tracker = new OperatorMutationTracker(command, null);
+            try
+            {
+                var launch = await CaptureAdmittedApkLaunchDiagnosticsAsync(command.Serial, input, output,
+                    tracker.Dispatched, cancellationToken).ConfigureAwait(false);
+                if (tracker.HasSent != launch.Attempt.DispatchAttempted || tracker.DispatchObserved != launch.Attempt.DispatchAttempted)
+                    throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_dispatch_provenance");
+                var result = new OperatorExecutionResult(command, ApkLaunchDiagnosticBundleResult: launch);
+                return result with { MutationReceipt = tracker.Complete(OperatorMutations.Observe(command, result)) };
+            }
+            catch (Exception exception)
+            {
+                if (tracker.HasSent)
+                    throw new OperatorMutationExecutionException(tracker.PreservePending(exception), exception);
+                throw;
+            }
+        }
         return new(command, ApkDiagnosticBundleResult: await CaptureAdmittedApkDiagnosticsAsync(command.Serial,
             input, output, cancellationToken).ConfigureAwait(false));
     }
@@ -65,6 +90,8 @@ public sealed partial class AdbClient
         CancellationToken cancellationToken = default)
     {
         serial = AndroidInput.RequireSerial(serial);
+        if (output.Reservation.Intent.IsLaunch)
+            throw LocalApiDiagnosticOutputIntent.Failure("diagnostic_command_mismatch");
         input.Verify();
         output.Reservation.VerifyInput(input);
         var owned = CreateOwnedDiagnosticClient();
