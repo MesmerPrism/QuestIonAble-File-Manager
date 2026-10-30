@@ -1,6 +1,6 @@
 # APK launch diagnostic
 
-`apk launch-diagnose` is the agent-only exact-once launch route for retaining
+`apk launch-diagnose` is the typed single-dispatch launch route for retaining
 the first bounded UID log bytes of one inspected APK. It is deliberately
 separate from read-only `apk diagnose` and ordinary `apk launch`.
 
@@ -12,7 +12,7 @@ questionable-file-manager apk launch-diagnose `
   --json
 ```
 
-The output parent must exist and the output name must not. QFM admits the APK
+For the CLI, the output parent must exist and the output name must not. QFM admits the APK
 through its immutable retained copy, proves exactly one ready selected serial,
 requires one standalone installed APK with no splits and exact complete bytes,
 derives one exported launcher and the
@@ -27,9 +27,24 @@ ready serial and installed bytes and issue one resolved launcher dispatch.
 
 The command accepts no package, UID, PID, tag, log filter, capture duration,
 component, intent, action, category, extra, command, shell fragment, or raw ADB
-argument. It has no WPF or local-API projection and performs no screenshot,
+argument. It has no WPF or dedicated Local API HTTP projection and performs no screenshot,
 recording, bugreport, install, permission mutation, property mutation, stop, or
 retry.
+
+The retained Core v3 owner also admits the closed `apk.launch-diagnose` action.
+It borrows its already retained APK and writes exactly the two fixed payloads
+through its existing diagnostic reservation. It creates no second APK, sibling
+directory or caller-selected output path. The new output policy is
+`exact-installed-launch-diagnostic-output.v1`; the read-only diagnostic policy
+and canonical bytes are unchanged. See the [retained contract](local-api.md#v3-retained-diagnostics-in-core)
+for durable intent, safe receipts, publication and recovery.
+
+The owner commits its conservative possible-launch marker before invoking Core.
+That marker is independent of the precise `sent` transition at the fixed launch
+boundary. An available archive can coexist with an unconfirmed launch; saving
+it never acknowledges the launch. A confirmed launch with unavailable evidence
+is never launched again to recreate a ZIP. Restart, status, cancellation and
+local cleanup never replay the launch or prove rollback.
 
 ## Evidence and cleanup
 
@@ -41,7 +56,7 @@ pipe, QFM fails without hashing or publishing a bundle rather than waiting
 without a bound or returning bytes that could still change. QFM then rechecks
 exact installed bytes and the derived UID. Current
 package PIDs come from one fixed process inventory and must match both that UID
-and an exact package or `package:process` name. A unique sibling stage writes
+and an exact package or `package:process` name. In the CLI path, a unique sibling stage writes
 `logcat-uid-post-fence.txt` and `launch-diagnostic-manifest.json` with
 create-new semantics, and only a complete manifest is published by an atomic
 directory move.

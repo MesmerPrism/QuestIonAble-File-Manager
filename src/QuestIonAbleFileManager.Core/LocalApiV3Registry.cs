@@ -40,12 +40,14 @@ public sealed partial class LocalApiCommandRegistry
     { if (_registryClosing) throw Input("owner_stopping", "The retained owner is stopping."); }
 
     public LocalApiV3Capabilities GetV3Capabilities() => new(
-        LocalApiV3Contract.Version, ["apk.diagnose"], LocalApiContract.MaximumRequestBytes,
+        LocalApiV3Contract.Version, ["apk.diagnose", "apk.launch-diagnose"], LocalApiContract.MaximumRequestBytes,
         (int)LocalApiContract.DefaultPreflightLifetime.TotalSeconds, LocalApiV3OutputLimits.Current);
 
     public Task<LocalApiV3PreflightResult> PreflightV3Async(ReadOnlyMemory<byte> body, CancellationToken cancellationToken = default)
     {
         var request = ParseBound<LocalApiV3PreflightRequest>(body); request.Validate();
+        if (request.Command == "apk.launch-diagnose" && !_client.SupportsOwnedLaunchDiagnostics)
+            throw Input("diagnostic_runner_unsupported", "The retained launch diagnostic requires an armed bounded runner.");
         lock (_operationsGate)
         {
             EnsureRegistryOpenLocked();
@@ -86,7 +88,8 @@ public sealed partial class LocalApiCommandRegistry
                 !string.IsNullOrWhiteSpace(artifact.Identity.SplitName))
                 throw Input("artifact_changed", "The inspected base APK could not be bound to the retained source.");
             var id = "api-" + Guid.NewGuid().ToString("N");
-            var intent = LocalApiDiagnosticOutputIntent.Create(id);
+            var launch = request.Command == "apk.launch-diagnose";
+            var intent = launch ? LocalApiDiagnosticOutputIntent.CreateForLaunch(id) : LocalApiDiagnosticOutputIntent.Create(id);
             lock (_operationsGate)
             {
                 var inventory = _stager.GetInventory();
@@ -108,11 +111,13 @@ public sealed partial class LocalApiCommandRegistry
                         var now = _timeProvider.GetUtcNow();
                         var stagedPath = Path.Combine(_settings.StateDirectory, "staged", input.Leaf);
                         var outputPath = Path.Combine(_settings.StateDirectory, "staged", "d-" + intent.OutputId[5..]);
-                        var command = OperatorCommands.DiagnoseInspectedApp(request.Serial, stagedPath, outputPath);
+                        var command = BuildV3Command(launch, request.Serial, stagedPath, outputPath);
                         var digest = LocalApiV3Contract.ComputeV3CommandDigest(command, artifact, intent);
                         var metadata = new LocalApiV3JournalState(intent.OutputId, intent.PlannedLeafDigest, "reserved",
-                            PlanResources(intent, input), now, now.AddSeconds(V3PreparationSeconds));
-                        var row = new LocalApiJournalEntry(id, "apk.diagnose", digest,
+                            PlanResources(intent, input), now, now.AddSeconds(V3PreparationSeconds))
+                        { OutputPolicy = launch ? LocalApiDiagnosticOutputIntent.LaunchPolicyVersion : null,
+                            LaunchMayHaveDispatched = launch ? false : null };
+                        var row = new LocalApiJournalEntry(id, request.Command, digest,
                             now.AddSeconds(request.ExpiresInSeconds ?? 120), stagedPath, artifact, request.Serial, null,
                             LocalApiOperationStage.Preparing, false, false, null, null, null, null, null,
                             LocalApiV3Contract.Version, metadata);
@@ -170,7 +175,7 @@ public sealed partial class LocalApiCommandRegistry
                     throw Input("operation_expired", "The preparing operation expired.");
                 PersistDiagnosticLocked(operation, operation.Row with { Artifact = inspected,
                     Stage = LocalApiOperationStage.Preflighted, Diagnostic = operation.Metadata with { Ready = true } });
-                prepared = new(LocalApiV3Contract.Version, id, "apk.diagnose", operation.Row.CommandDigest,
+                prepared = new(LocalApiV3Contract.Version, id, request.Command, operation.Row.CommandDigest,
                     operation.Row.ExpiresAt, LocalApiV3ApkFacts.FromArtifact(inspected), target.Serial, LocalApiV3OutputIntent.FromIntent(intent));
             }
         }
@@ -243,6 +248,10 @@ public sealed partial class LocalApiCommandRegistry
 
     private static bool SameApkFacts(ApkArtifactInspection left, ApkArtifactInspection right) =>
         left.SizeBytes == right.SizeBytes && left.Sha256 == right.Sha256 && left.Identity == right.Identity;
+
+    private static OperatorCommand BuildV3Command(bool launch, string serial, string input, string output) => launch
+        ? OperatorCommands.LaunchDiagnoseInspectedApp(serial, input, output)
+        : OperatorCommands.DiagnoseInspectedApp(serial, input, output);
 
     private static async Task<QuestDevice> RequireV3TargetAsync(AdbClient client, string serial, CancellationToken token)
     {
@@ -317,17 +326,48 @@ public sealed partial class LocalApiCommandRegistry
                     Diagnostic = operation.Metadata with { OutputStarted = true } });
             OperatorCommand command;
             lock (_operationsGate) command = _operations[operation.Row.OperationId].Command;
+            var launch = operation.Row.CommandName == "apk.launch-diagnose";
+            if (launch)
+                lock (_operationsGate)
+                    // Both journal and anchor must acknowledge this conservative
+                    // intent before Core can arm capture or observe actual dispatch.
+                    PersistDiagnosticLocked(operation, operation.Row with
+                    { Diagnostic = operation.Metadata with { LaunchMayHaveDispatched = true } });
             var result = await ownedClient.ExecuteOwnedDiagnosticAsync(command, input, operation.Reservation!.CreateSink(), token).ConfigureAwait(false);
-            var diagnostic = result.ApkDiagnosticBundleResult ?? throw Input("diagnostic_result_invalid", "No diagnostic result was returned.");
-            var candidate = await operation.Reservation.SealAsync(diagnostic, token).ConfigureAwait(false);
-            var summary = LocalApiV3DiagnosticSummary.FromResult(diagnostic);
+            if (result.Command.Kind != command.Kind || result.Command.Serial != command.Serial ||
+                result.Command.LocalPath != command.LocalPath || result.Command.OutputPath != command.OutputPath ||
+                result.Command.InstallOptions != command.InstallOptions || !result.Command.CliArguments.SequenceEqual(command.CliArguments, StringComparer.Ordinal))
+                throw Input("diagnostic_result_invalid", "The owned diagnostic command binding changed.");
+            LocalApiDiagnosticSealedOutput candidate;
+            LocalApiV3DiagnosticSummary? summary = null;
+            LocalApiV3LaunchSummary? launchSummary = null;
+            OperatorMutationReceipt? launchMutation = null;
+            var stage = LocalApiOperationStage.Completed;
+            if (launch)
+            {
+                var diagnostic = result.ApkLaunchDiagnosticBundleResult ?? throw Input("diagnostic_result_invalid", "No launch diagnostic result was returned.");
+                if (!SameApkFacts(operation.Row.Artifact, diagnostic.Artifact))
+                    throw Input("diagnostic_result_invalid", "The launch diagnostic facts changed.");
+                (launchSummary, launchMutation, stage) = LocalApiV3LaunchProof.Project(result, operation.Row.Serial!,
+                    operation.Metadata.LaunchMayHaveDispatched == true);
+                candidate = await operation.Reservation.SealAsync(diagnostic, token).ConfigureAwait(false);
+            }
+            else
+            {
+                var diagnostic = result.ApkDiagnosticBundleResult ?? throw Input("diagnostic_result_invalid", "No diagnostic result was returned.");
+                candidate = await operation.Reservation.SealAsync(diagnostic, token).ConfigureAwait(false);
+                summary = LocalApiV3DiagnosticSummary.FromResult(diagnostic);
+            }
             var descriptor = new LocalApiV3ArchiveDescriptor(candidate.OutputId, "apk-diagnostics.zip", candidate.SizeBytes, candidate.Sha256, _timeProvider.GetUtcNow());
             lock (_operationsGate)
             {
                 // Save+anchor acknowledgement is the sole publication point. Status cannot
                 // see this staged row because it shares the registry monitor.
-                var terminal = operation.Row with { Stage = LocalApiOperationStage.Completed, TerminalAt = descriptor.PublishedAt,
-                    Diagnostic = operation.Metadata with { Archive = descriptor, Summary = summary }, ErrorCode = null, Error = null };
+                var terminal = operation.Row with { Stage = stage, TerminalAt = descriptor.PublishedAt,
+                    Diagnostic = operation.Metadata with { Archive = descriptor, Summary = summary,
+                        LaunchSummary = launchSummary, LaunchMutation = launchMutation },
+                    ErrorCode = stage == LocalApiOperationStage.Completed ? null : stage == LocalApiOperationStage.Failed
+                        ? "diagnostic_execution_failed" : "diagnostic_execution_unconfirmed", Error = null };
                 PersistDiagnosticLocked(operation, terminal);
             }
         }
@@ -338,7 +378,7 @@ public sealed partial class LocalApiCommandRegistry
             lock (_operationsGate)
             {
                 var started = operation.Metadata.OutputStarted;
-                if (cancellationProved) operation.Row = operation.Row with { Stage = LocalApiOperationStage.Cancelled,
+                if (cancellationProved && operation.Metadata.LaunchMayHaveDispatched != true) operation.Row = operation.Row with { Stage = LocalApiOperationStage.Cancelled,
                     TerminalAt = _timeProvider.GetUtcNow(), ErrorCode = "diagnostic_cancelled", Error = null };
                 else if (started || operation.PersistenceUncertain) MarkV3UnknownLocked(operation, exception is OperationCanceledException ? "diagnostic_cancellation_unconfirmed" : "diagnostic_execution_unconfirmed");
                 else operation.Row = operation.Row with { Stage = exception is OperationCanceledException ? LocalApiOperationStage.Cancelled : LocalApiOperationStage.Failed,
@@ -430,19 +470,26 @@ public sealed partial class LocalApiCommandRegistry
     {
         var row = operation.Row; var metadata = operation.Metadata;
         var intent = metadata.Snapshot(row.OperationId).Intent;
-        var expired = row.Stage == LocalApiOperationStage.Completed && V3RetentionElapsed(row);
+        var launch = row.CommandName == "apk.launch-diagnose";
+        var expired = (row.Stage == LocalApiOperationStage.Completed || launch && row.Stage == LocalApiOperationStage.Failed) && V3RetentionElapsed(row);
         var code = expired ? "operation_expired" : V3PublicCode(row.ErrorCode);
-        var available = row.Stage == LocalApiOperationStage.Completed && metadata.Archive is not null &&
+        var publishableStage = launch ?
+            row.Stage is LocalApiOperationStage.Completed or LocalApiOperationStage.Failed or LocalApiOperationStage.OutcomeUnknownRecoveryRequired &&
+                metadata.LaunchSummary is not null && metadata.LaunchMutation is not null &&
+                (row.Stage != LocalApiOperationStage.OutcomeUnknownRecoveryRequired || metadata.LaunchSummary.Disposition is "launchPending" or "outcomeUnknown")
+            : row.Stage == LocalApiOperationStage.Completed;
+        var available = publishableStage && metadata.Archive is not null &&
             !expired && !metadata.CleanupStarted && !operation.PersistenceUncertain;
         var phase = available ? "available" : expired ? "unavailable" : metadata.CleanupStarted ? "cleanupPending" : row.Stage switch
         {
             LocalApiOperationStage.Preparing => "preparing", LocalApiOperationStage.Preflighted => "preflighted",
             LocalApiOperationStage.Running or LocalApiOperationStage.CancellationRequested => "capturing", _ => "unavailable"
         };
-        return new(LocalApiV3Contract.Version, row.OperationId, "apk.diagnose", row.CommandDigest, row.ExpiresAt, row.Stage, row.Consumed, row.Serial!,
+        return new(LocalApiV3Contract.Version, row.OperationId, row.CommandName, row.CommandDigest, row.ExpiresAt, row.Stage, row.Consumed, row.Serial!,
             new(LocalApiV3OutputIntent.FromIntent(intent), phase, available, metadata.Resources.Count(resource => resource.State is not ("planned" or "removed")),
                 metadata.Resources.Count(resource => resource.DebtCode is not null || resource.State == "identityUnknown"), code, available ? metadata.Archive : null),
-            row.Stage == LocalApiOperationStage.Completed ? metadata.Summary : null, code);
+            row.Stage == LocalApiOperationStage.Completed ? metadata.Summary : null, code)
+        { LaunchMayHaveDispatched = metadata.LaunchMayHaveDispatched, LaunchSummary = metadata.LaunchSummary, Mutation = metadata.LaunchMutation };
     }
 
     public async Task<LocalApiDiagnosticOutputLease> AcquireDiagnosticOutputAsync(string operationId, string commandDigest,

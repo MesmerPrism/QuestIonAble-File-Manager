@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace QuestIonAbleFileManager.Core;
@@ -16,17 +17,20 @@ public static class LocalApiV3Contract
     internal static byte[] GetV3CanonicalCommandBytes(OperatorCommand command, ApkArtifactInspection artifact,
         LocalApiDiagnosticOutputIntent intent)
     {
-        _ = LocalApiDiagnosticOutputIntent.Restore(intent.OperationId, intent.OutputId, intent.PlannedLeafDigest);
+        _ = RestoreIntent(intent.OperationId, intent.OutputId, intent.PlannedLeafDigest, intent.Policy);
         LocalApiV3ApkFacts.FromArtifact(artifact).Validate();
-        new LocalApiV3PreflightRequest(Version, "apk.diagnose", command.LocalPath!, command.Serial!).Validate();
-        if (command.Kind != OperatorCommandKind.DiagnoseInspectedApp || command.InstallOptions is not null ||
+        var action = intent.IsLaunch ? "apk.launch-diagnose" : "apk.diagnose";
+        new LocalApiV3PreflightRequest(Version, action, command.LocalPath!, command.Serial!).Validate();
+        if (command.Kind != (intent.IsLaunch ? OperatorCommandKind.LaunchDiagnoseInspectedApp : OperatorCommandKind.DiagnoseInspectedApp) || command.InstallOptions is not null ||
             command.LocalPath is null || command.OutputPath is null ||
             command.LocalPath.Any(char.IsControl) || command.OutputPath.Any(char.IsControl) ||
             !Path.IsPathFullyQualified(command.LocalPath) || !Path.IsPathFullyQualified(command.OutputPath) ||
             !Regex.IsMatch(Path.GetFileName(command.LocalPath), "\\A[0-9a-f]{32}\\.apk\\z", RegexOptions.CultureInvariant))
             throw Failure("diagnostic_command_mismatch");
         var expectedOutput = Path.Combine(Path.GetDirectoryName(command.LocalPath)!, "d-" + intent.OutputId[5..]);
-        var expected = OperatorCommands.DiagnoseInspectedApp(command.Serial!, command.LocalPath, expectedOutput);
+        var expected = intent.IsLaunch
+            ? OperatorCommands.LaunchDiagnoseInspectedApp(command.Serial!, command.LocalPath, expectedOutput)
+            : OperatorCommands.DiagnoseInspectedApp(command.Serial!, command.LocalPath, expectedOutput);
         if (command.LocalPath != expected.LocalPath || command.OutputPath != expected.OutputPath ||
             !command.CliArguments.SequenceEqual(expected.CliArguments, StringComparer.Ordinal))
             throw Failure("diagnostic_command_mismatch");
@@ -37,8 +41,8 @@ public static class LocalApiV3Contract
         // facts enter this domain; Artifact.Path is never source/destination authority.
         return JsonSerializer.SerializeToUtf8Bytes(new
         {
-            contractVersion = Version, action = "apk.diagnose",
-            policyVersion = LocalApiDiagnosticOutputIntent.PolicyVersion, target = command.Serial,
+            contractVersion = Version, action,
+            policyVersion = intent.Policy, target = command.Serial,
             command = new { kind = command.Kind.ToString(), arguments },
             resources = new object[]
             {
@@ -51,6 +55,20 @@ public static class LocalApiV3Contract
                     plannedLeafDigest = intent.PlannedLeafDigest, limits = intent.Limits }
             }
         });
+    }
+
+    internal static LocalApiDiagnosticOutputIntent RestoreIntent(string operationId, string outputId, string digest, string policy) => policy switch
+    {
+        LocalApiDiagnosticOutputIntent.PolicyVersion => LocalApiDiagnosticOutputIntent.Restore(operationId, outputId, digest),
+        LocalApiDiagnosticOutputIntent.LaunchPolicyVersion => LocalApiDiagnosticOutputIntent.RestoreForLaunch(operationId, outputId, digest),
+        _ => throw Failure("diagnostic_intent_invalid")
+    };
+
+    internal static void RequireActionPolicy(string action, string policy)
+    {
+        if ((action == "apk.diagnose" && policy == LocalApiDiagnosticOutputIntent.PolicyVersion) ||
+            (action == "apk.launch-diagnose" && policy == LocalApiDiagnosticOutputIntent.LaunchPolicyVersion)) return;
+        throw Failure("diagnostic_intent_invalid");
     }
 
     internal static bool IsHash(string? value) => value is not null && Regex.IsMatch(value, "\\A[0-9a-f]{64}\\z", RegexOptions.CultureInvariant);
@@ -76,7 +94,7 @@ public sealed record LocalApiV3PreflightRequest(
     public void Validate()
     {
         LocalApiV3OperationRequest.RequireVersion(ContractVersion);
-        if (Command != "apk.diagnose")
+        if (Command is not ("apk.diagnose" or "apk.launch-diagnose"))
             throw new LocalApiException("command_not_allowed", "The requested v3 command is not allowed.");
         if (string.IsNullOrWhiteSpace(ApkPath))
             throw new LocalApiException("apk_path_required", "The local APK file is required.");
@@ -147,6 +165,13 @@ public sealed record LocalApiV3OutputLimits(
     int MaximumOptionalStandardOutputBytes, int MaximumOptionalStandardErrorBytes,
     long MaximumInputArtifactBytes, int MaximumBinaryFramingBytes, int MaximumProcessTimeoutSeconds)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull), JsonPropertyOrder(1)]
+    public int? MaximumArmedCaptureBytes { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull), JsonPropertyOrder(2)]
+    public int? PostActionWindowMilliseconds { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull), JsonPropertyOrder(3)]
+    public int? MaximumLaunchOperationSeconds { get; init; }
+
     internal static LocalApiV3OutputLimits Current => new(
         LocalApiDiagnosticOutputIntent.MaximumProcessLogs, LocalApiDiagnosticOutputIntent.RecentLogLinesPerCapture,
         LocalApiDiagnosticOutputIntent.MaximumPayloadFiles, LocalApiDiagnosticOutputIntent.MaximumPayloadFileBytes,
@@ -161,6 +186,19 @@ public sealed record LocalApiV3OutputLimits(
     {
         if (this != Current) throw LocalApiV3Contract.Failure("diagnostic_limits_invalid");
     }
+
+    internal static LocalApiV3OutputLimits Launch => Current with
+    {
+        MaximumArmedCaptureBytes = LocalApiDiagnosticOutputIntent.MaximumArmedCaptureBytes,
+        PostActionWindowMilliseconds = LocalApiDiagnosticOutputIntent.PostActionWindowMilliseconds,
+        MaximumLaunchOperationSeconds = LocalApiDiagnosticOutputIntent.MaximumLaunchOperationSeconds
+    };
+
+    internal void ValidateForPolicy(string policy)
+    {
+        if (this != (policy == LocalApiDiagnosticOutputIntent.LaunchPolicyVersion ? Launch : Current))
+            throw LocalApiV3Contract.Failure("diagnostic_limits_invalid");
+    }
 }
 
 /// <summary>Pathless projection; physical leaves and native identities remain private.</summary>
@@ -169,16 +207,17 @@ public sealed record LocalApiV3OutputIntent(string OutputId, string PolicyVersio
 {
     internal static LocalApiV3OutputIntent FromIntent(LocalApiDiagnosticOutputIntent intent)
     {
-        _ = LocalApiDiagnosticOutputIntent.Restore(intent.OperationId, intent.OutputId, intent.PlannedLeafDigest);
-        return new(intent.OutputId, LocalApiDiagnosticOutputIntent.PolicyVersion,
-            LocalApiDiagnosticOutputIntent.ArchiveFormat, intent.PlannedLeafDigest, LocalApiV3OutputLimits.Current);
+        _ = LocalApiV3Contract.RestoreIntent(intent.OperationId, intent.OutputId, intent.PlannedLeafDigest, intent.Policy);
+        return new(intent.OutputId, intent.Policy,
+            LocalApiDiagnosticOutputIntent.ArchiveFormat, intent.PlannedLeafDigest,
+            intent.IsLaunch ? LocalApiV3OutputLimits.Launch : LocalApiV3OutputLimits.Current);
     }
     public void Validate()
     {
         if (!LocalApiV3Contract.IsOutputId(OutputId) || !LocalApiV3Contract.IsHash(PlannedLeafDigest) ||
-            PolicyVersion != LocalApiDiagnosticOutputIntent.PolicyVersion || ArchiveFormat != LocalApiDiagnosticOutputIntent.ArchiveFormat || Limits is null)
+            PolicyVersion is not (LocalApiDiagnosticOutputIntent.PolicyVersion or LocalApiDiagnosticOutputIntent.LaunchPolicyVersion) || ArchiveFormat != LocalApiDiagnosticOutputIntent.ArchiveFormat || Limits is null)
             throw LocalApiV3Contract.Failure("diagnostic_intent_invalid");
-        Limits.Validate();
+        Limits.ValidateForPolicy(PolicyVersion);
     }
 }
 
@@ -216,7 +255,8 @@ public sealed record LocalApiV3PreflightResult(string ContractVersion, string Op
         new LocalApiV3PreflightRequest(ContractVersion, Command, "base.apk", Serial).Validate();
         if (Artifact is null || OutputIntent is null) throw LocalApiV3Contract.Failure("diagnostic_projection_invalid");
         Artifact.Validate(); OutputIntent.Validate();
-        _ = LocalApiDiagnosticOutputIntent.Restore(OperationId, OutputIntent.OutputId, OutputIntent.PlannedLeafDigest);
+        LocalApiV3Contract.RequireActionPolicy(Command, OutputIntent.PolicyVersion);
+        _ = LocalApiV3Contract.RestoreIntent(OperationId, OutputIntent.OutputId, OutputIntent.PlannedLeafDigest, OutputIntent.PolicyVersion);
     }
 }
 
@@ -286,14 +326,38 @@ public sealed record LocalApiV3OperationStatus(string ContractVersion, string Op
     string CommandDigest, DateTimeOffset ExpiresAt, LocalApiOperationStage Stage, bool Consumed, string Serial,
     LocalApiV3OutputStatus Output, LocalApiV3DiagnosticSummary? DiagnosticSummary = null, string? ErrorCode = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LocalApiV3LaunchSummary? LaunchSummary { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OperatorMutationReceipt? Mutation { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LaunchMayHaveDispatched { get; init; }
+
     public void Validate()
     {
         LocalApiV3OperationRequest.RequireBinding(ContractVersion, OperationId, CommandDigest);
         new LocalApiV3PreflightRequest(ContractVersion, Command, "base.apk", Serial).Validate();
-        if (!Enum.IsDefined(Stage) || Output is null ||
-            (Output.Available && (!Consumed || Stage != LocalApiOperationStage.Completed || DiagnosticSummary is null)))
+        if (!Enum.IsDefined(Stage) || Output is null)
             throw LocalApiV3Contract.Failure("diagnostic_projection_invalid");
         Output.Validate(); DiagnosticSummary?.Validate(); LocalApiV3Contract.RequireErrorCode(ErrorCode);
-        _ = LocalApiDiagnosticOutputIntent.Restore(OperationId, Output.Intent.OutputId, Output.Intent.PlannedLeafDigest);
+        LocalApiV3Contract.RequireActionPolicy(Command, Output.Intent.PolicyVersion);
+        _ = LocalApiV3Contract.RestoreIntent(OperationId, Output.Intent.OutputId, Output.Intent.PlannedLeafDigest, Output.Intent.PolicyVersion);
+        if (Command == "apk.diagnose")
+        {
+            if (LaunchSummary is not null || Mutation is not null || LaunchMayHaveDispatched is not null ||
+                (Output.Available && (!Consumed || Stage != LocalApiOperationStage.Completed || DiagnosticSummary is null)))
+                throw LocalApiV3Contract.Failure("diagnostic_projection_invalid");
+            return;
+        }
+        if (DiagnosticSummary is not null || (LaunchSummary is null) != (Mutation is null) ||
+            (LaunchMayHaveDispatched == true && (!Consumed || Stage is not (LocalApiOperationStage.Running or
+                LocalApiOperationStage.CancellationRequested or LocalApiOperationStage.OutcomeUnknownRecoveryRequired or LocalApiOperationStage.Completed or LocalApiOperationStage.Failed))) ||
+            (Stage == LocalApiOperationStage.Completed && LaunchSummary is null) ||
+            (LaunchMayHaveDispatched == true && Stage == LocalApiOperationStage.Failed && LaunchSummary is null) ||
+            (Output.Available && (!Consumed || LaunchSummary is null ||
+                (Stage == LocalApiOperationStage.OutcomeUnknownRecoveryRequired && LaunchSummary.Disposition is "completed" or "rejectedBeforeDispatch"))))
+            throw LocalApiV3Contract.Failure("diagnostic_projection_invalid");
+        if (LaunchSummary is not null)
+            LocalApiV3LaunchProof.Validate(LaunchSummary, Mutation!, Serial, LaunchMayHaveDispatched == true, Stage);
     }
 }
