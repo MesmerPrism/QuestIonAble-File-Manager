@@ -123,6 +123,7 @@ fields reject, and each action requires exactly its listed fields:
 | `device.actor-identity` | `serial`, `pid` (positive process ID) |
 | `adb.forwards` | `serial` |
 | `apk.inspect` | `artifactId`, `sha256`, `sizeBytes` (from a completed upload receipt) |
+| `apk.install` | `serial`, one exact `source` receipt, four explicit boolean `options`, `confirmed:true`; protected-staging support required; see ordinary single-APK installation below |
 | `apk.install-set` | `serial`, 2–8 exact `sources` receipts, four explicit boolean `options`, `confirmed:true`; protected-staging support required; see ordinary APK-set installation below |
 | `apk.preflight` | `serial`, `artifactId`, `sha256`, `sizeBytes` |
 | `runtime.observe` | `serial`, `artifactId`, `sha256`, `sizeBytes`, `verification` exactly `exact` or `development-metadata` |
@@ -184,7 +185,7 @@ running ID is classified as consumed before the busy check.
 Body reads have a five-second deadline. Ordinary admitted ADB commands have a
 90-second cancellation deadline; staged APK inspection/lease acquisition and
 read captures instead share a five-minute lifetime with their bounded runners.
-The explicit package-stop and ordinary APK-set install paths retain their same native operation through actual
+The explicit package-stop and ordinary APK install paths retain their same native operation through actual
 exit and stream drain without that elapsed deadline; connector shutdown requests
 cancellation but still joins its real completion.
 Local profile writes below retain their synchronous owner's real completion
@@ -246,10 +247,61 @@ keeps staged references in tab memory and rejects them when the host session
 changes. Process restart invalidates IDs; it does not establish durable crash
 recovery or authorize scavenging unrelated files.
 
-Transient staging performs local transport and inspection. The separate retained
-workflow below owns inspected single-APK install, launch and runtime observation.
+Transient staging performs local transport and inspection. The ordinary single
+and package-set install cards below reuse those staged sources. The separate
+retained workflow owns its prepared install, launch and runtime operations.
 Remaining advanced deployment options use the existing typed CLI/WPF during
 migration.
+
+## Ordinary single-APK installation
+
+On a Windows protected-staging host, stage one base APK and select one ready
+target. **Install current single APK** reviews its exact filename, bytes, full SHA-256
+and four explicit options: replace existing, allow downgrade, grant runtime
+permissions and allow test packages. Approve once to call the existing Core
+single-APK installer. Core inspects its own protected immutable copy and verifies
+the installed base APK bytes and identity. Earlier browser inspection or retained
+preparation is not required; host Android Build Tools are still needed.
+
+The closed `apk.install` request contains exactly `requestId`, `action`, `serial`,
+`source`, `options`, `confirmed:true`. Source is the complete upload receipt
+`{id,fileName,sizeBytes,sha256}`; options are exactly `replaceExisting`,
+`allowDowngrade`, `grantRuntimePermissions`, `allowTestPackages`, all booleans.
+The request and saved original remain bounded to 4096 UTF-8 bytes. No caller
+package, identity, policy, activity or host path is accepted.
+
+The `apkInstall` result uses contract
+`questionable.file_manager.browser_apk_install.v1` and three states: `running`,
+`completed`, `outcomeUnknown`. Only a bound actual Core success with matching
+serial, package, version code, literal nullable version name, signer, base digest
+and byte count, plus the real confirmed receipt, acknowledges completion.
+Version codes are positive Int64 decimal **strings** to preserve full precision;
+version names are literal nullable strings up to 512 UTF-16 units, never trimmed
+or truncated. Unrepresentable or contrary proof stays unknown. The result
+includes the actual supported digest method/fallback tuple and no private
+paths, native arguments or output. This proves exact installed **base** bytes;
+it does not prove complete installed split identity, effective permissions,
+causal uniqueness, launch, foreground, readiness or rollback.
+
+Save the allowlisted original before submission. After a lost reply, explicitly
+read only its cached result; reload, reconnect and inventory never replay or
+resolve it. Review changes revoke new consent and guard late POST/GET replies.
+The source lease and shared gate remain held through real Core settlement,
+process exit and reader EOF, without a 90-second install deadline. Any exception
+after Core could start remains unknown, including inspection, tool/admission,
+split rejection or readback failure. Missing records after a host restart do not
+resolve an old original. Damaged or unresolved custody blocks new mutations.
+
+This route adds no browser work copy or cleanup endpoint. Upload staging keeps
+its 1 GiB/file, 2 GiB/eight-file pool. Core independently owns one immutable copy
+and its default 1 GiB/file, 2 GiB/256-file shared admission inventory, including
+other live files and reclaimable debt. APK-set work and retained copies have
+separate owners; their limits are not an aggregate machine or process disk cap.
+Core cleanup contention does not erase its authoritative result and exposes no
+browser cleanup receipt. The existing retained install remains a separate
+prepared, durable-owner flow with only replace/grant options. Acceptance here
+uses synthetic inspector/native transport and intercepted DOM; no physical
+installation is claimed.
 
 ## Ordinary APK-set installation
 
@@ -277,7 +329,8 @@ split backup, rollback or app readiness evidence.
 
 The session's `apkSetInstall` capability and the card disclose the limits: eight
 parts, 1 GiB per file, the existing 2 GiB source pool plus a separate 2 GiB work
-copy budget, for 4 GiB of APK payload in the current host process. Cleanup debt
+copy budget, for 4 GiB of APK payload across these two owners in the current host
+process; independent Core admission and retained copies are separate. Cleanup debt
 remains charged. These limits do not bound orphaned data across crashes or
 processes; this feature does not adopt or delete old roots.
 

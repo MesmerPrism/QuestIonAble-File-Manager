@@ -23,6 +23,8 @@ test('actual host serves authenticated session and installable offline shell und
     assert.ok(session.sessionId);assert.ok(session.platformCapabilities.platform);assert.ok(session.actions.includes('files.list'));
     assert.ok(session.apkSetInstall);assert.equal(typeof session.apkSetInstall.workingCopyCleanupPending,'boolean');
     assert.equal((await fetch(origin+'/apk-set-view.js')).status,200);
+    assert.equal((await fetch(origin+'/apk-install-view.js')).status,200);
+    assert.equal(session.actions.includes('apk.install'),session.artifactStaging.supported===true);
     const manifest=await fetch(origin+'/manifest.webmanifest');assert.match(manifest.headers.get('content-type'),/application\/manifest\+json/);
     const worker=await fetch(origin+'/sw.js');assert.match(worker.headers.get('content-type'),/javascript/);
     assert.doesNotMatch(await worker.text(),/QFM_SHELL_MANIFEST/);
@@ -40,9 +42,11 @@ test('actual host serves authenticated session and installable offline shell und
     assert.match(await page.locator('#host-capabilities').textContent(),/Host:/);
     assert.equal(await page.locator('#apk-set-view').count(),1);
     assert.equal(await page.locator('#apk-set-send').isDisabled(),true);
+    assert.equal(await page.locator('#apk-install-view').count(),1);assert.equal(await page.locator('#apk-install-send').isDisabled(),true);
     await stop();await page.reload();await page.waitForFunction(()=>document.getElementById('network-status').textContent.startsWith('Saved offline shell'));
     assert.equal(await page.locator('#token').inputValue(),'');assert.equal(await page.locator('#refresh').isDisabled(),true);
     assert.equal(await page.locator('#apk-set-view').count(),1);assert.equal(await page.locator('#apk-set-send').isDisabled(),true);
+    assert.equal(await page.locator('#apk-install-view').count(),1);assert.equal(await page.locator('#apk-install-send').isDisabled(),true);
     await page.getByRole('link',{name:'Agent guide',exact:true}).click();assert.match(await page.title(),/agent guide/);
     assert.deepEqual(errors,[],'Actual CSP permits only shipped shell modules/worker');
     assert.ok(apiRequests.every(request=>request.method==='GET'&&request.path==='/browser/v1/session'),'Loading, authentication and offline reload send no device or recovery request');

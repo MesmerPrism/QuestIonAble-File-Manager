@@ -46,6 +46,8 @@ public sealed class BrowserHostTests
     [Theory]
     [InlineData("/app.js", true)]
     [InlineData("/apk-set-view.js", true)]
+    [InlineData("/apk-install-view.js", true)]
+    [InlineData("/apk-install-view.js/private.apk", false)]
     [InlineData("/apk-set-view.js/private.apk", false)]
     [InlineData("/usb-proof.js", true)]
     [InlineData("/vendor/tango-adb.js", true)]

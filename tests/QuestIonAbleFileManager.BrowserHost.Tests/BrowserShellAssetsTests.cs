@@ -32,6 +32,8 @@ public sealed class BrowserShellAssetsTests : IDisposable
         var assets = manifest.RootElement.GetProperty("assets");
         Assert.Contains("/apk-set-view.js", BrowserShellAssets.Paths);
         Assert.True(BrowserSecurity.IsStaticPath("/apk-set-view.js"));
+        Assert.Contains("/apk-install-view.js", BrowserShellAssets.Paths);
+        Assert.True(BrowserSecurity.IsStaticPath("/apk-install-view.js"));
         Assert.Equal(BrowserShellAssets.Paths.Count, assets.EnumerateObject().Count());
         var identity = new StringBuilder(Template).Append('\n');
         foreach (var path in BrowserShellAssets.Paths)
@@ -56,8 +58,11 @@ public sealed class BrowserShellAssetsTests : IDisposable
         var second = BrowserShellAssets.RenderWorker(_root);
         Assert.NotEqual(first, second);
         Assert.NotEqual(Revision(first), Revision(second));
+        File.AppendAllText(Path.Combine(_root, "apk-install-view.js"), "\n// single install revision");
+        var third = BrowserShellAssets.RenderWorker(_root);
+        Assert.NotEqual(Revision(second), Revision(third));
         File.AppendAllText(Path.Combine(_root, "sw.js"), "\n// worker correction");
-        Assert.NotEqual(Revision(second), Revision(BrowserShellAssets.RenderWorker(_root)));
+        Assert.NotEqual(Revision(third), Revision(BrowserShellAssets.RenderWorker(_root)));
     }
 
     [Fact]
