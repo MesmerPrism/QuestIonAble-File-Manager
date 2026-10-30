@@ -19,6 +19,7 @@ node --test tools/browser-ui/direct-install.test.cjs
 node --test tools/browser-ui/profiles.test.cjs
 node --test tools/browser-ui/fleet-status.test.cjs
 node --test tools/browser-ui/diagnostics.test.cjs
+node --test tools/browser-ui/diagnostics-launch.test.cjs
 node --test tools/browser-ui/download.test.cjs
 node --test tools/browser-ui/pwa.test.cjs
 ```

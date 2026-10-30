@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Routing;
 
 namespace QuestIonAbleFileManager.BrowserHost.Tests;
 
-public sealed class BrowserDiagnosticsTests
+public sealed partial class BrowserDiagnosticsTests
 {
     [Fact]
     public void RetainedDiagnosticsHasExplicitVersionedMethodsAndJoinedDrain()
@@ -114,7 +114,7 @@ public sealed class BrowserDiagnosticsTests
 
     [Theory]
     [InlineData("contractVersion", "\"questionable.file_manager.local_api.v2\"")]
-    [InlineData("command", "\"apk.launch-diagnose\"")]
+    [InlineData("command", "\"apk.launch-diagnose-extra\"")]
     [InlineData("serial", "\"QUEST-01\\n\"")]
     [InlineData("sizeBytes", "0")]
     [InlineData("sizeBytes", "1073741825")]

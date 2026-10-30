@@ -437,9 +437,19 @@ actual evidence before any further mutation.
 On a configured Windows NTFS companion, stage one base APK and select one ready
 headset. **Prepare exact diagnostics** copies and inspects the source in the
 same retained owner used by v1/v2. Review the APK identity, size, SHA-256 and
-target, then approve private capture once before the short preparation expires.
-Capture verifies the exact installed APK; it never installs, launches or stops
-an app. The ZIP can contain private device/package facts and logs.
+target and selected mode, then approve private capture once before the short
+preparation expires. The default read-only mode verifies the exact installed
+APK without launching it. **Launch once and capture diagnostics** additionally
+requires a separate unchecked launch approval. It uses the same installed-byte,
+launcher and UID checks as Core; neither mode installs or stops an app. The ZIP
+can contain private device/package facts and logs.
+
+The session's optional `retainedOperations.diagnosticCommands` describes exact
+implemented actions without opening the owner. V3 support alone enables only
+read-only diagnostics; an older companion or injected factory with no positive
+launch declaration cannot prepare or execute launch diagnostics. Auth, source,
+target, mode, review and expiry changes revoke approvals. A saved original keeps
+its immutable command even when the current mode changes.
 
 The v3 contract is exactly `questionable.file_manager.local_api.v3`. These POST
 routes require the same bearer, current session and exact-origin admission as
@@ -448,7 +458,7 @@ limits and reject duplicate, unknown or encoded fields.
 
 | Route suffix under `/browser/v3/retained/` | Exact fields |
 | --- | --- |
-| `preflight` | `contractVersion`, `command:"apk.diagnose"`, `artifactId`, `sha256`, `sizeBytes`, `serial`; optional bounded `expiresInSeconds`. |
+| `preflight` | `contractVersion`, `command:"apk.diagnose"` or explicitly supported `"apk.launch-diagnose"`, `artifactId`, `sha256`, `sizeBytes`, `serial`; optional bounded `expiresInSeconds`. |
 | `execute`, `status`, `cancel` | `contractVersion`, original `operationId`, original `commandDigest`. |
 | `output` | The same original binding plus published `outputId`, `sizeBytes` and `sha256`. |
 
@@ -458,6 +468,15 @@ the authenticated journal and archive publication. A completed/partial capture
 describes its evidence set and leaves app, OpenXR and wearer readiness unknown.
 See the [Core v3 contract](local-api.md#v3-retained-diagnostics-in-core) for
 capture limits, quota, retention and output custody.
+
+Launch mode collects only the fixed UID log and private manifest, with a
+256 KiB log, ten-second post-action window and five-minute operation deadline
+followed by capture cleanup. The card displays the launch effect, capture
+facts and archive availability separately. An unknown original can have a
+verified downloadable ZIP while still blocking new mutations. An acknowledged
+launch with a failed archive is not launched again to recover evidence. Actual
+rejected, pending and confirmed receipts remain distinct from the conservative
+possible-launch marker and from local cancellation or cleanup.
 
 The card saves only a small allowlisted original reference in tab session
 storage, before preparation and again before execution. It stores no APK,
@@ -476,7 +495,8 @@ again. Copy receipts stay only in memory/current host session. A lost copy reply
 can leave a bounded transient copy; explicit staging Clear removes only owned
 unleased transient files. Remove/Clear never deletes the retained archive or
 clears the diagnostic original. New archive reads end at owner retention expiry;
-an already held read may finish. UNKNOWN outputs have no browser force/forget
+an already held read may finish. Unknown originals are retained independently
+of age. UNKNOWN outputs have no browser force/forget
 or destructive cleanup route.
 
 ## Optional Kiosk catalog and selection
