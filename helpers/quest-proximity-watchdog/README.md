@@ -42,8 +42,12 @@ receipt. Host checks cover establishment on existing CLOSE, proactive renewal,
 failure/backoff, cancellation, finite-session expiry, singleton exclusion,
 duplicate stop-marker preservation, bounded commands and adapter readback.
 They do not establish device compatibility or a currently running process.
-This standalone facade has not been deployed or live validated by these host
-checks. No prebuilt or published binary is promised by this source addition.
+Separate [live validation on two Quest headsets](LIVE_VALIDATION.md) records
+the normal-policy baseline, two accelerated renewals per headset, stop without
+restore, and final default-configuration startup on 10 November 2026. It does
+not establish six-hour renewal or eight-hour endurance. The historical host
+build receipt remains `runtime_validated=false`; the live record is separate.
+No prebuilt or published binary is promised by this source addition.
 
 ## Start an authorized session
 
@@ -73,8 +77,9 @@ is no implicit build and no `-Disconnect` flag. The old Rusty-XR wrapper's
 
 Without `-UntilStopped`, the session lasts `-SessionDurationMs` (default eight
 hours). With it, the process continues until explicit stop, process death or
-headset reboot; each hold remains finite. It is not reboot persistent, and the
-host need not remain connected after startup. Hold/session bounds are
+headset reboot; each hold remains finite. It is not reboot persistent. It is
+designed to continue without a host connection; disconnect survival was not
+tested in the recorded live checks. Hold/session bounds are
 `60000..28800000` ms and poll bounds `1000..60000` ms. Timing must additionally
 exceed `2 * (poll interval + 30000ms)` for the command-budget margin;
 incompatible short-hold/long-poll combinations fail before device effects.

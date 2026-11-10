@@ -17,8 +17,9 @@ scheduler and process lock. Defaults establish its own eight-hour hold, poll
 every five seconds and renew after six hours even while CLOSE remains healthy.
 Its closed build/start/status/stop tools require no Fleet IDs or broker. It is
 separate from the Fleet shell-helper modes below; ordinary `device keep-awake`
-remains a one-shot mutation. Source provenance and host checks are included;
-the new standalone adapter is not claimed live validated or already deployed.
+remains a one-shot mutation. Source provenance, host checks and a dated
+[two-headset live validation record](../helpers/quest-proximity-watchdog/LIVE_VALIDATION.md)
+are included; current deployment and effective state still require fresh readback.
 Status/stop never build or push; stop leaves policy unchanged. Follow the
 helper README for artifact identity, readback and protected-wearer boundaries.
 
