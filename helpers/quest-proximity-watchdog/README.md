@@ -76,7 +76,7 @@ hours). With it, the process continues until explicit stop, process death or
 headset reboot; each hold remains finite. It is not reboot persistent, and the
 host need not remain connected after startup. Hold/session bounds are
 `60000..28800000` ms and poll bounds `1000..60000` ms. Timing must additionally
-leave room for twice the polling interval plus the 25-second command budget;
+exceed `2 * (poll interval + 30000ms)` for the command-budget margin;
 incompatible short-hold/long-poll combinations fail before device effects.
 
 Treat a `pending` start as possibly effective. Reconcile it with status; never
@@ -106,7 +106,12 @@ monotonic poll. A leftover `.lock` file alone proves nothing.
 `last_success_elapsed_ms` is conservative local successful-dispatch time;
 `renew_after_ms` is the proactive threshold, not a native remaining timer.
 Status also reads current `dumpsys power` and `dumpsys vrpowermanager`
-independently. Inspect stay-on, awake, display `ON`/`ON_SUSPEND`, virtual
+and `dumpsys display` independently. Physical display state comes only from
+exactly one `Display Power Controller` with `mDisplayId=0` and
+`mIsDisplayInternal=true`, using its own `mScreenState`. Virtual displays,
+unscoped power text, missing state and conflicting INTERNAL controllers cannot
+supply physical display confirmation. Missing/ambiguous readback stays unknown.
+Inspect stay-on, awake, physical display `ON`/`ON_SUSPEND`, virtual
 proximity `CLOSE`, live identity, freshness and advancing success timestamps.
 Someone wearing the device can cause CLOSE without an override. Missing or
 nullable proximity timers alone do not prove expiry.
@@ -126,6 +131,15 @@ build or another device JAR cannot relabel that process with a newer hash. Main 
 but no general command, caller path, network listener or arbitrary shell input.
 The append-only log records attempted holds; it is not a periodic heartbeat.
 The atomic status file records every completed poll.
+
+The device command budget is 30 seconds: six bounded five-second operations
+cover power, physical display, stay-on, wake, proximity read and hold issuance.
+The imported renewal formula is unchanged. Default eight-hour/5s polling still
+renews after six hours. A 120,000ms hold with 1,000ms polling renews after
+58,000ms; a 130,000ms hold at that poll interval renews after 68,000ms. These
+short configurations are test windows, not a claim of uninterrupted coverage
+under unknown transport/process retirement. Live checks must bind the exact
+build and use its reported `command_budget_ms` and `renew_after_ms`.
 
 Command deadlines and output limits bound normal capture. If a timed-out child
 cannot be retired, its owner retains the exact process and quiesces: no later

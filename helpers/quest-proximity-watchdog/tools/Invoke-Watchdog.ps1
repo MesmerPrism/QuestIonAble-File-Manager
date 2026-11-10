@@ -15,8 +15,8 @@ if ($Action -ne 'start' -and ($ConfirmDeviceSettings -or $UntilStopped -or
     $PSBoundParameters.ContainsKey('HoldDurationMs') -or $PSBoundParameters.ContainsKey('IntervalMs') -or
     $PSBoundParameters.ContainsKey('SessionDurationMs'))) { throw 'Timing/confirmation options apply only to start' }
 if ($Action -eq 'start' -and -not $ConfirmDeviceSettings) { throw 'Start requires -ConfirmDeviceSettings for its finite hold and power effects' }
-if ($Action -eq 'start' -and [Math]::Max([long]$HoldDurationMs / 4, 2L * ($IntervalMs + 25000L)) -ge $HoldDurationMs) {
-    throw 'Hold must exceed twice the poll interval plus 25-second command budget'
+if ($Action -eq 'start' -and [Math]::Max([long]$HoldDurationMs / 4, 2L * ($IntervalMs + 30000L)) -ge $HoldDurationMs) {
+    throw 'Hold must exceed twice the sum of poll interval and 30-second command budget'
 }
 $adbPath = (Resolve-Path -LiteralPath $Adb).Path
 $root = Split-Path $PSScriptRoot -Parent
@@ -102,6 +102,32 @@ function Invoke-ExactAdb([string[]]$Arguments) {
     }
 }
 function Get-Processes { return Invoke-ExactAdb @('shell','ps -A -o ARGS') }
+function Get-QfmPhysicalDisplayState([string]$Text) {
+    $controllers = [regex]::Split($Text.Replace("`r",''), '(?m)^[ \t]*Display Power Controller:[ \t]*$')
+    $internalCount = 0
+    $result = ''
+    for ($index = 1; $index -lt $controllers.Count; $index++) {
+        $block = $controllers[$index]
+        $flags = [regex]::Matches($block,'(?m)^[ \t]*mIsDisplayInternal=([^\n]*)$')
+        $internal = @($flags | Where-Object { $_.Groups[1].Value.Trim() -ceq 'true' })
+        if ($internal.Count -eq 0) { continue }
+        $internalCount++
+        if ($flags.Count -ne 1) { return '' }
+        $ids = [regex]::Matches($block,'(?m)^[ \t]*mDisplayId=([^\n]*)$')
+        if ($ids.Count -eq 0) { return '' }
+        foreach ($id in $ids) {
+            $value = $id.Groups[1].Value.Trim()
+            if ($value.StartsWith(':')) { $value = $value.Substring(1).Trim() }
+            if ($value -ne '0') { return '' }
+        }
+        $states = [regex]::Matches($block,'(?m)^[ \t]*mScreenState=([^\n]*)$')
+        if ($states.Count -ne 1) { return '' }
+        $result = $states[0].Groups[1].Value.Trim()
+        if ($result -cnotmatch '^(ON|ON_SUSPEND|OFF|DOZE|DOZE_SUSPEND|VR)$') { return '' }
+    }
+    if ($internalCount -eq 1) { return $result }
+    return ''
+}
 function Assert-Jar {
     if (-not (Test-Path -LiteralPath $localJar -PathType Leaf)) { throw 'Build the local helper first; status never builds or pushes a JAR' }
     $expected = (Get-FileHash -LiteralPath $localJar -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -123,9 +149,11 @@ function Get-Status {
     # These are fresh independent observations, separate from recorded scheduler state.
     $power = Invoke-ExactAdb @('shell','dumpsys power')
     $proximity = Invoke-ExactAdb @('shell','dumpsys vrpowermanager')
+    $display = Invoke-ExactAdb @('shell','dumpsys display')
     $result['readback_stay_on'] = [regex]::Match($power,'mStayOn=(true|false)').Groups[1].Value
     $result['readback_wakefulness'] = [regex]::Match($power,'mWakefulness=(\S+)').Groups[1].Value
-    $result['readback_display_state'] = [regex]::Match($power,'Display Power: state=(\S+)').Groups[1].Value
+    $result['readback_display_state'] = Get-QfmPhysicalDisplayState $display
+    $result['readback_display_source'] = if ($result['readback_display_state']) { 'dumpsys-display-internal-controller-0' } else { 'unavailable' }
     $result['readback_virtual_proximity'] = [regex]::Match($proximity,'Virtual proximity state:\s*(\S+)').Groups[1].Value
     $result['physical_sensor_lock_readiness'] = 'not_established'
     return $result

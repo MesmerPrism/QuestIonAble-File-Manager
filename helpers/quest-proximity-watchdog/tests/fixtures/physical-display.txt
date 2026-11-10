@@ -1,0 +1,13 @@
+Display Manager State:
+  Display Power Controller:
+    mDisplayId=2
+    mIsDisplayInternal=false
+    mScreenState=ON
+  Display Power Controller:
+    mDisplayId=0
+    mIsDisplayInternal=true
+    mScreenState=ON
+  Display Power Controller:
+    mDisplayId=20
+    mIsDisplayInternal=false
+    mScreenState=ON

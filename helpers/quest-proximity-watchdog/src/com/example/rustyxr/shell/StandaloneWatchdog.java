@@ -20,7 +20,8 @@ public final class StandaloneWatchdog {
     static final Pattern PROXIMITY = Pattern.compile("Virtual proximity state:\\s*(\\S+)");
     static final Pattern WAKEFULNESS = Pattern.compile("mWakefulness=(\\S+)");
     static final Pattern STAY_ON = Pattern.compile("mStayOn=(true|false)");
-    static final Pattern DISPLAY = Pattern.compile("Display Power: state=(\\S+)");
+    // Power/display/stay-on/wake/proximity/broadcast each have a five-second budget.
+    static final long COMMAND_BUDGET_MS = 30000;
 
     public static void main(String[] args) throws Exception {
         if (args.length == 1 && "status".equals(args[0])) {
@@ -35,7 +36,7 @@ public final class StandaloneWatchdog {
             long sessionMs = untilStopped ? 28800000L : Long.parseLong(args[3]);
             // All timing validation precedes the lease and stop-marker mutation.
             validateTiming(holdMs, intervalMs, sessionMs);
-            ProximityHold hold = new ProximityHold(holdMs, intervalMs, 25000);
+            ProximityHold hold = new ProximityHold(holdMs, intervalMs, COMMAND_BUDGET_MS);
             try (ProximityWatchdogLease lease = ProximityWatchdogLease.acquire(STOP)) {
                 if (lease == null) throw new IllegalStateException("Watchdog already owns stop marker");
                 run(hold, sessionMs, untilStopped);
@@ -50,7 +51,7 @@ public final class StandaloneWatchdog {
                 sessionMs < 60000 || sessionMs > 28800000) {
             throw new IllegalArgumentException("Hold/session must be 60000..28800000 ms; poll 1000..60000 ms");
         }
-        new ProximityHold(holdMs, intervalMs, 25000);
+        new ProximityHold(holdMs, intervalMs, COMMAND_BUDGET_MS);
     }
 
     // Android's clock includes suspend; do not substitute host wall time or Java nanoTime here.
@@ -86,6 +87,7 @@ public final class StandaloneWatchdog {
         status.setProperty("interval_ms", Long.toString(hold.intervalMs));
         status.setProperty("hold_ms", Long.toString(hold.holdMs));
         status.setProperty("renew_after_ms", Long.toString(hold.renewAfterMs));
+        status.setProperty("command_budget_ms", Long.toString(COMMAND_BUDGET_MS));
         status.setProperty("until_stopped", Boolean.toString(untilStopped));
         status.setProperty("session_ms", Long.toString(sessionMs));
         long attempts = 0;
@@ -96,10 +98,12 @@ public final class StandaloneWatchdog {
                 CommandCapture power = readPowerState();
                 String wakefulness = power.success() ? match(WAKEFULNESS, power.output) : "";
                 String stayOn = power.success() ? match(STAY_ON, power.output) : "";
-                String display = power.success() ? match(DISPLAY, power.output) : "";
+                CommandCapture physicalDisplay = readDisplayState();
+                String display = physicalDisplay.success() ? physicalDisplayState(physicalDisplay.output) : "";
                 status.setProperty("wakefulness", wakefulness);
                 status.setProperty("stay_on", stayOn);
                 status.setProperty("display_state", display);
+                status.setProperty("display_state_source", display.isEmpty() ? "unavailable" : "dumpsys-display-internal-controller-0");
                 // Missing fields are unavailable observations, never invented drift.
                 if ("false".equals(stayOn) && !environment.stopped()) {
                     CommandCapture result = runBoundedCommand(new String[] {"svc", "power", "stayon", "true"}, 16384, 5);
@@ -148,7 +152,41 @@ public final class StandaloneWatchdog {
         return matcher.find() ? matcher.group(1).trim() : "";
     }
 
+    static String physicalDisplayState(String text) {
+        String[] controllers = text.replace("\r", "").split("(?m)^[ \\t]*Display Power Controller:[ \\t]*$", -1);
+        Pattern flags = Pattern.compile("(?m)^[ \\t]*mIsDisplayInternal=([^\\n]*)$");
+        Pattern ids = Pattern.compile("(?m)^[ \\t]*mDisplayId=([^\\n]*)$");
+        Pattern states = Pattern.compile("(?m)^[ \\t]*mScreenState=([^\\n]*)$");
+        int internalCount = 0;
+        String result = "";
+        for (int index = 1; index < controllers.length; index++) {
+            String block = controllers[index];
+            java.util.regex.Matcher flag = flags.matcher(block);
+            int flagCount = 0;
+            boolean internal = false;
+            while (flag.find()) { flagCount++; internal |= "true".equals(flag.group(1).trim()); }
+            if (!internal) continue;
+            internalCount++;
+            if (flagCount != 1) return "";
+            java.util.regex.Matcher id = ids.matcher(block);
+            boolean foundId = false;
+            while (id.find()) {
+                String value = id.group(1).trim();
+                // Nested display subsections use the same ID, sometimes written ': 0'.
+                if (value.startsWith(":")) value = value.substring(1).trim();
+                if (!"0".equals(value)) return "";
+                foundId = true;
+            }
+            java.util.regex.Matcher state = states.matcher(block);
+            if (!foundId || !state.find()) return "";
+            result = state.group(1).trim();
+            if (state.find() || !result.matches("ON|ON_SUSPEND|OFF|DOZE|DOZE_SUSPEND|VR")) return "";
+        }
+        return internalCount == 1 ? result : "";
+    }
+
     static CommandCapture readPowerState() { return read(new String[] {"dumpsys", "power"}); }
+    static CommandCapture readDisplayState() { return read(new String[] {"dumpsys", "display"}); }
     static CommandCapture readProximityState() { return read(new String[] {"dumpsys", "vrpowermanager"}); }
     private static CommandCapture read(String[] command) {
         try { return runBoundedCommand(command, 262144, 5); }
@@ -296,9 +334,9 @@ public final class StandaloneWatchdog {
         System.out.println("lease_held=" + held);
         System.out.println("owner_active=" + (identity && held));
         System.out.println("active=" + active);
-        System.out.println("fresh=" + (active && age >= 0 && age <= 25000 + 3 * interval));
+        System.out.println("fresh=" + (active && age >= 0 && age <= COMMAND_BUDGET_MS + 3 * interval));
         System.out.println("stop_requested=" + STOP.exists());
-        for (String key : new String[] {"pid", "process_start_ticks", "process_cmdline_sha256", "startup_jar_sha256", "boot_id", "interval_ms", "hold_ms", "renew_after_ms",
+        for (String key : new String[] {"pid", "process_start_ticks", "process_cmdline_sha256", "startup_jar_sha256", "boot_id", "interval_ms", "hold_ms", "renew_after_ms", "command_budget_ms", "display_state_source",
                 "until_stopped", "session_ms", "last_poll_elapsed_ms", "last_success_elapsed_ms", "hold_attempts", "hold_failures",
                 "last_action", "wakefulness", "stay_on", "display_state", "virtual_proximity"}) {
             System.out.println(key + "=" + status.getProperty(key, "unknown"));

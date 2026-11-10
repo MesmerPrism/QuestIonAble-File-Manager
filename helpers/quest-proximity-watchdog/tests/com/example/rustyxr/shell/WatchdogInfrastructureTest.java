@@ -99,7 +99,7 @@ public final class WatchdogInfrastructureTest {
                         check(expected.getCause() instanceof InterruptedException, "actual command cancellation");
                     }
                     check(Thread.currentThread().isInterrupted(), "command must restore cancellation flag");
-                    for (String reader : new String[] {"readPowerState", "readProximityState"}) {
+                    for (String reader : new String[] {"readPowerState", "readDisplayState", "readProximityState"}) {
                         Method read = StandaloneWatchdog.class.getDeclaredMethod(reader);
                         read.setAccessible(true);
                         Object readback = read.invoke(null);

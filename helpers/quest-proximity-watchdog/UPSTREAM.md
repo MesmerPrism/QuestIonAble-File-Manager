@@ -25,6 +25,11 @@ The scheduling formula, successful-dispatch timestamp, failed-attempt backoff,
 session stop checks and singleton-lock implementation remain upstream-owned
 code, rather than a second scheduler.
 
+The standalone adapter additionally reads the physical INTERNAL display from
+its scoped display-0 power controller in `dumpsys display`. That extra bounded
+read raises the adapter command budget from 25 to 30 seconds; the imported
+scheduler is unchanged, including the default six-hour renewal threshold.
+
 The historical upstream JAR was 45,523 bytes with SHA-256
 `7bca280fccc1177a6dd8f2b4fd7cce7a4bad23c242630e724e62f1e5d784210b`.
 It is not distributed here. A QFM standalone build produces a different JAR;

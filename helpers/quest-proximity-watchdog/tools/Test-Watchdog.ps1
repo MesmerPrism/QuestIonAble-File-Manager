@@ -18,7 +18,9 @@ $sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'src'),(Join-Path $root
 & $javac -encoding UTF-8 --release 8 -d $classes @sources
 if ($LASTEXITCODE -ne 0) { throw 'Host test compilation failed' }
 foreach ($test in 'ProximityHoldTest','WatchdogInfrastructureTest','StandaloneWatchdogTest') {
-    & $java -cp $classes "com.example.rustyxr.shell.$test"
+    if ($test -eq 'StandaloneWatchdogTest') {
+        & $java -cp $classes "com.example.rustyxr.shell.$test" (Join-Path $root 'tests/fixtures/physical-display.txt')
+    } else { & $java -cp $classes "com.example.rustyxr.shell.$test" }
     if ($LASTEXITCODE -ne 0) { throw "Host test failed: $test" }
 }
 & (Join-Path $PSScriptRoot 'Test-WatchdogRouting.ps1')
