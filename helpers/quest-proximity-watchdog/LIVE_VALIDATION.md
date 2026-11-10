@@ -72,6 +72,41 @@ Earlier smoke testing exposed an incompatible power-display format; the tested
 commit above includes the physical INTERNAL display parser fix. The earlier
 pending result is not counted as a successful test of the corrected build.
 
+## Default six-hour renewal on Horizon OS v209
+
+On 10 November 2026, the same helper implementation was observed on two
+Quest 3S headsets after their system update to v209.0.0.174.430. Each new
+post-update session used the normal eight-hour finite hold, six-hour proactive
+renewal threshold, five-second polling, 30-second command budget and
+`UntilStopped` lifetime.
+
+Read-only status observations before and after the threshold verified the same
+helper process, boot and loaded artifact for each headset. Hold attempts
+advanced from 1 to 2, successful monotonic issuance timestamps advanced, and
+hold failures remained zero:
+
+| Test headset | Successful renewal interval | Beyond six-hour threshold | Hold failures |
+|---|---:|---:|---:|
+| A | 21,600,678ms | 678ms | 0 |
+| B | 21,601,668ms | 1,668ms | 0 |
+
+Both renewals occurred before the previous eight-hour hold's locally accounted
+expiry. At the sampled bookends, status was active/fresh, power was `Awake`,
+the physical INTERNAL display controller was `ON`, stay-on was true and
+virtual proximity remained `CLOSE`. Observation used status only and did not
+change power policy. This establishes an actual default-threshold renewal
+on each tested headset, including renewal while desired readback stayed healthy.
+
+These later v209 observations are separate from the earlier accelerated
+120-second-hold tests. The system update interrupted the earlier long session;
+the two sessions are not one continuous soak. Coverage is calculated from
+successful bounded dispatch timestamps, not an authenticated native hold timer.
+The v209 status continued to report
+`physical_sensor_lock_readiness=not_established`: this observation does not
+establish physical SensorLock, camera or XR readiness. It does not establish a
+complete eight-hour/overnight soak, reboot persistence, host-disconnect survival
+or wearer-approval bypass.
+
 ## Reproducing the bounded checks
 
 Follow the README's artifact, authorization, existing-owner and readback rules
@@ -118,11 +153,12 @@ start as shown above. Status and stop do not build or push.
 
 ## What this record does not establish
 
-The tests observed two renewals at the accelerated threshold and the final
-default configuration/startup. They did not wait for an actual six-hour default
-renewal or complete an eight-hour soak. Successful bounded dispatch timestamps
-provide local coverage accounting, not an authenticated native remaining-hold
-timer or continuous physical-readiness proof between observations.
+The earlier bounded tests observed two accelerated renewals and final default
+startup; the later v209 observation above adds one actual six-hour default
+renewal per headset. No complete eight-hour or overnight soak was established.
+Successful bounded dispatch timestamps provide local coverage accounting,
+not an authenticated native remaining-hold timer or continuous physical-readiness
+proof between observations.
 
 No reboot persistence, host-disconnect survival, induced midrun drift recovery,
 wearer-approval bypass, camera/media/transport health or universal Horizon OS
