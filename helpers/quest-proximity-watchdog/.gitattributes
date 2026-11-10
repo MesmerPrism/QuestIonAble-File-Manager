@@ -1,0 +1,4 @@
+# Preserve byte-for-byte source pins, including upstream CRLF line endings.
+/src/com/example/rustyxr/shell/ProximityHold.java -text
+/src/com/example/rustyxr/shell/ProximityWatchdogLease.java -text
+/tests/com/example/rustyxr/shell/ProximityHoldTest.java -text

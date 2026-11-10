@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/MesmerPrism/Rusty-XR",
+  "source_commit": "00a4716b5dcd9fe9b38c3a7eb2aea648dbe76181",
+  "source_tree": "c6fa02903639ac5bcb5d4cf507efe28867bb15d5",
+  "source_directory": "examples/quest-broker-shell-helper",
+  "unmodified_files": [
+    { "path": "src/com/example/rustyxr/shell/ProximityHold.java", "sha256": "bf486f086f90119fcc2f2cac68dd0fbe95d8c9e88c9142672008f3ae5707e381" },
+    { "path": "src/com/example/rustyxr/shell/ProximityWatchdogLease.java", "sha256": "5224d686834918532f018a5a6e2b66164ad43f8bd33a7ec2f6906b6e0c61eb69" },
+    { "path": "tests/com/example/rustyxr/shell/ProximityHoldTest.java", "sha256": "51a80eade07db901794a724d0521e3ec7d7f61d9a51ce99a9e6f5d3e0bdab9d7" }
+  ]
+}
