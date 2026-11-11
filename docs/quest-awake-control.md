@@ -1,19 +1,32 @@
 # Quest Awake Control
 
 QuestIonAble File Manager owns the exact-serial ADB effects for reviewed Quest
-awake control. It exposes two deliberately separate surfaces:
+awake control. It exposes three deliberately separate surfaces:
 
 - the ordinary WPF/CLI `device keep-awake` route for one attended local
   headset; and
 - a dedicated, hash-pinned Fleet subprocess for managed multi-target
-  orchestration.
+  orchestration; and
+- a source-buildable [standalone device watchdog](../helpers/quest-proximity-watchdog/README.md)
+  for explicitly authorized local sessions needing proactive renewal.
 
-Neither surface is generic shell or ADB authority.
+None is generic shell or ADB authority.
+
+The standalone helper reuses the established Rusty-XR monotonic finite-hold
+scheduler and process lock. Defaults establish its own eight-hour hold, poll
+every five seconds and renew after six hours even while CLOSE remains healthy.
+Its closed build/start/status/stop tools require no Fleet IDs or broker. It is
+separate from the Fleet shell-helper modes below; ordinary `device keep-awake`
+remains a one-shot mutation. Source provenance, host checks and a dated
+[two-headset live validation record](../helpers/quest-proximity-watchdog/LIVE_VALIDATION.md)
+are included; current deployment and effective state still require fresh readback.
+Status/stop never build or push; stop leaves policy unchanged. Follow the
+helper README for artifact identity, readback and protected-wearer boundaries.
 
 ## Bounded Meta Hold
 
 The local keep-awake route accepts an integer from `60000` through `28800000`
-milliseconds: one minute through Meta's eight-hour development hold. Enabling
+milliseconds: one minute through this provider's supported eight-hour hold. Enabling
 it applies stay-on, wakes the display, and requests the exact bounded virtual
 proximity hold. Confirmation requires independent readback of:
 
