@@ -44,9 +44,17 @@ duplicate stop-marker preservation, bounded commands and adapter readback.
 They do not establish device compatibility or a currently running process.
 Separate [live validation on two Quest headsets](LIVE_VALIDATION.md) records
 the normal-policy baseline, two accelerated renewals per headset, stop without
-restore, and final default-configuration startup on 10 November 2026. It does
-not establish six-hour renewal or eight-hour endurance. The historical host
-build receipt remains `runtime_validated=false`; the live record is separate.
+restore, and final default-configuration startup on 10 November 2026. That
+earlier bounded sequence did not establish six-hour renewal or eight-hour
+endurance.
+A [later v209 observation](LIVE_VALIDATION.md#default-six-hour-renewal-on-horizon-os-v209)
+records the first actual default six-hour renewal per headset on 10 November.
+The [11 November follow-up](LIVE_VALIDATION.md#default-cadence-follow-up--11-november-2026)
+records four actual default six-hour renewals per headset and more than
+24 hours of sampled same-helper operation, with zero recorded hold failures.
+This does not establish continuous display, protected-wearer, OpenXR or camera
+readiness. The historical host build receipt remains `runtime_validated=false`;
+the dated live records carry their separate scope.
 No prebuilt or published binary is promised by this source addition.
 
 ## Start an authorized session

@@ -167,3 +167,40 @@ decisions. The historical host build receipt remains unchanged with
 `runtime_validated=false`; this separate dated record carries the live evidence
 scope. A later session still requires fresh owner, artifact, process and
 effective-state readback.
+
+## Default-cadence follow-up — 11 November 2026
+
+A separate follow-up observed the same standard helper on each of two Quest
+headsets for more than 24 hours between its initial successful hold and the
+latest sampled poll. Both used eight-hour finite holds, a six-hour proactive
+renewal threshold, five-second polling and `UntilStopped`, with the same tested
+implementation and JAR identified above. Retained status captures matched each
+headset's boot, PID, process birth, command-line identity and startup JAR across
+the initial hold and four later renewals. Attempts advanced from 1 to 5, with
+zero recorded hold failures.
+
+Consecutive successful-dispatch timestamps in the helper's monotonic clock gave:
+
+| Test headset | Renewal 1 | Renewal 2 | Renewal 3 | Renewal 4 |
+|---|---:|---:|---:|---:|
+| A | 6h + 0.678s | 6h + 2.438s | 6h + 2.349s | 6h + 4.399s |
+| B | 6h + 1.668s | 6h + 2.524s | 6h + 1.664s | 6h + 3.115s |
+
+The latest retained checkpoint was 11 November 2026 at 15:35 UTC. The startup
+and latest complete readbacks showed `Awake`, physical INTERNAL display 0 `ON`,
+stay-on true and virtual proximity `CLOSE`; accepted intermediate observations
+also showed those states. Four incomplete status observations on headset A
+remain unknown and are excluded from successful observations. Later complete
+captures again matched the same owner. An incomplete observation is separate
+from the helper's recorded hold-failure count.
+
+This extends the evidence to four actual default six-hour renewals per headset
+and more than 24 hours of sampled same-helper operation. It does not establish
+continuous power/display readiness between samples, an authenticated native
+remaining-hold timer, uninterrupted OpenXR or camera operation, physical
+SensorLock clearance, wearer comfort, reboot persistence or host-disconnect
+survival. The helper itself continued to report
+`physical_sensor_lock_readiness=not_established`. Machine/device identifiers,
+raw captures and the private evidence index are not public assets. The
+10 November sequence and the historical host build receipt retain their
+original scope; a later session still needs fresh readback.
