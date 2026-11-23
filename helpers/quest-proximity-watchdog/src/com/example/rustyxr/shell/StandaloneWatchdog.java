@@ -16,7 +16,10 @@ public final class StandaloneWatchdog {
     static final String ROOT = "/data/local/tmp/questionable-file-manager-proximity-watchdog";
     static final File STOP = new File(ROOT + ".stop");
     static final File STATUS = new File(ROOT + ".status");
+    static final File BOOT_ID = new File("/proc/sys/kernel/random/boot_id");
     static final String MAIN = StandaloneWatchdog.class.getName();
+    static final Pattern INVOCATION_ID = Pattern.compile("[0-9a-f]{32}");
+    static final Pattern OWNER_ID = Pattern.compile("[0-9a-f]{64}");
     static final Pattern PROXIMITY = Pattern.compile("Virtual proximity state:\\s*(\\S+)");
     static final Pattern WAKEFULNESS = Pattern.compile("mWakefulness=(\\S+)");
     static final Pattern STAY_ON = Pattern.compile("mStayOn=(true|false)");
@@ -26,23 +29,28 @@ public final class StandaloneWatchdog {
     public static void main(String[] args) throws Exception {
         if (args.length == 1 && "status".equals(args[0])) {
             printStatus();
-        } else if (args.length == 1 && "stop".equals(args[0])) {
-            STOP.createNewFile();
-            System.out.println("stop_requested=true");
-        } else if (args.length == 4 && "start".equals(args[0])) {
+        } else if (args.length == 3 && "stop".equals(args[0])) {
+            requestStop(args[1], args[2]);
+        } else if (args.length == 6 && "start".equals(args[0])) {
             long holdMs = Long.parseLong(args[1]);
             long intervalMs = Long.parseLong(args[2]);
             boolean untilStopped = "until-stopped".equals(args[3]);
             long sessionMs = untilStopped ? 28800000L : Long.parseLong(args[3]);
             // All timing validation precedes the lease and stop-marker mutation.
             validateTiming(holdMs, intervalMs, sessionMs);
+            String invocationId = args[4];
+            String bootId = readText(BOOT_ID).trim();
+            if (!INVOCATION_ID.matcher(invocationId).matches() || !bootId.equals(args[5])) {
+                throw new IllegalArgumentException("Expected this invocation and preflight boot");
+            }
             ProximityHold hold = new ProximityHold(holdMs, intervalMs, COMMAND_BUDGET_MS);
             try (ProximityWatchdogLease lease = ProximityWatchdogLease.acquire(STOP)) {
-                if (lease == null) throw new IllegalStateException("Watchdog already owns stop marker");
-                run(hold, sessionMs, untilStopped);
+                if (lease == null) throw new IllegalStateException("Watchdog already holds the lease");
+                run(hold, sessionMs, untilStopped, invocationId, bootId);
             }
         } else {
-            throw new IllegalArgumentException("Expected status, stop, or start <hold-ms> <poll-ms> <session-ms|until-stopped>");
+            throw new IllegalArgumentException("Expected status, stop <invocation-id> <owner-id>, or " +
+                "start <hold-ms> <poll-ms> <session-ms|until-stopped> <invocation-id> <boot-id>");
         }
     }
 
@@ -59,7 +67,18 @@ public final class StandaloneWatchdog {
         return ((Long) Class.forName("android.os.SystemClock").getMethod("elapsedRealtime").invoke(null)).longValue();
     }
 
-    private static void run(final ProximityHold hold, final long sessionMs, final boolean untilStopped) throws Exception {
+    private static void run(final ProximityHold hold, final long sessionMs, final boolean untilStopped,
+            String invocationId, String bootId) throws Exception {
+        Properties status = new Properties();
+        String pid = readText(new File("/proc/self/stat")).split(" ", 2)[0];
+        status.setProperty("pid", pid);
+        status.setProperty("process_start_ticks", processStartTicks(readText(new File("/proc/" + pid + "/stat"))));
+        status.setProperty("process_cmdline_sha256", sha256(Files.readAllBytes(new File("/proc/" + pid + "/cmdline").toPath())));
+        status.setProperty("boot_id", bootId);
+        status.setProperty("startup_jar_sha256", currentJarHash());
+        status.setProperty("invocation_id", invocationId);
+        status.setProperty("owner_id", ownerId(status));
+        final File stop = stopMarker(STOP, invocationId, status.getProperty("owner_id"));
         final long started = elapsedMs();
         final ProximityHold.Environment environment = new ProximityHold.Environment() {
             public long elapsedMs() {
@@ -68,7 +87,7 @@ public final class StandaloneWatchdog {
             }
             public boolean stopped() {
                 return ProximityHold.sessionEnded(elapsedMs(), started, sessionMs, untilStopped,
-                    STOP.exists() || Thread.currentThread().isInterrupted());
+                    stop.exists() || Thread.currentThread().isInterrupted());
             }
             public ProximityHold.Result broadcast(long holdMs) throws Exception {
                 CommandCapture result = runBoundedCommand(new String[] {"am", "broadcast", "-a",
@@ -76,14 +95,6 @@ public final class StandaloneWatchdog {
                 return new ProximityHold.Result(result.success(), result.success() ? "" : result.summary());
             }
         };
-        Properties status = new Properties();
-        String[] self = readText(new File("/proc/self/stat")).split(" ", 2);
-        String pid = self[0];
-        status.setProperty("pid", pid);
-        status.setProperty("process_start_ticks", processStartTicks(readText(new File("/proc/" + pid + "/stat"))));
-        status.setProperty("process_cmdline_sha256", sha256(Files.readAllBytes(new File("/proc/" + pid + "/cmdline").toPath())));
-        status.setProperty("boot_id", readText(new File("/proc/sys/kernel/random/boot_id")).trim());
-        status.setProperty("startup_jar_sha256", currentJarHash());
         status.setProperty("interval_ms", Long.toString(hold.intervalMs));
         status.setProperty("hold_ms", Long.toString(hold.holdMs));
         status.setProperty("renew_after_ms", Long.toString(hold.renewAfterMs));
@@ -138,7 +149,8 @@ public final class StandaloneWatchdog {
                 if (remaining > 0) Thread.sleep(Math.min(hold.intervalMs, remaining));
             }
         } finally {
-            writeStatus(status, false);
+            try { writeStatus(status, false); }
+            finally { Files.deleteIfExists(stop.toPath()); }
         }
     }
 
@@ -296,33 +308,81 @@ public final class StandaloneWatchdog {
         values.setProperty("active", Boolean.toString(active));
         values.setProperty("last_poll_elapsed_ms", Long.toString(elapsedMs()));
         File temporary = new File(STATUS.getPath() + ".tmp");
-        try (OutputStream stream = new FileOutputStream(temporary)) { values.store(stream, "QFM standalone watchdog v1"); }
+        try (OutputStream stream = new FileOutputStream(temporary)) { values.store(stream, "QFM standalone watchdog v2"); }
         Files.move(temporary.toPath(), STATUS.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }
 
-    private static void printStatus() throws Exception {
+    static File stopMarker(File legacyStop, String invocationId, String ownerId) {
+        if (!INVOCATION_ID.matcher(invocationId).matches() || !OWNER_ID.matcher(ownerId).matches()) {
+            throw new IllegalArgumentException("Expected exact invocation and owner IDs");
+        }
+        return new File(legacyStop.getPath() + "-" + invocationId + "-" + ownerId);
+    }
+
+    static String ownerId(Properties status) throws Exception {
+        String[] fields = {"invocation_id", "boot_id", "pid", "process_start_ticks", "process_cmdline_sha256", "startup_jar_sha256"};
+        for (int index = 0; index < fields.length; index++) {
+            fields[index] = status.getProperty(fields[index], "");
+        }
+        return sha256(String.join("\n", fields).getBytes(StandardCharsets.UTF_8));
+    }
+
+    static boolean ownerMatches(Properties status, String invocationId, String ownerId) throws Exception {
+        return INVOCATION_ID.matcher(invocationId).matches() && OWNER_ID.matcher(ownerId).matches() &&
+            invocationId.equals(status.getProperty("invocation_id")) && ownerId.equals(status.getProperty("owner_id")) &&
+            ownerId.equals(ownerId(status));
+    }
+
+    private static void requestStop(String invocationId, String ownerId) throws Exception {
+        Properties status = readStatus();
+        if (!ownerMatches(status, invocationId, ownerId) || !leaseHeld() || !processIdentityMatches(status) ||
+                !currentJarHash().equals(status.getProperty("startup_jar_sha256"))) {
+            System.out.println("stop_requested=false");
+            return;
+        }
+        // A process can leave after the checks. Its signal cannot address a replacement.
+        stopMarker(STOP, invocationId, ownerId).createNewFile();
+        System.out.println("stop_requested=true");
+        System.out.println("invocation_id=" + invocationId);
+        System.out.println("owner_id=" + ownerId);
+    }
+
+    private static Properties readStatus() throws IOException {
         Properties status = new Properties();
-        boolean identity = false;
-        boolean held = false;
         if (STATUS.isFile()) {
             try (InputStream stream = new FileInputStream(STATUS)) { status.load(stream); }
-            String pid = status.getProperty("pid", "");
-            if (pid.matches("[0-9]+")) {
-                try {
-                    identity = status.getProperty("boot_id", "").equals(readText(new File("/proc/sys/kernel/random/boot_id")).trim()) &&
-                        status.getProperty("process_start_ticks", "").equals(processStartTicks(readText(new File("/proc/" + pid + "/stat")))) &&
-                        status.getProperty("process_cmdline_sha256", "").equals(sha256(Files.readAllBytes(new File("/proc/" + pid + "/cmdline").toPath()))) &&
-                        java.util.Arrays.asList(readText(new File("/proc/" + pid + "/cmdline")).split("\u0000")).contains(MAIN);
-                } catch (Exception absent) { identity = false; }
-            }
         }
+        return status;
+    }
+
+    private static boolean processIdentityMatches(Properties status) {
+        String pid = status.getProperty("pid", "");
+        if (!pid.matches("[1-9][0-9]{0,9}")) return false;
+        try {
+            File cmdline = new File("/proc/" + pid + "/cmdline");
+            byte[] arguments = Files.readAllBytes(cmdline.toPath());
+            return status.getProperty("boot_id", "").equals(readText(BOOT_ID).trim()) &&
+                status.getProperty("process_start_ticks", "").equals(processStartTicks(readText(new File("/proc/" + pid + "/stat")))) &&
+                status.getProperty("process_cmdline_sha256", "").equals(sha256(arguments)) &&
+                java.util.Arrays.asList(new String(arguments, StandardCharsets.UTF_8).split("\u0000")).contains(MAIN);
+        } catch (Exception absent) { return false; }
+    }
+
+    private static boolean leaseHeld() throws IOException {
         File lockFile = new File(STOP.getPath() + ".lock");
         if (lockFile.isFile()) {
             try (RandomAccessFile file = new RandomAccessFile(lockFile, "rw")) {
-                try (FileLock lock = file.getChannel().tryLock()) { held = lock == null; }
-                catch (OverlappingFileLockException owned) { held = true; }
+                try (FileLock lock = file.getChannel().tryLock()) { return lock == null; }
+                catch (OverlappingFileLockException owned) { return true; }
             }
         }
+        return false;
+    }
+
+    private static void printStatus() throws Exception {
+        Properties status = readStatus();
+        boolean identity = processIdentityMatches(status);
+        boolean held = leaseHeld();
         boolean active = identity && held && "true".equals(status.getProperty("active"));
         long age = -1;
         long interval = 5000;
@@ -335,8 +395,11 @@ public final class StandaloneWatchdog {
         System.out.println("owner_active=" + (identity && held));
         System.out.println("active=" + active);
         System.out.println("fresh=" + (active && age >= 0 && age <= COMMAND_BUDGET_MS + 3 * interval));
-        System.out.println("stop_requested=" + STOP.exists());
-        for (String key : new String[] {"pid", "process_start_ticks", "process_cmdline_sha256", "startup_jar_sha256", "boot_id", "interval_ms", "hold_ms", "renew_after_ms", "command_budget_ms", "display_state_source",
+        String invocationId = status.getProperty("invocation_id", "");
+        String ownerId = status.getProperty("owner_id", "");
+        boolean stopRequested = ownerMatches(status, invocationId, ownerId) && stopMarker(STOP, invocationId, ownerId).exists();
+        System.out.println("stop_requested=" + stopRequested);
+        for (String key : new String[] {"invocation_id", "owner_id", "pid", "process_start_ticks", "process_cmdline_sha256", "startup_jar_sha256", "boot_id", "interval_ms", "hold_ms", "renew_after_ms", "command_budget_ms", "display_state_source",
                 "until_stopped", "session_ms", "last_poll_elapsed_ms", "last_success_elapsed_ms", "hold_attempts", "hold_failures",
                 "last_action", "wakefulness", "stay_on", "display_state", "virtual_proximity"}) {
             System.out.println(key + "=" + status.getProperty(key, "unknown"));

@@ -40,7 +40,8 @@ Build runs the host tests first and writes only ignored `build/` outputs:
 `outputs/questionable-file-manager-proximity-watchdog.jar` and its source/hash
 receipt. Host checks cover establishment on existing CLOSE, proactive renewal,
 failure/backoff, cancellation, finite-session expiry, singleton exclusion,
-duplicate stop-marker preservation, bounded commands and adapter readback.
+invocation-specific Stop during replacement, duplicate stop-marker preservation,
+bounded commands and adapter readback.
 They do not establish device compatibility or a currently running process.
 Separate [live validation on two Quest headsets](LIVE_VALIDATION.md) records
 the normal-policy baseline, two accelerated renewals per headset, stop without
@@ -94,9 +95,11 @@ incompatible short-hold/long-poll combinations fail before device effects.
 
 Treat a `pending` start as possibly effective. Reconcile it with status; never
 repeat start simply because a command returned pending or observation failed.
-The start confirmation covers successful local hold issuance, current policy
-and the owned live process. It does not authenticate a native remaining-time
-timer, protected wearer readiness or XR focus.
+Each Start binds a new invocation ID and the preflight boot. Confirmation
+covers successful local hold issuance, current policy and that exact live
+invocation. A competing invocation with identical timing stays pending.
+Native remaining-time, protected wearer readiness and XR focus require
+their own observations.
 
 ## Status and readback
 
@@ -137,11 +140,13 @@ Verify the relevant window/display and application evidence separately.
 
 Fixed device paths share prefix
 `/data/local/tmp/questionable-file-manager-proximity-watchdog` with suffixes
-`-<sha256>.jar`, `.log`, `.stop`, `.stop.lock` and `.status`. A live process
-records and verifies its startup content-addressed JAR bytes; replacing a local
-build or another device JAR cannot relabel that process with a newer hash. Main class is
-`com.example.rustyxr.shell.StandaloneWatchdog`. Status includes process identity
-but no general command, caller path, network listener or arbitrary shell input.
+`-<sha256>.jar`, `.log`, `.stop.lock`, `.status` and
+`.stop-<invocation-id>-<owner-id>`. The singleton lock path is shared with the
+older build. A live process records and verifies its startup content-addressed
+JAR bytes. Its owner ID binds the invocation, boot, PID, birth ticks, exact
+command line and startup JAR hash. Main class is
+`com.example.rustyxr.shell.StandaloneWatchdog`. Status reports these identities
+using a closed set of fields.
 The append-only log records attempted holds; it is not a periodic heartbeat.
 The atomic status file records every completed poll.
 
@@ -166,15 +171,19 @@ preserve custody and reconcile it rather than treating timeout as absence.
 & $tool -Action stop -Adb $adb -Serial $serial
 ```
 
-Stop first verifies the retained local/remote JAR hash and executes its read-only
-status entry point to establish the current boot/PID/birth/command-line/lock
-owner. It then writes only this helper's fixed marker and waits for its
-main-class process to disappear. It never builds, pushes, starts another helper,
-kills another process or changes the existing power/proximity policy. Missing
-or mismatched owner identity fails closed before the marker. If absence is not
-proven, stop remains pending and restore must wait. No generic process-kill or
-automatic replacement fallback exists. The marker is checked before further
-effects; an already dispatched bounded command may finish before exit.
+Stop verifies the retained local/remote JAR hash and reads the current owner.
+The device entry point checks that identity and can write only its
+invocation-specific marker. A delayed signal cannot stop a replacement. The
+wrapper waits for the captured process ID to disappear on that same boot and
+reports both invocation and owner IDs. An already dispatched bounded command
+may finish before exit. If absence is unproven, Stop stays pending and restore
+must wait.
+Stop leaves the existing power and proximity policy in place.
+
+For an active older build, retain its original operator and JAR and reconcile
+that owner under the exclusive headset reservation before migrating. A new
+build refuses to signal a legacy owner. A marker left by a crashed process is
+inert for other invocations. The historical live results used the older build.
 
 **Stopping is separate from restoring normal behavior.** When restoration is
 authorized, prove all policy-maintaining helpers absent, then use QFM's

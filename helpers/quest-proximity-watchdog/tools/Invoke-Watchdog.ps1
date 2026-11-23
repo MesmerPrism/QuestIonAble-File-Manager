@@ -165,24 +165,46 @@ if ($Action -eq 'status') {
     return
 }
 if ($Action -eq 'stop') {
-    # Verify the owner before touching its fixed marker; no build/push or policy restoration.
+    # Capture one owner. The device rechecks it and can only signal that owner.
     $before = Get-Status
-    $processes = Get-Processes
     if ($before['owner_active'] -ne 'true') {
-        if ($processes.Contains($main) -or $before['lease_held'] -eq 'true') {
+        if ((Get-Processes).Contains($main) -or $before['lease_held'] -eq 'true') {
             throw 'Stop refused: helper identity or lease owner is unresolved; preserve the existing owner'
         }
         [ordered]@{ stop_requested = $false; owned_process_absent = $true; settings_restored = $false } | ConvertTo-Json
         return
     }
-    $null = Invoke-ExactAdb @('shell',"touch $prefix.stop")
-    $deadline = [DateTime]::UtcNow.AddSeconds(35)
+    $invocationId = $before['invocation_id']
+    $ownerId = $before['owner_id']
+    $ownerPid = $before['pid']
+    $ownerBoot = $before['boot_id']
+    if ($invocationId -cnotmatch '^[0-9a-f]{32}$' -or $ownerId -cnotmatch '^[0-9a-f]{64}$' -or
+        $ownerPid -notmatch '^[1-9][0-9]{0,9}$' -or $ownerBoot -notmatch '^[a-zA-Z0-9-]{8,128}$') {
+        throw 'Stop refused: no exact invocation identity; use the running build and its owner procedure'
+    }
+    $receipt = Invoke-ExactAdb @('shell',"CLASSPATH=$deviceJar app_process / $main stop $invocationId $ownerId")
+    if ($receipt -ceq 'stop_requested=false') { throw 'Stop refused: selected invocation changed before dispatch' }
+    if ((($receipt -split '\r?\n') -join "`n") -cne "stop_requested=true`ninvocation_id=$invocationId`nowner_id=$ownerId") {
+        throw 'Stop pending: device did not return a matching invocation receipt; reconcile without restart or restore'
+    }
+    $retirementClock = [Diagnostics.Stopwatch]::StartNew()
     do {
-        $absent = -not (Get-Processes).Contains($main)
+        # Wait for the original PID to disappear. A reused same PID stays pending.
+        # The boot and PID listing must come from the same remote shell invocation.
+        $sample = (Invoke-ExactAdb @('shell','cat /proc/sys/kernel/random/boot_id && ps -A -o PID')) -split '\r?\n',2
+        if ($sample[0] -cne $ownerBoot) {
+            throw 'Stop pending: retirement sample belongs to another boot; reconcile without restart or restore'
+        }
+        if ($sample.Count -ne 2) { throw 'Stop pending: process listing could not prove absence' }
+        $pids = $sample[1].Trim() -split '\s+'
+        if ($pids[0] -cne 'PID' -or $pids.Count -lt 2 -or ($pids[1..($pids.Count - 1)] -match '\D')) {
+            throw 'Stop pending: process listing could not prove absence'
+        }
+        $absent = $ownerPid -notin $pids
         if ($absent) { break }
         Start-Sleep -Milliseconds 250
-    } while ([DateTime]::UtcNow -lt $deadline)
-    [ordered]@{ stop_requested = $true; owned_process_absent = $absent; settings_restored = $false } | ConvertTo-Json
+    } while ($retirementClock.ElapsedMilliseconds -lt 35000)
+    [ordered]@{ stop_requested = $true; invocation_id = $invocationId; owner_id = $ownerId; owned_process_absent = $absent; settings_restored = $false } | ConvertTo-Json
     if (-not $absent) { throw 'Stop pending: owned process remains; preserve state and reconcile without restart or restore' }
     return
 }
@@ -201,21 +223,25 @@ if ($existingJar -eq 'missing') {
 }
 $null = Assert-Jar
 $session = if ($UntilStopped) { 'until-stopped' } else { [string]$SessionDurationMs }
-$null = Invoke-ExactAdb @('shell',"CLASSPATH=$deviceJar nohup app_process / $main start $HoldDurationMs $IntervalMs $session >> $prefix.log 2>&1 < /dev/null &")
-$deadline = [DateTime]::UtcNow.AddSeconds(15)
+$invocationId = [guid]::NewGuid().ToString('N')
+$null = Invoke-ExactAdb @('shell',"CLASSPATH=$deviceJar nohup app_process / $main start $HoldDurationMs $IntervalMs $session $invocationId $boot >> $prefix.log 2>&1 < /dev/null &")
+$startupClock = [Diagnostics.Stopwatch]::StartNew()
 do {
     $status = Get-Status
-    if ($status['owner_active'] -eq 'true') { break }
+    if ($status['owner_active'] -eq 'true' -and $status['invocation_id'] -ceq $invocationId -and $status['boot_id'] -ceq $boot) { break }
     Start-Sleep -Milliseconds 250
-} while ([DateTime]::UtcNow -lt $deadline)
+} while ($startupClock.ElapsedMilliseconds -lt 15000)
 $status['start_requested'] = $true
-$status['same_boot_as_preflight'] = $status['boot_id'] -eq $boot
+$status['requested_invocation_id'] = $invocationId
+$status['requested_invocation_matches'] = $status['invocation_id'] -ceq $invocationId
+$status['same_boot_as_preflight'] = $status['boot_id'] -ceq $boot -and
+    (Invoke-ExactAdb @('shell','cat /proc/sys/kernel/random/boot_id')) -ceq $boot
 $status['requested_timing_matches'] = $status['hold_ms'] -eq [string]$HoldDurationMs -and
     $status['interval_ms'] -eq [string]$IntervalMs -and
     $status['until_stopped'] -eq ([string][bool]$UntilStopped).ToLowerInvariant() -and
     $status['session_ms'] -eq [string]$(if ($UntilStopped) { 28800000 } else { $SessionDurationMs })
 $status['mutation_confirmation'] = if ($status['active'] -eq 'true' -and $status['fresh'] -eq 'true' -and
-    $status['same_boot_as_preflight'] -and $status['requested_timing_matches'] -and
+    $status['requested_invocation_matches'] -and $status['same_boot_as_preflight'] -and $status['requested_timing_matches'] -and
     $status['last_success_elapsed_ms'] -match '^\d+$' -and
     $status['readback_stay_on'] -eq 'true' -and $status['readback_wakefulness'] -eq 'Awake' -and
     $status['readback_display_state'] -in @('ON','ON_SUSPEND') -and $status['readback_virtual_proximity'] -eq 'CLOSE') { 'confirmed' } else { 'pending' }

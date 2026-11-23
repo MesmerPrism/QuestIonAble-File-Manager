@@ -20,13 +20,41 @@ function Invoke-ExactAdb([string[]]$Arguments) {
     if ($Arguments[0] -ne 'shell') { throw 'Unexpected fake transport request' }
     $command = $Arguments[1]
     if ($command -eq 'ps -A -o ARGS') { return $script:RoutingProcesses }
+    if ($command -eq 'cat /proc/sys/kernel/random/boot_id && ps -A -o PID') {
+        return "$script:RoutingRetirementBoot`n$script:RoutingPidList"
+    }
     if ($command -eq 'cat /proc/sys/kernel/random/boot_id') { return 'fixture-boot-1234' }
     if ($command.StartsWith('sha256sum ')) { return $script:RoutingHash + '  fixture.jar' }
     if ($command.StartsWith('if [ -f ')) { return 'missing' }
     if ($command.StartsWith('touch ')) { $script:RoutingProcesses = ''; return '' }
-    if ($command.Contains(' start ')) { $script:RoutingProcesses = 'com.example.rustyxr.shell.StandaloneWatchdog'; return '' }
+    if ($command -match ' stop ([0-9a-f]{32}) ([0-9a-f]{64})$') {
+        if ($Matches[1] -cne $script:RoutingInvocation -or $Matches[2] -cne $script:RoutingOwnerId) {
+            throw 'Stop dispatched for the wrong invocation identity'
+        }
+        if ($script:RoutingStopOutcome -ne 'absent') {
+            $script:RoutingProcesses = $script:RoutingReplacementProcess
+            $script:RoutingPidList = "PID`n1`n42`n944"
+        } else {
+            $script:RoutingProcesses = ''
+            $script:RoutingPidList = "PID`n1`n42"
+        }
+        if ($script:RoutingStopOutcome -eq 'refused') { return 'stop_requested=false' }
+        return "stop_requested=true`ninvocation_id=$($Matches[1])`nowner_id=$($Matches[2])"
+    }
+    if ($command.Contains(' start ')) {
+        if ($command -match ' start \d+ \d+ (?:until-stopped|\d+) ([0-9a-f]{32}) fixture-boot-1234 ') {
+            $script:RoutingRequestedInvocation = $Matches[1]
+            if (-not $script:RoutingCompetingStart) { $script:RoutingInvocation = $Matches[1] }
+        }
+        $script:RoutingProcesses = $script:RoutingRequestedProcess
+        return ''
+    }
     if ($command.EndsWith(' status')) {
-        return "owner_active=$script:RoutingOwnerActive`nlease_held=true`nactive=true`nfresh=$script:RoutingFresh`nboot_id=fixture-boot-1234`nlast_success_elapsed_ms=5000`nhold_ms=28800000`ninterval_ms=5000`nuntil_stopped=true`nsession_ms=28800000`nstartup_jar_sha256=$script:RoutingStartupHash"
+        $script:RoutingStatusCount++
+        if ($script:RoutingAllowOurStartOnSecondStatus -and $script:RoutingStatusCount -ge 2) {
+            $script:RoutingInvocation = $script:RoutingRequestedInvocation
+        }
+        return "owner_active=$script:RoutingOwnerActive`nlease_held=true`nactive=true`nfresh=$script:RoutingFresh`nboot_id=fixture-boot-1234`nlast_success_elapsed_ms=5000`nhold_ms=28800000`ninterval_ms=5000`nuntil_stopped=true`nsession_ms=28800000`nstartup_jar_sha256=$script:RoutingStartupHash`npid=823`ninvocation_id=$script:RoutingInvocation`nowner_id=$script:RoutingOwnerId"
     }
     if ($command -eq 'dumpsys power') { return 'mStayOn=true mWakefulness=Awake Display Power: com.android.server.power.PowerManagerService$1@opaque' }
     if ($command -eq 'dumpsys display') { return $script:RoutingDisplay }
@@ -76,6 +104,17 @@ function Reset-Fixture {
     $script:RoutingCalls.Clear(); $script:RoutingProcesses = ''; $script:RoutingFresh = 'true'
     $script:RoutingOwnerActive = 'true'; $script:RoutingStartupHash = $script:RoutingHash
     $script:RoutingDisplay = $script:RoutingDisplayFixture
+    $script:RoutingInvocation = '1' * 32
+    $script:RoutingOwnerId = 'a' * 64
+    $script:RoutingStopOutcome = 'absent'
+    $script:RoutingPidList = "PID`n1`n42`n823"
+    $script:RoutingRetirementBoot = 'fixture-boot-1234'
+    $script:RoutingRequestedProcess = "app_process / com.example.rustyxr.shell.StandaloneWatchdog start 28800000 5000 until-stopped $script:RoutingInvocation fixture-boot-1234"
+    $script:RoutingReplacementProcess = $script:RoutingRequestedProcess.Replace($script:RoutingInvocation, ('2' * 32))
+    $script:RoutingRequestedInvocation = ''
+    $script:RoutingCompetingStart = $false
+    $script:RoutingAllowOurStartOnSecondStatus = $false
+    $script:RoutingStatusCount = 0
 }
 $common = @{ Adb = $script:RoutingJar; Serial = 'fixture-selector' }
 
@@ -88,11 +127,45 @@ Check (-not @($script:RoutingCalls | Where-Object { $_ -match '^push\||touch | s
 Check (@($script:RoutingCalls | Where-Object { $_ -eq 'shell|dumpsys power' }).Count -eq 1) 'Status requires independent power readback'
 
 Reset-Fixture
-$script:RoutingProcesses = 'com.example.rustyxr.shell.StandaloneWatchdog'
+$script:RoutingProcesses = $script:RoutingRequestedProcess
 $stop = & $invoke @common -Action stop | ConvertFrom-Json
 Check ($stop.owned_process_absent -and -not $stop.settings_restored) 'Stop proves absence and never reports restore'
+Check ($stop.invocation_id -eq $script:RoutingInvocation -and $stop.owner_id -eq $script:RoutingOwnerId) 'Stop must retain the exact invocation receipt'
+Check (-not @($script:RoutingCalls | Where-Object { $_ -match 'touch ' }).Count) 'Stop must never write a shared marker'
 Check (-not @($script:RoutingCalls | Where-Object { $_ -match '^push\|| start |stayon|automation_disable' }).Count) 'Stop must not push, start another owner or restore policy'
 Check (@($script:RoutingCalls | Where-Object { $_ -match ' status$' }).Count -eq 1) 'Stop must verify hash-matched owner status before marker'
+
+Reset-Fixture
+$script:RoutingProcesses = $script:RoutingRequestedProcess
+$script:RoutingStopOutcome = 'refused'
+$rejected = $false
+try { & $invoke @common -Action stop | Out-Null }
+catch { $rejected = $_.Exception.Message.Contains('selected invocation changed') }
+Check ($rejected -and $script:RoutingProcesses -eq $script:RoutingReplacementProcess) 'Stop must preserve a replacement admitted before dispatch'
+
+Reset-Fixture
+$script:RoutingProcesses = $script:RoutingRequestedProcess
+$script:RoutingStopOutcome = 'replacement'
+$stop = & $invoke @common -Action stop | ConvertFrom-Json
+Check ($stop.owned_process_absent -and $script:RoutingProcesses -eq $script:RoutingReplacementProcess) 'Stop readback must prove the original invocation absent and leave its replacement alone'
+
+Reset-Fixture
+$script:RoutingProcesses = $script:RoutingRequestedProcess
+$script:RoutingRetirementBoot = 'different-boot-1234'
+$pending = $false
+try { & $invoke @common -Action stop | Out-Null }
+catch { $pending = $_.Exception.Message.Contains('retirement sample belongs to another boot') }
+Check $pending 'A successful stop receipt cannot prove absence using a different boot'
+Check (@($script:RoutingCalls | Where-Object { $_ -match ' stop ' }).Count -eq 1) 'Boot drift must never resend stop'
+
+Reset-Fixture
+$script:RoutingProcesses = $script:RoutingRequestedProcess
+$script:RoutingInvocation = 'unknown'
+$rejected = $false
+try { & $invoke @common -Action stop | Out-Null }
+catch { $rejected = $_.Exception.Message.Contains('no exact invocation identity') }
+Check $rejected 'A legacy live runner must never receive a new broad Stop signal'
+Check (-not @($script:RoutingCalls | Where-Object { $_ -match 'touch | stop ' }).Count) 'Missing invocation identity forbids stop dispatch'
 
 Reset-Fixture
 $script:RoutingStartupHash = 'different-startup-artifact'
@@ -114,6 +187,7 @@ Check (-not @($script:RoutingCalls | Where-Object { $_ -match 'touch ' }).Count)
 Reset-Fixture
 $start = & $invoke @common -Action start -ConfirmDeviceSettings -UntilStopped | ConvertFrom-Json
 Check ($start.mutation_confirmation -eq 'confirmed') 'Start requires live and independent effect observations'
+Check ($start.invocation_id -eq $script:RoutingRequestedInvocation -and $start.requested_invocation_matches) 'Start confirmation must name the exact requested invocation'
 Check (@($script:RoutingCalls | Where-Object { $_ -match '^push\|' }).Count -eq 1) 'Explicit start pushes one selected JAR'
 Check (@($script:RoutingCalls | Where-Object { $_ -match ' start 28800000 5000 until-stopped ' }).Count -eq 1) 'Start passes bounded hold and until-stopped separately'
 
@@ -122,6 +196,18 @@ $script:RoutingFresh = 'false'
 $pending = & $invoke @common -Action start -ConfirmDeviceSettings -UntilStopped | ConvertFrom-Json
 Check ($pending.mutation_confirmation -eq 'pending') 'A stale owner must not confirm start'
 Check (@($script:RoutingCalls | Where-Object { $_ -match ' start ' }).Count -eq 1) 'Pending effects must never trigger another start'
+
+Reset-Fixture
+$script:RoutingCompetingStart = $true
+$competing = & $invoke @common -Action start -ConfirmDeviceSettings -UntilStopped | ConvertFrom-Json
+Check ($competing.mutation_confirmation -eq 'pending' -and -not $competing.requested_invocation_matches) 'An independently launched same-build owner with identical timing cannot confirm this start'
+Check (@($script:RoutingCalls | Where-Object { $_ -match ' start ' }).Count -eq 1) 'Competing owner must not trigger another start'
+
+Reset-Fixture
+$script:RoutingCompetingStart = $true
+$script:RoutingAllowOurStartOnSecondStatus = $true
+$laterStart = & $invoke @common -Action start -ConfirmDeviceSettings -UntilStopped | ConvertFrom-Json
+Check ($laterStart.mutation_confirmation -eq 'confirmed' -and $script:RoutingStatusCount -eq 2) 'Start readback must keep polling through a competing invocation'
 
 Reset-Fixture
 $script:RoutingDisplay = $fixture.Replace('mIsDisplayInternal=true','mIsDisplayInternal=false')
@@ -143,4 +229,4 @@ $rejected = $false
 try { & $invoke @common -Action start -ConfirmDeviceSettings -HoldDurationMs 60000 -IntervalMs 60000 | Out-Null }
 catch { $rejected = $_.Exception.Message.Contains('Hold must exceed') }
 Check ($rejected -and $script:RoutingCalls.Count -eq 0) 'Impossible timing rejected before transport'
-Write-Output 'PASS 11 host-only wrapper routing cases (fake transport; no ADB/device use)'
+Write-Output 'PASS 17 host-only wrapper routing cases (fake transport; no ADB/device use)'

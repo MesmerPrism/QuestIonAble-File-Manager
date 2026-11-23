@@ -1,5 +1,9 @@
 package com.example.rustyxr.shell;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.util.Properties;
+
 public final class StandaloneWatchdogTest {
     public static void main(String[] args) throws Exception {
         StandaloneWatchdog.validateTiming(28800000, 5000, 28800000);
@@ -29,7 +33,55 @@ public final class StandaloneWatchdogTest {
         check(!new StandaloneWatchdog.CommandCapture("", false, 0, true).success(), "truncation is not readback");
         check("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".equals(
             StandaloneWatchdog.sha256("abc".getBytes("UTF-8"))), "startup artifact hash");
+        stopOwnershipCases();
         System.out.println("PASS standalone adapter timing, readback and process identity cases");
+    }
+
+    private static void stopOwnershipCases() throws Exception {
+        String invocation = "73940f6db6124314970e4982f6abc5e8";
+        Properties original = new Properties();
+        original.setProperty("invocation_id", invocation);
+        original.setProperty("boot_id", "fixture-boot");
+        original.setProperty("pid", "823");
+        original.setProperty("process_start_ticks", "12530");
+        original.setProperty("process_cmdline_sha256", "fixture-command-hash");
+        original.setProperty("startup_jar_sha256", "fixture-startup-hash");
+        String originalOwner = StandaloneWatchdog.ownerId(original);
+        original.setProperty("owner_id", originalOwner);
+        check(StandaloneWatchdog.ownerMatches(original, invocation, originalOwner), "exact owner can be signaled");
+
+        Properties replacement = new Properties();
+        replacement.putAll(original);
+        // Even a reused invocation ID and PID cannot make the old signal reach a replacement.
+        replacement.setProperty("process_start_ticks", "19123");
+        check(!StandaloneWatchdog.ownerMatches(replacement, invocation, originalOwner), "copied owner ID cannot relabel a replacement");
+        String replacementOwner = StandaloneWatchdog.ownerId(replacement);
+        replacement.setProperty("owner_id", replacementOwner);
+        check(!StandaloneWatchdog.ownerMatches(replacement, invocation, originalOwner), "replaced owner rejects a stale stop");
+
+        File directory = Files.createTempDirectory("qfm-watchdog-owner-test-").toFile();
+        File legacyStop = new File(directory, "watchdog.stop");
+        File originalStop = StandaloneWatchdog.stopMarker(legacyStop, invocation, originalOwner);
+        File replacementStop = StandaloneWatchdog.stopMarker(legacyStop, invocation, replacementOwner);
+        try {
+            check(originalStop.createNewFile(), "late stop creates the original marker");
+            check(!replacementStop.exists() && !legacyStop.exists(), "late stop cannot signal replacement or legacy helper");
+            check(legacyStop.createNewFile(), "simulate a still-deployed legacy signal");
+            check(!replacementStop.exists(), "new helper ignores the legacy shared marker");
+            boolean rejected = false;
+            try { StandaloneWatchdog.stopMarker(legacyStop, "../other", originalOwner); }
+            catch (IllegalArgumentException expected) { rejected = true; }
+            check(rejected, "marker path accepts only fixed-format IDs");
+        } finally {
+            Files.deleteIfExists(originalStop.toPath());
+            Files.deleteIfExists(legacyStop.toPath());
+            Files.delete(directory.toPath());
+        }
+        boolean rejected = false;
+        try { StandaloneWatchdog.main(new String[] {"stop"}); }
+        catch (IllegalArgumentException expected) { rejected = true; }
+        check(rejected, "raw stop cannot create a shared marker");
+        System.out.println("PASS exact watchdog owner and stop-marker isolation cases");
     }
     private static void physicalDisplayCases(String fixture) {
         String marker = "mIsDisplayInternal=true\n    mScreenState=ON";

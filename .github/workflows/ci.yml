@@ -43,6 +43,10 @@ jobs:
       - name: Test
         run: dotnet test QuestIonAbleFileManager.slnx --configuration Release --no-build
 
+      - name: Standalone watchdog host tests
+        shell: pwsh
+        run: pwsh -NoProfile -File ./helpers/quest-proximity-watchdog/tools/Test-Watchdog.ps1 -JdkRoot $env:JAVA_HOME_17_X64
+
       - name: CLI smoke
         run: dotnet run --project src/QuestIonAbleFileManager.Cli --configuration Release --no-build -- --help
 
